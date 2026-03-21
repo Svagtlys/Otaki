@@ -14,13 +14,13 @@ jobs:
           PROJECT_ID: PVT_kwHOArV0zM4BSacb
           STATUS_FIELD_ID: PVTSSF_lAHOArV0zM4BSacbzg_9G1Q
           IN_REVIEW_OPTION_ID: df73e18b
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          REPO=${{ github.repository }}
-
-          # Get issues linked to this PR via the closing keywords
+          # Get issues linked to this PR via closing keywords
           ISSUE_NUMBERS=$(gh api graphql -f query='
-            query($repo: String!, $owner: String!, $pr: Int!) {
+            query($owner: String!, $repo: String!, $pr: Int!) {
               repository(owner: $owner, name: $repo) {
                 pullRequest(number: $pr) {
                   closingIssuesReferences(first: 10) {
@@ -29,8 +29,8 @@ jobs:
                 }
               }
             }' \
-            -f owner="${REPO%/*}" \
-            -f repo="${REPO#*/}" \
+            -f owner="$OWNER" \
+            -f repo="$REPO" \
             -F pr=$PR_NUMBER \
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number')
 
@@ -46,8 +46,8 @@ jobs:
                   }
                 }
               }' \
-              -f owner="${REPO%/*}" \
-              -f repo="${REPO#*/}" \
+              -f owner="$OWNER" \
+              -f repo="$REPO" \
               -F issue=$ISSUE_NUMBER \
               --jq '.data.repository.issue.projectItems.nodes[0].id')
 

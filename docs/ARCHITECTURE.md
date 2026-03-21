@@ -1,0 +1,403 @@
+# Architecture
+
+This document is aimed at new contributors. It covers every file in the project, the data model, key workflows, and how the pieces connect.
+
+---
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11+, FastAPI (async) |
+| Background jobs | APScheduler (in-process, no broker needed) |
+| Database | SQLite via SQLAlchemy (ORM + Alembic migrations) |
+| Suwayomi client | `gql` async GraphQL client (WebSocket subscriptions) |
+| Image processing | OpenCV (`cv2`), Pillow, `imagehash` |
+| Frontend | React + Vite, TanStack Query |
+
+The backend is the only process that touches the filesystem or talks to Suwayomi. The frontend is a pure SPA that calls the backend REST API.
+
+---
+
+## High-Level Data Flow
+
+```
+User → Frontend → Backend API
+                       │
+                       ├─ Suwayomi GraphQL API  (queues downloads)
+                       │
+                       └─ GraphQL subscription  (download events)
+                                │
+                         chapter_event_handler
+                                │
+                    ┌───────────┼───────────┐
+                    │           │           │
+             quality_scanner  upgrade    file_relocator
+             image_processor  check
+```
+
+Suwayomi's download folder is the **staging area**. Once a chapter is settled (scanned, upgraded if possible), `file_relocator` moves it to the configured **library path**.
+
+---
+
+## Project Layout
+
+```
+Otaki/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── models/
+│   │   ├── api/
+│   │   ├── services/
+│   │   └── workers/
+│   ├── watermarks/
+│   └── requirements.txt
+├── frontend/
+│   └── src/
+│       ├── pages/
+│       └── components/
+├── docs/
+│   └── ARCHITECTURE.md        <- you are here
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+---
+
+## Backend Files
+
+### Entry & Config
+
+#### `backend/app/main.py`
+FastAPI app entry point. Responsibilities:
+- Mount all API routers (`/api/search`, `/api/requests`, `/api/sources`, `/api/quality`)
+- Call `database.init()` on startup (creates tables if not present)
+- Start `download_listener` as a background task on startup
+- Start APScheduler via `scheduler.start()`
+
+#### `backend/app/config.py`
+Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `WATERMARKS_PATH`, `COVERS_PATH`, `AUTO_FIX_BANNERS`, `DOWNLOAD_POLL_FALLBACK_SECONDS`. All fields are optional at startup — if `SUWAYOMI_URL` is unset, the app serves the setup wizard instead of the normal UI.
+
+#### `backend/app/database.py`
+SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
+- `init()` — creates all tables
+- `get_db` — FastAPI dependency that yields a session per request
+
+---
+
+### Models
+
+#### `backend/app/models/comic.py`
+`Comic` — one row per tracked title. Source is tracked per chapter (via `ChapterAssignment`), not per comic.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `title` | str | Display name in Otaki UI |
+| `library_title` | str | Canonical name used for folder path and `ComicInfo.xml` `<Series>` tag; set at request time, defaults to `primary_title` |
+| `cover_path` | str \| null | Path to stored cover image under `COVERS_PATH`; `null` if no cover set |
+| `status` | enum | `tracking` / `complete` |
+| `inferred_cadence_days` | float \| null | Median days between recent chapters, recalculated after each poll |
+| `poll_override_days` | int \| null | User override for new-chapter poll interval; `null` = use inferred |
+| `upgrade_override_days` | int \| null | User override for upgrade check interval; `null` = use inferred |
+| `next_poll_at` | datetime \| null | When Otaki will next poll for new chapters |
+| `next_upgrade_check_at` | datetime \| null | When Otaki will next run upgrade checks |
+| `last_upgrade_check_at` | datetime \| null | When upgrade checks last ran |
+| `created_at` | datetime | |
+
+#### `backend/app/models/source.py`
+`Source` — user's ranked list of Suwayomi extensions.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `suwayomi_source_id` | str | Suwayomi's source ID string |
+| `name` | str | Human-readable label |
+| `priority` | int | 1 = best/most preferred |
+| `enabled` | bool | |
+| `created_at` | datetime | |
+
+#### `backend/app/models/chapter_assignment.py`
+`ChapterAssignment` — tracks which source each chapter was downloaded from. Multiple rows per chapter during an upgrade; only one has `is_active=true` at any time.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `comic_id` | int FK → comics | |
+| `chapter_number` | float | e.g. 12.5 for half-chapters |
+| `volume_number` | int nullable | |
+| `source_id` | int FK → sources | |
+| `suwayomi_manga_id` | str | May differ from comic's current ID during upgrade |
+| `suwayomi_chapter_id` | str | |
+| `download_status` | enum | `queued` / `downloading` / `done` / `failed` |
+| `is_active` | bool | True for the canonical copy |
+| `chapter_published_at` | datetime | `uploadDate` from Suwayomi source metadata — used for cadence inference |
+| `downloaded_at` | datetime nullable | |
+| `library_path` | str nullable | Absolute path in `LIBRARY_PATH` after relocation |
+| `relocation_status` | enum | `pending` / `done` / `failed` / `skipped` |
+
+#### `backend/app/models/quality_scan.py`
+Two tables:
+
+**`QualityScan`** — result of scanning one chapter.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `chapter_assignment_id` | int FK | |
+| `scanned_at` | datetime | |
+| `watermark_count` | int | |
+| `watermark_templates_matched` | JSON | List of `watermark_template.id` |
+| `has_header` | bool | |
+| `has_footer` | bool | |
+| `severity` | enum | `clean` / `minor` / `moderate` / `severe` |
+| `auto_fixed` | bool | Whether image_processor ran |
+
+**`User`** — Otaki user account.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `username` | str | |
+| `email` | str | |
+| `password_hash` | str \| null | Null for SSO-only accounts |
+| `sso_provider` | str \| null | e.g. `"google"`, `"github"`, or OIDC issuer URL |
+| `sso_sub` | str \| null | Provider's subject identifier |
+| `role` | enum | `reader` / `requestor` / `admin` |
+| `created_at` | datetime | |
+
+**`ComicAlias`** — all known titles for a comic. Searched when polling sources for new chapters.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `comic_id` | int FK → comics | |
+| `title` | str | Title as known on this source |
+| `source_id` | int FK nullable | Which source uses this title; `null` = applies to all |
+
+**`ComicSourceOverride`** — per-comic source priority overrides, takes precedence over global source priority for that comic.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `comic_id` | int FK → comics | |
+| `source_id` | int FK → sources | |
+| `priority_override` | int | Lower = more preferred; replaces global priority for this comic |
+
+**`WatermarkTemplate`** — metadata for a saved template image.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `name` | str | |
+| `source_id` | int FK nullable | Which source this watermark belongs to |
+| `file_path` | str | Relative to `WATERMARKS_PATH` |
+| `match_threshold` | float | 0.0–1.0; default 0.8 |
+| `enabled` | bool | |
+
+---
+
+### API Routers
+
+#### `backend/app/api/auth.py`
+Authentication endpoints.
+
+- `POST /api/auth/login` — accepts `{username, password}`, validates against `users` table, returns a session token
+- `POST /api/auth/logout` — invalidates the session token
+- `GET /api/auth/callback` — OAuth2/OIDC redirect handler; looks up or creates user, issues session token
+- `GET /api/auth/me` — returns current user's profile and role
+
+All other API endpoints are protected by a `require_permission(permission)` FastAPI dependency that checks the session token and role.
+
+**Roles and permissions:**
+
+| Permission | Reader | Requestor | Admin |
+|---|:---:|:---:|:---:|
+| View library / quality | ✓ | ✓ | ✓ |
+| Request new comics | | ✓ | ✓ |
+| Request chapter upgrades | | ✓ | ✓ |
+| Comic-local source overrides | | ✓ | ✓ |
+| Change global source priority | | | ✓ |
+| Manage watermark templates | | | ✓ |
+| Override poll / upgrade cadence | | | ✓ |
+| Manage users and roles | | | ✓ |
+| Configure Suwayomi / paths / SSO | | | ✓ |
+
+#### `backend/app/api/setup.py`
+First-time setup wizard endpoints. Only active until setup is complete (guarded by middleware that checks `SUWAYOMI_URL` is configured).
+
+- `POST /api/setup/connect` — accepts `{url, username, password}`, calls `suwayomi.ping()`, saves credentials to config if successful
+- `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for display in priority ordering UI
+- `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
+- `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths exist, saves to config
+
+#### `backend/app/api/search.py`
+`GET /api/search?q=<title>`
+
+Fans out to all enabled sources via `suwayomi.search_source()` in parallel. Returns all results without deduplication, including `source_id` and `source_name` per result so the frontend can show which source each card came from. The user selects which results belong to the same series at request time.
+
+#### `backend/app/api/requests.py`
+CRUD for tracked comics.
+
+- `POST /api/requests` — creates a `Comic`, calls `source_router.build_chapter_source_map()`, adds manga to Suwayomi per source, enqueues downloads, creates `ChapterAssignment` rows, registers APScheduler jobs for poll and upgrade
+- `GET /api/requests` — list with download status and worst quality severity
+- `GET /api/requests/{id}` — full detail: chapters, quality badges, library paths
+- `DELETE /api/requests/{id}` — remove tracking; optionally removes library files and Suwayomi entry
+
+#### `backend/app/api/sources.py`
+- `GET/POST/PATCH/DELETE /api/sources` — source priority list CRUD
+- `POST /api/sources/watermarks` — accepts a multipart upload (image file + `x, y, w, h, name, source_id`) and calls `template_extractor.extract_template()`
+- `GET/DELETE /api/sources/watermarks/{id}` — list and remove templates
+
+#### `backend/app/api/quality.py`
+- `GET /api/quality/{comic_id}` — per-chapter scan results
+- `POST /api/quality/{assignment_id}/rescan` — re-runs `quality_scanner.scan_chapter()` on the existing CBZ
+- `POST /api/quality/{assignment_id}/autofix` — manually runs `image_processor.crop_chapter()`
+- `POST /api/quality/{assignment_id}/relocate` — manually re-triggers relocation
+
+---
+
+### Services
+
+#### `backend/app/services/suwayomi.py`
+Async GraphQL client. All Suwayomi communication goes through here — nothing else should import `gql` directly.
+
+Key methods:
+- `ping()` → bool — used by setup wizard and health check to verify connectivity
+- `list_sources()` → list of installed source objects `{id, name, lang, iconUrl}` — used by setup wizard to populate the priority ordering UI
+- `search_source(source_id, query)` → list of manga results
+- `add_to_library(source_id, manga_url)` → Suwayomi manga ID
+- `fetch_chapters(manga_id)` → list of chapter objects (includes `uploadDate` per chapter)
+- `enqueue_downloads(chapter_ids)` → void
+- `subscribe_download_changed()` → async generator of download status events
+- `delete_manga(manga_id)` → void
+
+#### `backend/app/services/source_router.py`
+Source selection logic. Stateless — takes DB session as argument.
+
+- `build_chapter_source_map(comic, db)` — queries all enabled sources in parallel using all `ComicAlias` titles for the comic, and returns a dict of `chapter_number → best_source`. "Best" is the lowest effective priority number that has the chapter available. `ComicSourceOverride` rows for the comic are applied on top of global priorities.
+- `find_upgrade_candidates(comic, db)` — for each active `ChapterAssignment`, checks whether any source with a lower effective priority (global or comic-local override) now has that chapter. Returns a list of `(assignment, candidate_source)` pairs.
+- `effective_priority(source, comic, db) → int` — returns the priority for a source in the context of a given comic: comic-local override if present, otherwise global priority.
+
+#### `backend/app/services/cadence_inferrer.py`
+Infers release cadence from chapter history.
+
+- `infer_cadence(comic, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) from the N most recent `ChapterAssignment` rows for the comic and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `next_poll_at`/`next_upgrade_check_at`) and after each poll job when new chapters are found.
+
+#### `backend/app/services/quality_scanner.py`
+Image quality analysis. Does **not** modify files.
+
+- `scan_chapter(cbz_path) → ScanResult` — opens CBZ, extracts first and last images only (banners only appear there). For each: runs `cv2.matchTemplate` against all enabled templates; computes pHash of top/bottom 80px and compares against known banner hashes.
+- `compute_severity(scan_result) → Severity` — `clean` if no matches; `minor` for isolated watermarks; `moderate` for watermarks or single banner; `severe` for both.
+
+Watermark templates are loaded once at startup and cached in memory.
+
+#### `backend/app/services/cover_injector.py`
+Manages per-comic cover images and injects them into chapter CBZ archives.
+
+- `save_from_url(comic_id, url) → Path` — downloads the image at `url` and saves it to `COVERS_PATH/{comic_id}.{ext}`. Returns the saved path.
+- `save_from_upload(comic_id, image_bytes, content_type) → Path` — saves a user-uploaded image to `COVERS_PATH/{comic_id}.{ext}`. Existing cover is replaced.
+- `inject(cbz_path, comic)` — if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
+
+#### `backend/app/services/comicinfo_writer.py`
+Writes or updates `ComicInfo.xml` inside a CBZ archive, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
+
+- `write(cbz_path, comic, assignment)` — opens the CBZ, reads existing `ComicInfo.xml` if present, sets `<Series>` to `comic.library_title`, `<Number>` to `assignment.chapter_number`, and `<Volume>` to `assignment.volume_number` (if set). Repacks the CBZ in-place. Called after quality scan / auto-fix and before relocation.
+
+Fields written to `ComicInfo.xml`:
+
+| Field | Value |
+|---|---|
+| `<Series>` | `comic.library_title` |
+| `<Number>` | `assignment.chapter_number` |
+| `<Volume>` | `assignment.volume_number` (omitted if null) |
+
+Any other existing fields are preserved unchanged.
+
+#### `backend/app/services/template_extractor.py`
+Creates templates from user-supplied pages.
+
+- `extract_template(image_bytes, x, y, w, h, name, source_id, db) → WatermarkTemplate` — crops the region using Pillow, saves as PNG to `WATERMARKS_PATH/{name}.png`, inserts a `WatermarkTemplate` row, invalidates the in-memory template cache in `quality_scanner`.
+
+#### `backend/app/services/image_processor.py`
+Modifies CBZ files to remove banners. **Mutates files** — always backs up first.
+
+- `crop_chapter(cbz_path, scan_result)` — renames original to `*.cbz.orig`, re-packs CBZ with first page top-cropped and/or last page bottom-cropped at the boundary detected by `scan_result`. Boundary detection uses pixel-row variance: the first row with high variance after the uniform banner region.
+
+#### `backend/app/services/file_relocator.py`
+Moves settled chapters from Suwayomi's staging folder to the final library. Radarr/Sonarr-style.
+
+- `resolve_path(assignment, comic) → Path` — renders `CHAPTER_NAMING_FORMAT` with tokens `{title}` (uses `comic.library_title`), `{chapter}` (zero-padded float), `{volume}` (optional), `{year}`, `{source}`. Returns absolute path under `LIBRARY_PATH`.
+- `relocate(assignment, comic, db)` — resolves destination, creates parent dirs, then:
+  - **Same filesystem**: `os.link()` (hardlink — instant, no extra disk space)
+  - **Different filesystem**: `shutil.copy2()` to temp path, verify size, then `os.replace()`, delete staging copy
+  - Updates `assignment.library_path` and `assignment.relocation_status=done`
+- `replace_in_library(old_assignment, new_assignment, comic, db)` — used during upgrades when `old_assignment.library_path` is set. Writes new file to a temp path alongside the existing library file, then `os.replace()` for atomic swap. No window where the file is missing.
+
+---
+
+### Workers
+
+#### `backend/app/workers/scheduler.py`
+Initialises APScheduler with an `AsyncIOScheduler`. On startup, registers two jobs per tracked comic: a **poll job** (fires at `next_poll_at`, interval = `poll_override_days` or `inferred_cadence_days`) and an **upgrade job** (fires at `next_upgrade_check_at`, interval = `upgrade_override_days` or `inferred_cadence_days`). When a new comic is requested via the API, both jobs are registered immediately. Starts the `download_listener` coroutine via `asyncio.create_task()`.
+
+#### `backend/app/workers/download_listener.py`
+Maintains a persistent WebSocket connection to Suwayomi's `downloadChanged` GraphQL subscription. On each `DOWNLOADED` event, dispatches to `chapter_event_handler.handle(chapter_id)`. Implements exponential backoff reconnection; after N failed reconnects, falls back to polling `GET /api/v1/downloads` every `DOWNLOAD_POLL_FALLBACK_SECONDS`.
+
+#### `backend/app/workers/chapter_event_handler.py`
+Orchestrates quality checking and relocation for every completed chapter download. Does not drive upgrade or poll scheduling — those are APScheduler jobs.
+
+```
+handle(chapter_id)
+  1. scan     → quality_scanner.scan_chapter()
+  2. write    → QualityScan row
+  3. fix      → image_processor.crop_chapter()  (if AUTO_FIX_BANNERS and has_header/footer)
+  4. comicinfo → comicinfo_writer.write()  (set <Series> to library_title, <Number>, <Volume>)
+  5. cover    → cover_injector.inject()    (add cover.png if comic.cover_path is set)
+  6. relocate → file_relocator.relocate()
+
+on upgrade download complete → handle() called for the new assignment
+  → if new severity ≤ old: file_relocator.replace_in_library(), flip is_active
+  → else: discard new assignment
+```
+
+---
+
+## Frontend Pages
+
+#### `frontend/src/pages/Search.tsx`
+Search bar → `GET /api/search`. Results as cards (cover, title, synopsis). "Request" button → `POST /api/requests`. Optimistic UI with loading/success/error states.
+
+#### `frontend/src/pages/Library.tsx`
+All tracked comics. Columns: cover, title, source, worst severity badge, download progress, next update time. Row click → Comic detail.
+
+#### `frontend/src/pages/Comic.tsx`
+Chapter-level detail. Table: chapter number, source, download status, severity badge, library path, re-scan button, force-upgrade button. Severity badge tooltips show which templates matched and banner flags.
+
+#### `frontend/src/pages/Sources.tsx`
+Two panels:
+- **Source priority** — drag-to-reorder list of sources. Each row: source name, priority number, enabled toggle, aggregate quality stats (% clean chapters from this source).
+- **Watermark templates** — list with name, source, threshold. "Add template": image upload + canvas crop selector to define the watermark region.
+
+---
+
+## Key Design Decisions
+
+**Why is Suwayomi's folder the staging area?**
+Suwayomi manages its own file structure and needs its copies to serve pages and track download state. We treat it as staging and own the final library separately so Suwayomi can be upgraded/reset without losing the library.
+
+**Why hardlinks for relocation?**
+When staging and library are on the same filesystem (the common Docker volume case), a hardlink costs no extra disk space and is instant. The file isn't actually duplicated — both paths point to the same inode. Deleting the staging copy later just removes one reference.
+
+**Why only scan first and last pages?**
+Group scan banners (headers/footers) appear once per chapter — on the first or last page of the CBZ. Scanning every page would be wasteful. Watermarks that appear on inner pages would be from a different pattern (e.g. per-page semi-transparent overlays) and are not in scope for the current detection approach.
+
+**Why does Otaki drive polling instead of Suwayomi?**
+Suwayomi tracks a manga against a single source. If we let Suwayomi poll, it only checks that one source — a new chapter on a lower-priority source would be missed until that source catches up. By having Otaki poll all sources and pick the best available, the correct source is chosen at download time and upgrades are scoped to chapters that genuinely have a better option.
+
+**Why separate poll and upgrade intervals?**
+A series might release weekly but a lower-quality source that you want to upgrade away from could take months to be picked up by a better source. Separating the intervals lets you poll aggressively for new chapters while checking upgrades less frequently to avoid wasted API calls.

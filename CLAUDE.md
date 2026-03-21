@@ -135,6 +135,18 @@ comic_source_overrides
 
 ---
 
+## Issue Workflow
+
+Follow this process for every GitHub issue:
+
+1. **Before starting** — check the issue's blockers. If any blocker is not merged, stop and confirm with the user before proceeding.
+2. **When starting** — create a branch from `develop` and open a draft PR linked to the issue. GitHub automation moves the issue to **In Progress**.
+3. **When the PR is ready** — mark it as ready for review. GitHub automation moves the issue to **In Review**.
+4. **When a PR is merged** — GitHub automation moves the issue to **Done**. Check all issues that were blocked by this one and flag any that are now unblocked to the user.
+
+---
+
+
 ## Rules
 
 - **Do not add features beyond what was asked.** No extra error handling, helpers, or abstractions for hypothetical cases.

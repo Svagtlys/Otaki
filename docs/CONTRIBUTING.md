@@ -123,6 +123,17 @@ develop ────────────────────────
 
 ---
 
+## Issue Workflow
+
+Follow this process for every GitHub issue:
+
+1. **Before starting** — check the issue's blockers. If any blocker is not merged, do not begin.
+2. **When starting** — create a branch from `develop` using the appropriate prefix (`feat/`, `fix/`, `docs/`, `chore/`), then open a draft PR linked to the issue. GitHub automation moves the issue to **In Progress**.
+3. **When ready for review** — mark the PR as ready. GitHub automation moves the issue to **In Review**.
+4. **When merged** — GitHub automation moves the issue to **Done**.
+
+---
+
 ## Squashing
 
 | Merge | Squash? | Reason |

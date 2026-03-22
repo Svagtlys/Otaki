@@ -11,6 +11,20 @@ from app import database
 from app.config import settings
 from app.main import app
 
+
+@pytest_asyncio.fixture
+async def db_session():
+    """Bare async DB session backed by in-memory SQLite. For service-layer tests
+    that call functions directly without going through the HTTP API."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        from app import models  # noqa: F401
+        await conn.run_sync(database.Base.metadata.create_all)
+    async with session_factory() as session:
+        yield session
+    await engine.dispose()
+
 _env_test_path = Path(__file__).parent.parent.parent / ".env.test"
 _env_test = dotenv_values(_env_test_path) if _env_test_path.exists() else {}
 
@@ -29,6 +43,22 @@ def suwayomi_credentials():
         "username": _get("SUWAYOMI_USERNAME") or "",
         "password": _get("SUWAYOMI_PASSWORD") or "",
     }
+
+
+@pytest.fixture
+def suwayomi_settings(suwayomi_credentials, monkeypatch):
+    """Skips if Suwayomi is not configured, and patches settings so that
+    suwayomi.py service functions can connect without going through the API."""
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
+    monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
+    monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
+
+
+@pytest.fixture
+def test_manga_title():
+    """A manga title known to exist on the configured Suwayomi instance.
+    Set TEST_MANGA_TITLE in .env.test; defaults to 'a' if omitted."""
+    return _get("TEST_MANGA_TITLE") or "a"
 
 
 @pytest.fixture

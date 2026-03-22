@@ -50,7 +50,7 @@ A **poll job** (checks for new chapters) and an **upgrade job** (checks existing
 A comic can have different names on different sources ("One Piece" vs "ワンピース"). The search API returns all results with source labels. The user selects which cards belong to the same series and sets a preferred display title. All selected titles are stored as `ComicAlias` rows and used when searching sources for chapters. `build_chapter_source_map` always receives a `comic` object and queries by all its aliases.
 
 **Per-comic source priority overrides exist.**
-`ComicSourceOverride` rows let a specific comic treat a source as a different priority than the global ranking. `source_router.effective_priority()` must be used everywhere priority is evaluated — never read `source.priority` directly in routing logic.
+`ComicSourceOverride` rows let a specific comic treat a source as a different priority than the global ranking. `source_selector.effective_priority()` must be used everywhere priority is evaluated — never read `source.priority` directly in routing logic.
 
 **`chapter_event_handler` does not drive upgrades or polls.**
 It only handles: scan → fix → relocate, and the upgrade-swap decision when an upgrade download completes. Scheduling is entirely APScheduler's responsibility.
@@ -119,7 +119,7 @@ comic_source_overrides
 | File | Responsibility |
 |---|---|
 | `services/suwayomi.py` | All Suwayomi GraphQL calls. Nothing else imports `gql` directly. |
-| `services/source_router.py` | `build_chapter_source_map`, `find_upgrade_candidates`, `effective_priority` |
+| `services/source_selector.py` | `build_chapter_source_map`, `find_upgrade_candidates`, `effective_priority` |
 | `services/cadence_inferrer.py` | Median gap from `chapter_published_at`; hiatus-aware |
 | `services/quality_scanner.py` | Scan first + last CBZ pages only; template match + phash banners |
 | `services/cover_injector.py` | Download/save cover image; inject as `cover.png` into each chapter CBZ |

@@ -275,7 +275,7 @@ Track a new comic. Triggers source selection, adds the manga to Suwayomi, and en
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
 2. Creates one `ComicAlias` row per entry in `aliases`.
-3. Calls `source_router.build_chapter_source_map()` — queries all enabled sources using all known aliases and assigns each chapter to the highest-priority source that has it.
+3. Calls `source_selector.build_chapter_source_map()` — queries all enabled sources using all known aliases and assigns each chapter to the highest-priority source that has it.
 4. For each distinct source needed, calls Suwayomi `addMangaToLibrary` + `fetchChapterList`.
 5. Calls `enqueueChapterDownloads` grouped by source.
 6. Creates one `ChapterAssignment` row per chapter with the assigned source and `download_status=queued`.

@@ -246,7 +246,7 @@ Fans out to all enabled sources via `suwayomi.search_source()` in parallel. Retu
 #### `backend/app/api/requests.py`
 CRUD for tracked comics.
 
-- `POST /api/requests` — creates a `Comic`, calls `source_router.build_chapter_source_map()`, adds manga to Suwayomi per source, enqueues downloads, creates `ChapterAssignment` rows, registers APScheduler jobs for poll and upgrade
+- `POST /api/requests` — creates a `Comic`, calls `source_selector.build_chapter_source_map()`, adds manga to Suwayomi per source, enqueues downloads, creates `ChapterAssignment` rows, registers APScheduler jobs for poll and upgrade
 - `GET /api/requests` — list with download status and worst quality severity
 - `GET /api/requests/{id}` — full detail: chapters, quality badges, library paths
 - `DELETE /api/requests/{id}` — remove tracking; optionally removes library files and Suwayomi entry
@@ -267,24 +267,26 @@ CRUD for tracked comics.
 ### Services
 
 #### `backend/app/services/suwayomi.py`
-Async GraphQL client. All Suwayomi communication goes through here — nothing else should import `gql` directly.
+Async GraphQL client. All Suwayomi communication goes through here — nothing else should import `gql` directly. All Suwayomi operations that fetch remote data use GraphQL mutations (Suwayomi triggers a live fetch), not queries.
 
-Key methods:
-- `ping()` → bool — used by setup wizard and health check to verify connectivity
-- `list_sources()` → list of installed source objects `{id, name, lang, iconUrl}` — used by setup wizard to populate the priority ordering UI
-- `search_source(source_id, query)` → list of manga results
+Implemented:
+- `ping(url, username, password)` → bool — verifies connectivity; used by setup wizard
+- `list_sources()` → `list[{id, name, lang, icon_url}]` — installed sources; used by setup wizard
+- `search_source(source_id, query)` → `list[{manga_id, title, cover_url}]` — searches a single source by title string; `manga_id` is a string
+- `fetch_chapters(manga_id)` → `list[{chapter_number, volume_number, suwayomi_chapter_id, chapter_published_at}]` — fetches all chapters for a manga from Suwayomi. `uploadDate` is a ms-epoch string; converted to `datetime` (UTC). `volume_number` is always `None` (not exposed by Suwayomi's chapter API).
+
+Not yet implemented:
 - `add_to_library(source_id, manga_url)` → Suwayomi manga ID
-- `fetch_chapters(manga_id)` → list of chapter objects (includes `uploadDate` per chapter)
 - `enqueue_downloads(chapter_ids)` → void
 - `subscribe_download_changed()` → async generator of download status events
 - `delete_manga(manga_id)` → void
 
-#### `backend/app/services/source_router.py`
-Source selection logic. Stateless — takes DB session as argument.
+#### `backend/app/services/source_selector.py`
+Per-chapter source selection logic. Stateless — takes a DB session as argument.
 
-- `build_chapter_source_map(comic, db)` — queries all enabled sources in parallel using all `ComicAlias` titles for the comic, and returns a dict of `chapter_number → best_source`. "Best" is the lowest effective priority number that has the chapter available. `ComicSourceOverride` rows for the comic are applied on top of global priorities.
-- `find_upgrade_candidates(comic, db)` — for each active `ChapterAssignment`, checks whether any source with a lower effective priority (global or comic-local override) now has that chapter. Returns a list of `(assignment, candidate_source)` pairs.
-- `effective_priority(source, comic, db) → int` — returns the priority for a source in the context of a given comic: comic-local override if present, otherwise global priority.
+- `effective_priority(source, comic, db) → int` — async; returns `source.priority` for MVP. Stubbed as `async def` so callers need no changes when 1.3 adds `ComicSourceOverride` lookup.
+- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str]]` — fans out to all enabled sources in parallel using `comic.title` (alias lookup deferred to 1.1). For each source: searches for the title, then fetches chapters. Returns `{chapter_number: (best_source, suwayomi_manga_id)}`. `suwayomi_manga_id` is bundled in the return value so callers don't need a second lookup. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
+- `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns pairs where a better-priority source now has the chapter.
 
 #### `backend/app/services/cadence_inferrer.py`
 Infers release cadence from chapter history.

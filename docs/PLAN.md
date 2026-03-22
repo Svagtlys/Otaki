@@ -54,7 +54,7 @@ Otaki/
 │   │   │   └── quality.py        # Scan results per comic/chapter
 │   │   ├── services/
 │   │   │   ├── suwayomi.py       # GraphQL client wrapper
-│   │   │   ├── source_router.py  # Priority selection logic
+│   │   │   ├── source_selector.py  # Priority selection logic
 │   │   │   ├── cadence_inferrer.py   # Infer release cadence from chapter history
 │   │   │   ├── quality_scanner.py# Watermark + banner detection
 │   │   │   ├── template_extractor.py # Extract watermark templates from sample images
@@ -176,7 +176,7 @@ id, comic_id (FK), source_id (FK), priority_override (int — lower = more prefe
 5. User picks a cover from the available cover images across the selected results, or uploads their own
 6. User clicks "Request"
 7. Backend creates a `Comic` row (`title = primary_title`), downloads and stores the chosen cover to `COVERS_PATH/{comic_id}.{ext}`, and creates one `ComicAlias` row per selected result
-7. `source_router.build_chapter_source_map()` searches all sources using all known aliases, building a per-chapter availability map:
+7. `source_selector.build_chapter_source_map()` searches all sources using all known aliases, building a per-chapter availability map:
    - For each chapter, pick the **highest-priority source that has it**
    - Chapters on different sources are expected and handled naturally
 8. For each distinct source needed, call Suwayomi `addMangaToLibrary` + `fetchChapterList`

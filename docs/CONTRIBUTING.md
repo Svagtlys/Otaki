@@ -284,3 +284,4 @@ Integration tests that require a live Suwayomi instance are **skipped automatica
 |---|---|---|
 | `tests/test_setup.py` | First-run setup wizard: middleware guard, connect→sources→paths flow, 409 after completion, error cases | Yes (skipped if unconfigured) |
 | `tests/test_auth.py` | Admin user creation, login/logout/me, JWT validation, error cases (wrong password, missing token, invalid token) | No |
+| `tests/test_require_auth.py` | Auth middleware (blanket 401), `require_auth` dependency, Bearer header + cookie, setup/auth route exemptions | No |

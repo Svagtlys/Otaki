@@ -67,7 +67,6 @@ class CreateUserRequest(BaseModel):
 async def create_user(
     body: CreateUserRequest,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_setup_incomplete),
 ) -> None:
     count = await db.scalar(select(func.count()).select_from(User))
     if count > 0:

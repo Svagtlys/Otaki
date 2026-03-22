@@ -5,10 +5,10 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import setup
+from .api import auth, setup
 from .config import settings
 
-_SETUP_EXEMPT = ("/api/setup", "/docs", "/openapi.json", "/redoc")
+_SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Otaki", lifespan=lifespan)
 app.include_router(setup.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 
 
 @app.middleware("http")

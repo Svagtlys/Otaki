@@ -3,13 +3,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import get_db
 from ..models.source import Source
-from ..services import suwayomi
+from ..models.user import User
+from ..services import auth, suwayomi
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 
@@ -54,7 +55,33 @@ class PathsRequest(BaseModel):
     library_path: str
 
 
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+
+
 # --- Endpoints ---
+
+
+@router.post("/user")
+async def create_user(
+    body: CreateUserRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_setup_incomplete),
+) -> None:
+    count = await db.scalar(select(func.count()).select_from(User))
+    if count > 0:
+        raise HTTPException(status_code=409, detail="Admin user already exists")
+
+    db.add(
+        User(
+            username=body.username,
+            password_hash=auth.hash_password(body.password),
+            active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
 
 
 @router.post("/connect")

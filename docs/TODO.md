@@ -10,7 +10,7 @@ Items are grouped by area. Add notes inline where context is useful.
 - [ ] Define SQLAlchemy models (`Comic`, `ComicAlias`, `Source`, `ChapterAssignment`, `QualityScan`, `WatermarkTemplate`, `User`, `ComicSourceOverride`)
 - [ ] Set up Alembic for migrations
 - [ ] Implement `suwayomi.py` GraphQL client (search, add to library, fetch chapters, enqueue, subscribe, delete)
-- [ ] Implement `source_router.py` (`build_chapter_source_map` for per-chapter source assignment, `find_upgrade_candidates` per scheduled check)
+- [ ] Implement `source_selector.py` (`build_chapter_source_map` for per-chapter source assignment, `find_upgrade_candidates` per scheduled check)
 - [ ] Implement `download_listener.py` (subscription + exponential backoff + polling fallback)
 - [ ] Implement `chapter_event_handler.py` (scan → fix → relocate; handle upgrade swap on upgrade download complete)
 - [ ] Implement `cadence_inferrer.py` (compute median chapter release gap from history; called after each poll job)

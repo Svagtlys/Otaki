@@ -26,13 +26,13 @@ Otaki uses [Conventional Commits](https://www.conventionalcommits.org/).
 
 Use the module or area being changed. Common scopes:
 
-`auth`, `scheduler`, `source-router`, `quality`, `downloader`, `relocator`, `api`, `ui`, `db`, `setup`
+`auth`, `scheduler`, `source-selector`, `quality`, `downloader`, `relocator`, `api`, `ui`, `db`, `setup`
 
 ### Examples
 
 ```
 feat(scheduler): add per-comic upgrade job registration
-fix(source-router): apply comic-local overrides before global priority sort
+fix(source-selector): apply comic-local overrides before global priority sort
 docs(flows): add first-time setup flow diagram
 chore(deps): pin opencv to 4.9.0
 refactor(cadence-inferrer): extract hiatus filter into helper function
@@ -53,7 +53,7 @@ refactor(cadence-inferrer): extract hiatus filter into helper function
 **One logical change per commit.** A good commit can be reviewed and reverted independently without breaking anything else.
 
 ### Too big
-- "Implement source router, quality scanner, and file relocator" — that's three commits.
+- "Implement source selector, quality scanner, and file relocator" — that's three commits.
 - Mixing a bug fix with a refactor in the same commit.
 
 ### Too small

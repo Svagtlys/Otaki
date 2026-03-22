@@ -130,8 +130,9 @@ comic_source_overrides
 | `workers/download_listener.py` | GraphQL subscription for Suwayomi download events |
 | `workers/chapter_event_handler.py` | scan → fix → relocate; upgrade-swap on upgrade download complete |
 | `workers/scheduler.py` | APScheduler: two jobs per comic (poll + upgrade) |
-| `api/auth.py` | Login, logout, OAuth2 callback, session token, `require_permission` dependency |
-| `api/setup.py` | First-run wizard: connect Suwayomi, order sources, set paths |
+| `api/auth.py` | Login, logout, me — JWT sessions; `require_auth` dependency in #12 |
+| `api/setup.py` | First-run wizard: create admin user, connect Suwayomi, order sources, set paths |
+| `services/auth.py` | bcrypt + JWT helpers shared by setup and auth |
 
 ---
 
@@ -150,6 +151,8 @@ Follow this process for every GitHub issue:
 
 ## Rules
 
+- **Every code change must have tests.** New endpoints and services require integration tests before the PR is marked ready.
+- **Update docs in the same commit as code changes.** API changes → `docs/API.md`; service/worker changes → `docs/ARCHITECTURE.md`; workflow changes → `CONTRIBUTING.md`.
 - **Do not add features beyond what was asked.** No extra error handling, helpers, or abstractions for hypothetical cases.
 - **Do not mock the Suwayomi client in integration tests.** Use a real running instance.
 - **Always use `effective_priority(source, comic, db)`** when comparing source priorities — never read `source.priority` raw.

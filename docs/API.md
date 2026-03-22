@@ -6,6 +6,8 @@ All endpoints are served under `/api`. Requests and responses use JSON unless ot
 
 ## Table of Contents
 
+- [Setup](#setup)
+- [Auth](#auth)
 - [Search](#search)
 - [Requests (Comics)](#requests-comics)
 - [Sources](#sources)
@@ -14,6 +16,149 @@ All endpoints are served under `/api`. Requests and responses use JSON unless ot
 - [Common Types](#common-types)
 - [Error Responses](#error-responses)
 - [Limitations](#limitations)
+
+---
+
+## Setup
+
+Setup endpoints are only callable while setup is incomplete. All return `409` once setup is done. Exempt from the auth middleware — no token required.
+
+### `POST /api/setup/user`
+
+Create the first admin user. Must be called before any other setup step.
+
+**Request Body**
+
+```json
+{ "username": "admin", "password": "mypassword" }
+```
+
+**Response `200`** — no body.
+
+**Error Cases**
+- `409 Conflict` — an admin user already exists.
+
+---
+
+### `POST /api/setup/connect`
+
+Connect to Suwayomi. Validates connectivity and saves credentials.
+
+**Request Body**
+
+```json
+{ "url": "https://suwayomi.example.com", "username": "user", "password": "pass" }
+```
+
+**Response `200`** — no body.
+
+**Error Cases**
+- `400 Bad Request` — could not reach Suwayomi with the supplied credentials.
+- `409 Conflict` — setup already complete.
+
+---
+
+### `GET /api/setup/sources`
+
+List sources installed in Suwayomi for priority ordering.
+
+**Response `200`**
+
+```json
+[
+  { "id": "1998944621602222888", "name": "MangaDex", "lang": "en", "icon_url": "https://..." }
+]
+```
+
+---
+
+### `POST /api/setup/sources`
+
+Save source priority order. First item = highest priority.
+
+**Request Body**
+
+```json
+{
+  "sources": [
+    { "id": "1998944621602222888", "name": "MangaDex", "lang": "en", "icon_url": "https://..." }
+  ]
+}
+```
+
+**Response `200`** — no body. Idempotent — replaces all existing `Source` rows.
+
+---
+
+### `POST /api/setup/paths`
+
+Set filesystem paths. Both must be existing directories.
+
+**Request Body**
+
+```json
+{ "download_path": "/data/suwayomi/downloads", "library_path": "/data/library" }
+```
+
+**Response `200`** — no body.
+
+**Error Cases**
+- `400 Bad Request` — either path does not exist or is not a directory.
+
+---
+
+## Auth
+
+### `POST /api/auth/login`
+
+Exchange credentials for a JWT session token.
+
+**Request Body**
+
+```json
+{ "username": "admin", "password": "mypassword" }
+```
+
+**Response `200`**
+
+```json
+{ "access_token": "eyJ...", "token_type": "bearer" }
+```
+
+Include the token on subsequent requests:
+```
+Authorization: Bearer eyJ...
+```
+
+**Error Cases**
+- `401 Unauthorized` — username not found or password incorrect (response does not distinguish between the two).
+
+---
+
+### `POST /api/auth/logout`
+
+**Response `200`** — no body. Stateless: the token is not invalidated server-side; the client should discard it.
+
+---
+
+### `GET /api/auth/me`
+
+Return the current user's profile.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `Authorization` | yes | `Bearer <token>` |
+
+**Response `200`**
+
+```json
+{ "id": 1, "username": "admin" }
+```
+
+**Error Cases**
+- `401 Unauthorized` — missing, malformed, or expired token.
 
 ---
 
@@ -621,10 +766,11 @@ All errors return a JSON body:
 | Status | Meaning |
 |---|---|
 | `400 Bad Request` | Malformed request body |
+| `401 Unauthorized` | Missing, invalid, or expired session token |
 | `404 Not Found` | Resource does not exist |
 | `409 Conflict` | State conflict (duplicate, wrong status, etc.) |
 | `422 Unprocessable Entity` | Validation error (missing required fields, wrong types) |
-| `503 Service Unavailable` | Suwayomi is unreachable |
+| `503 Service Unavailable` | Setup not complete, or Suwayomi is unreachable |
 
 ---
 

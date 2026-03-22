@@ -74,10 +74,15 @@ Otaki/
 
 #### `backend/app/main.py`
 FastAPI app entry point. Responsibilities:
-- Mount all API routers (`/api/search`, `/api/requests`, `/api/sources`, `/api/quality`)
+- Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`, `/api/sources`, `/api/quality`)
 - Call `database.init()` on startup (creates tables if not present)
 - Start `download_listener` as a background task on startup
 - Start APScheduler via `scheduler.start()`
+
+Two middleware functions run on every request (last registered runs first):
+
+1. **`require_setup`** (runs first) — blocks non-exempt routes with 503 until all three settings are configured: `SUWAYOMI_URL`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`. Exempt prefix: `/api/setup`, `/api/auth`, `/docs`, `/openapi.json`, `/redoc`.
+2. **`require_auth_middleware`** (runs second) — blocks non-exempt routes with 401 if no valid JWT is present in the `Authorization: Bearer` header or `otaki_session` cookie. Validates signature only (no DB lookup). Same exempt prefix as above.
 
 #### `backend/app/config.py`
 Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `WATERMARKS_PATH`, `COVERS_PATH`, `AUTO_FIX_BANNERS`, `DOWNLOAD_POLL_FALLBACK_SECONDS`. All fields are optional at startup — if `SUWAYOMI_URL` is unset, the app serves the setup wizard instead of the normal UI.
@@ -210,9 +215,10 @@ Authentication endpoints. Sessions are JWT-based (HS256, 24h expiry). Crypto hel
 - `POST /api/auth/logout` — 200 no-op; client discards the token (stateless JWT)
 - `GET /api/auth/me` — reads `Authorization: Bearer <token>`, returns `{id, username}`
 
+**`require_auth` dependency** — validates JWT and injects the active `User` into route handlers. Accepts token from `Authorization: Bearer` header or `otaki_session` cookie. Raises 401 on missing, invalid, or expired tokens. Use as `user: User = Depends(require_auth)`.
+
 **Not yet implemented (future issues):**
 - `GET /api/auth/callback` — OAuth2/OIDC redirect handler (#future)
-- `require_auth` FastAPI dependency for route protection — issue #12
 - Role-based `require_permission` dependency — post-MVP
 
 #### `backend/app/services/auth.py`
@@ -224,7 +230,7 @@ Shared bcrypt + JWT helpers used by both `setup.py` and `auth.py`.
 - `decode_token(token)` — decodes and verifies; raises `jwt.InvalidTokenError` on failure
 
 #### `backend/app/api/setup.py`
-First-time setup wizard endpoints. Only active until setup is complete (guarded by middleware that checks `SUWAYOMI_URL` is configured). Wizard step order:
+First-time setup wizard endpoints. Steps 2–5 are guarded by `require_setup_incomplete` (409 once all three settings are set). `POST /api/setup/user` has no such guard — user creation is allowed at any time. Wizard step order:
 
 1. `POST /api/setup/user` — creates the first admin user; 409 if any user already exists
 2. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `suwayomi.ping()`, saves credentials to config

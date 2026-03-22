@@ -2,6 +2,12 @@
 
 All endpoints are served under `/api`. Requests and responses use JSON unless otherwise noted. The backend is async (FastAPI); all endpoints support concurrent requests.
 
+**Authentication:** All endpoints except `/api/setup/*` and `/api/auth/*` require a valid session token. Pass it as:
+- `Authorization: Bearer <token>` header, or
+- `otaki_session` cookie
+
+Obtain a token via `POST /api/auth/login`. Requests without a valid token return `401 Unauthorized`.
+
 ---
 
 ## Table of Contents

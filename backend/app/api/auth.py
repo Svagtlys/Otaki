@@ -1,5 +1,5 @@
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,16 +29,26 @@ class UserResponse(BaseModel):
     username: str
 
 
-# --- Helpers ---
+# --- Dependencies ---
 
 
-async def _get_current_user(
+def _extract_token(
     authorization: str | None = Header(default=None),
+    otaki_session: str | None = Cookie(default=None),
+) -> str:
+    """Extract JWT from Authorization: Bearer header or otaki_session cookie."""
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ")
+    if otaki_session:
+        return otaki_session
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+async def require_auth(
+    token: str = Depends(_extract_token),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = authorization.removeprefix("Bearer ")
+    """Validate JWT and return the active User. Use as a route dependency."""
     try:
         payload = auth.decode_token(token)
     except jwt.InvalidTokenError:
@@ -69,5 +79,5 @@ async def logout() -> None:
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(user: User = Depends(_get_current_user)) -> UserResponse:
+async def me(user: User = Depends(require_auth)) -> UserResponse:
     return UserResponse(id=user.id, username=user.username)

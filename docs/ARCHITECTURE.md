@@ -272,7 +272,7 @@ Async GraphQL client. All Suwayomi communication goes through here — nothing e
 Implemented:
 - `ping(url, username, password)` → bool — verifies connectivity; used by setup wizard
 - `list_sources()` → `list[{id, name, lang, icon_url}]` — installed sources; used by setup wizard
-- `search_source(source_id, query)` → `list[{manga_id, title, cover_url}]` — searches a single source by title string; `manga_id` is a string
+- `search_source(source_id, query)` → `list[{manga_id, title, cover_url, synopsis, url}]` — searches a single source by title string; `manga_id` is a string; `cover_url`, `synopsis`, and `url` may be null
 - `fetch_chapters(manga_id)` → `list[{chapter_number, volume_number, suwayomi_chapter_id, chapter_published_at}]` — fetches all chapters for a manga from Suwayomi. `uploadDate` is a ms-epoch string; converted to `datetime` (UTC). `volume_number` is always `None` (not exposed by Suwayomi's chapter API).
 
 Not yet implemented:

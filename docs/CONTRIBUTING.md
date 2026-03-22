@@ -233,7 +233,10 @@ If your change affects behaviour described in `docs/`, update the docs in the sa
 - Tests live in `backend/tests/`, mirroring the app structure (`test_auth.py` for `api/auth.py`, etc.).
 - Integration tests that touch Suwayomi must use a real running instance — no mocking the Suwayomi client itself.
 - Quality scanner tests must include real CBZ fixtures, not mocked image data.
-- Tests that don't need a live Suwayomi (auth, setup user creation, path validation, etc.) use an in-memory SQLite DB via the `client` fixture in `conftest.py` — no external dependencies required.
+- Tests that don't need a live Suwayomi use an in-memory SQLite DB via fixtures in `conftest.py` — no external dependencies required:
+  - `client` — setup incomplete (all settings `None`); use for testing setup-guard behaviour
+  - `auth_client` — setup complete, no auth token; use for testing auth-middleware behaviour
+  - `logged_in_client` — setup complete, valid Bearer token pre-set; use for testing authenticated routes
 
 ### Running tests
 
@@ -285,3 +288,5 @@ Integration tests that require a live Suwayomi instance are **skipped automatica
 | `tests/test_setup.py` | First-run setup wizard: middleware guard, connect→sources→paths flow, 409 after completion, error cases | Yes (skipped if unconfigured) |
 | `tests/test_auth.py` | Admin user creation, login/logout/me, JWT validation, error cases (wrong password, missing token, invalid token) | No |
 | `tests/test_require_auth.py` | Auth middleware (blanket 401), `require_auth` dependency, Bearer header + cookie, setup/auth route exemptions | No |
+| `tests/test_source_selector.py` | `effective_priority`, `build_chapter_source_map`, `find_upgrade_candidates` — source ranking and chapter source assignment | Yes (skipped if unconfigured) |
+| `tests/test_search.py` | `GET /api/search`: auth guard, missing query param, empty results, failed source skipping, result shape, fan-out to all sources | Yes (skipped if unconfigured) |

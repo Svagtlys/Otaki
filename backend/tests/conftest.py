@@ -82,6 +82,50 @@ def path_config(tmp_path):
 
 
 @pytest_asyncio.fixture
+async def auth_client(monkeypatch):
+    """HTTP client with setup complete and all settings populated.
+    Use this for tests that need to hit authenticated routes without
+    going through the setup wizard."""
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    test_session = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(database, "engine", test_engine)
+    monkeypatch.setattr(database, "AsyncSessionLocal", test_session)
+
+    async with test_engine.begin() as conn:
+        from app import models  # noqa: F401
+        await conn.run_sync(database.Base.metadata.create_all)
+
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+    monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", None)
+    monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", "/tmp")
+    monkeypatch.setattr(settings, "LIBRARY_PATH", "/tmp")
+    monkeypatch.setattr("app.api.setup._write_env", lambda key, value: None)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+    await test_engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def logged_in_client(auth_client):
+    """auth_client with a valid JWT already set as a Bearer token.
+    Use this for tests that need to hit authenticated routes."""
+    await auth_client.post(
+        "/api/setup/user", json={"username": "admin", "password": "testpassword!"}
+    )
+    r = await auth_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "testpassword!"}
+    )
+    token = r.json()["access_token"]
+    auth_client.headers = {**auth_client.headers, "Authorization": f"Bearer {token}"}
+    return auth_client
+
+
+@pytest_asyncio.fixture
 async def client(monkeypatch):
     # Use a fresh in-memory SQLite DB for each test — avoids lifespan dependency
     test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")

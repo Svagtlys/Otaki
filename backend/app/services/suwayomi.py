@@ -34,6 +34,8 @@ async def search_source(source_id: str, query: str) -> list[dict]:
                             id
                             title
                             thumbnailUrl
+                            description
+                            url
                         }
                     }
                 }
@@ -47,6 +49,8 @@ async def search_source(source_id: str, query: str) -> list[dict]:
             "manga_id": str(node["id"]),
             "title": node["title"],
             "cover_url": node.get("thumbnailUrl"),
+            "synopsis": node.get("description") or None,
+            "url": node.get("url"),
         }
         for node in result["fetchSourceManga"]["mangas"]
     ]

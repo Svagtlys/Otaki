@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import auth, setup
+from .api import auth, search, setup
 from .config import settings
 from .services import auth as auth_service
 
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Otaki", lifespan=lifespan)
 app.include_router(setup.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(search.router, prefix="/api")
 
 
 # Middleware runs in reverse registration order (last registered = outermost = runs first).

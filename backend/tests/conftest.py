@@ -5,7 +5,9 @@ import pytest
 import pytest_asyncio
 from dotenv import dotenv_values
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app import database
 from app.config import settings
 from app.main import app
 
@@ -51,6 +53,16 @@ def path_config(tmp_path):
 
 @pytest_asyncio.fixture
 async def client(monkeypatch):
+    # Use a fresh in-memory SQLite DB for each test — avoids lifespan dependency
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    test_session = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(database, "engine", test_engine)
+    monkeypatch.setattr(database, "AsyncSessionLocal", test_session)
+
+    async with test_engine.begin() as conn:
+        from app import models  # noqa: F401 — registers models on Base.metadata
+        await conn.run_sync(database.Base.metadata.create_all)
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", None)
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", None)
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)
@@ -62,3 +74,5 @@ async def client(monkeypatch):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:
         yield c
+
+    await test_engine.dispose()

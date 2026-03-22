@@ -229,10 +229,11 @@ If your change affects behaviour described in `docs/`, update the docs in the sa
 
 ## Testing
 
-- Write tests for any non-trivial logic before or alongside the implementation.
-- Tests live in `backend/tests/`, mirroring the app structure.
+- **Every code change requires tests.** New endpoints and services must have integration tests before a PR is marked ready for review.
+- Tests live in `backend/tests/`, mirroring the app structure (`test_auth.py` for `api/auth.py`, etc.).
 - Integration tests that touch Suwayomi must use a real running instance — no mocking the Suwayomi client itself.
 - Quality scanner tests must include real CBZ fixtures, not mocked image data.
+- Tests that don't need a live Suwayomi (auth, setup user creation, path validation, etc.) use an in-memory SQLite DB via the `client` fixture in `conftest.py` — no external dependencies required.
 
 ### Running tests
 
@@ -282,3 +283,4 @@ Integration tests that require a live Suwayomi instance are **skipped automatica
 | File | What it tests | Needs Suwayomi |
 |---|---|---|
 | `tests/test_setup.py` | First-run setup wizard: middleware guard, connect→sources→paths flow, 409 after completion, error cases | Yes (skipped if unconfigured) |
+| `tests/test_auth.py` | Admin user creation, login/logout/me, JWT validation, error cases (wrong password, missing token, invalid token) | No |

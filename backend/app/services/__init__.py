@@ -1,3 +1,3 @@
-from . import suwayomi
+from . import auth, suwayomi
 
-__all__ = ["suwayomi"]
+__all__ = ["auth", "suwayomi"]

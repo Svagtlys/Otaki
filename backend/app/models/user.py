@@ -11,7 +11,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -1,8 +1,14 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+_here = Path(__file__).parent.parent  # backend/
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite+aiosqlite:///./otaki.db"
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{_here / 'otaki.db'}"
+
+    SECRET_KEY: str = "dev-secret-key-change-in-production"
 
     SUWAYOMI_URL: str | None = None
     SUWAYOMI_USERNAME: str | None = None

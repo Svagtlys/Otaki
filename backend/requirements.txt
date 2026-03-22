@@ -5,3 +5,5 @@ aiosqlite
 pydantic-settings
 gql[httpx]
 python-dotenv
+bcrypt
+PyJWT

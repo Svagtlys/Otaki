@@ -204,36 +204,33 @@ Two tables:
 ### API Routers
 
 #### `backend/app/api/auth.py`
-Authentication endpoints.
+Authentication endpoints. Sessions are JWT-based (HS256, 24h expiry). Crypto helpers live in `services/auth.py`.
 
-- `POST /api/auth/login` — accepts `{username, password}`, validates against `users` table, returns a session token
-- `POST /api/auth/logout` — invalidates the session token
-- `GET /api/auth/callback` — OAuth2/OIDC redirect handler; looks up or creates user, issues session token
-- `GET /api/auth/me` — returns current user's profile and role
+- `POST /api/auth/login` — accepts `{username, password}`, validates against `users` table, returns `{access_token, token_type}`
+- `POST /api/auth/logout` — 200 no-op; client discards the token (stateless JWT)
+- `GET /api/auth/me` — reads `Authorization: Bearer <token>`, returns `{id, username}`
 
-All other API endpoints are protected by a `require_permission(permission)` FastAPI dependency that checks the session token and role.
+**Not yet implemented (future issues):**
+- `GET /api/auth/callback` — OAuth2/OIDC redirect handler (#future)
+- `require_auth` FastAPI dependency for route protection — issue #12
+- Role-based `require_permission` dependency — post-MVP
 
-**Roles and permissions:**
+#### `backend/app/services/auth.py`
+Shared bcrypt + JWT helpers used by both `setup.py` and `auth.py`.
 
-| Permission | Reader | Requestor | Admin |
-|---|:---:|:---:|:---:|
-| View library / quality | ✓ | ✓ | ✓ |
-| Request new comics | | ✓ | ✓ |
-| Request chapter upgrades | | ✓ | ✓ |
-| Comic-local source overrides | | ✓ | ✓ |
-| Change global source priority | | | ✓ |
-| Manage watermark templates | | | ✓ |
-| Override poll / upgrade cadence | | | ✓ |
-| Manage users and roles | | | ✓ |
-| Configure Suwayomi / paths / SSO | | | ✓ |
+- `hash_password(password)` — bcrypt hash
+- `verify_password(plain, hashed)` — constant-time bcrypt compare
+- `create_token(user_id)` — encodes `{sub, exp}` as signed JWT
+- `decode_token(token)` — decodes and verifies; raises `jwt.InvalidTokenError` on failure
 
 #### `backend/app/api/setup.py`
-First-time setup wizard endpoints. Only active until setup is complete (guarded by middleware that checks `SUWAYOMI_URL` is configured).
+First-time setup wizard endpoints. Only active until setup is complete (guarded by middleware that checks `SUWAYOMI_URL` is configured). Wizard step order:
 
-- `POST /api/setup/connect` — accepts `{url, username, password}`, calls `suwayomi.ping()`, saves credentials to config if successful
-- `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for display in priority ordering UI
-- `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
-- `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths exist, saves to config
+1. `POST /api/setup/user` — creates the first admin user; 409 if any user already exists
+2. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `suwayomi.ping()`, saves credentials to config
+3. `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for priority ordering
+4. `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
+5. `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths exist, saves to config
 
 #### `backend/app/api/search.py`
 `GET /api/search?q=<title>`

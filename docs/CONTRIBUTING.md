@@ -129,8 +129,9 @@ Follow this process for every GitHub issue:
 
 1. **Before starting** — check the issue's blockers. If any blocker is not merged, do not begin.
 2. **When starting** — create a branch from `develop` using the appropriate prefix (`feat/`, `fix/`, `docs/`, `chore/`), then open a draft PR linked to the issue. GitHub automation moves the issue to **In Progress**.
-3. **When ready for review** — mark the PR as ready. GitHub automation moves the issue to **In Review**.
-4. **When merged** — GitHub automation moves the issue to **Done**.
+3. **Before marking ready** — run all tests and confirm they pass.
+4. **When ready for review** — mark the PR as ready. GitHub automation moves the issue to **In Review**.
+5. **When merged** — GitHub automation moves the issue to **Done**.
 
 ---
 
@@ -232,3 +233,52 @@ If your change affects behaviour described in `docs/`, update the docs in the sa
 - Tests live in `backend/tests/`, mirroring the app structure.
 - Integration tests that touch Suwayomi must use a real running instance — no mocking the Suwayomi client itself.
 - Quality scanner tests must include real CBZ fixtures, not mocked image data.
+
+### Running tests
+
+Install dev dependencies (first time only):
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+```
+
+Run all tests:
+
+```bash
+cd backend
+pytest tests/ -v
+```
+
+### Integration tests
+
+Integration tests that require a live Suwayomi instance are **skipped automatically** when credentials are not configured. To run them:
+
+1. Copy `.env.test.example` to `.env.test` at the repo root:
+
+   ```bash
+   cp .env.test.example .env.test
+   ```
+
+2. Fill in your Suwayomi instance details:
+
+   ```ini
+   SUWAYOMI_URL=https://suwayomi.example.com
+   SUWAYOMI_USERNAME=admin
+   SUWAYOMI_PASSWORD=secret
+   ```
+
+3. Optionally set real filesystem paths for path validation tests. If omitted, pytest's `tmp_path` is used:
+
+   ```ini
+   SUWAYOMI_DOWNLOAD_PATH=/path/to/downloads
+   LIBRARY_PATH=/path/to/library
+   ```
+
+`.env.test` is gitignored — never commit it.
+
+### What each test file covers
+
+| File | What it tests | Needs Suwayomi |
+|---|---|---|
+| `tests/test_setup.py` | First-run setup wizard: middleware guard, connect→sources→paths flow, 409 after completion, error cases | Yes (skipped if unconfigured) |

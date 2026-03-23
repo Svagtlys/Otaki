@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import jwt
 from contextlib import asynccontextmanager
 
@@ -10,7 +12,11 @@ from .api import auth, search, setup
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
+<<<<<<< feat/download-listener
+from .workers import download_listener
+=======
 from .workers import scheduler
+>>>>>>> develop
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 
@@ -18,11 +24,19 @@ _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init()
+<<<<<<< feat/download-listener
+    task = asyncio.create_task(download_listener.run())
+    yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+=======
     async with AsyncSessionLocal() as db:
         await scheduler.start(db)
     yield
     if scheduler.scheduler.running:
         scheduler.scheduler.shutdown(wait=False)
+>>>>>>> develop
 
 
 app = FastAPI(title="Otaki", lifespan=lifespan)

@@ -103,7 +103,7 @@ def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_numb
 @pytest.mark.asyncio
 async def test_handle_unknown_chapter_id(handler_db, mock_relocator):
     """handle() logs a warning and returns without error for an unknown chapter ID."""
-    await chapter_event_handler.handle("does-not-exist")
+    await chapter_event_handler.handle("does-not-exist", "Chapter 1", "Unknown Manga", "TestSrc")
 
     mock_relocator.relocate.assert_not_called()
     mock_relocator.replace_in_library.assert_not_called()
@@ -122,7 +122,7 @@ async def test_handle_regular_download(handler_db, mock_relocator):
         await db.commit()
         assignment_id = assignment.id
 
-    await chapter_event_handler.handle("ch-1")
+    await chapter_event_handler.handle("ch-1", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.relocate.assert_awaited_once()
     mock_relocator.replace_in_library.assert_not_called()
@@ -148,7 +148,7 @@ async def test_handle_upgrade_download(handler_db, mock_relocator):
         await db.commit()
         old_id, new_id = old.id, new.id
 
-    await chapter_event_handler.handle("ch-new")
+    await chapter_event_handler.handle("ch-new", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.replace_in_library.assert_awaited_once()
     mock_relocator.relocate.assert_not_called()
@@ -179,7 +179,7 @@ async def test_handle_upgrade_always_swaps(handler_db, mock_relocator):
         old_id, new_id = old.id, new.id
 
     # No severity comparison in 1.0 — swap always happens.
-    await chapter_event_handler.handle("ch-new-2")
+    await chapter_event_handler.handle("ch-new-2", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.replace_in_library.assert_awaited_once()
 

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "dev-secret-key-change-in-production"
 
+    DEFAULT_POLL_DAYS: int = 7
+
     SUWAYOMI_URL: str | None = None
     SUWAYOMI_USERNAME: str | None = None
     SUWAYOMI_PASSWORD: str | None = None
@@ -19,6 +21,8 @@ class Settings(BaseSettings):
 
     CHAPTER_NAMING_FORMAT: str = "{title}/{title} - Ch.{chapter}.cbz"
     RELOCATION_STRATEGY: Literal["auto", "hardlink", "copy", "move"] = "auto"
+    DOWNLOAD_POLL_FALLBACK_SECONDS: int = 60
+    MAX_RECONNECT_ATTEMPTS: int = 5
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

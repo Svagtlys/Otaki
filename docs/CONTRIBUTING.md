@@ -215,7 +215,7 @@ When reviewing a PR that used LLM assistance, pay extra attention to:
 
 ## Documentation
 
-If your change affects behaviour described in `docs/`, update the docs in the same commit. The files to keep in sync:
+If your change affects behaviour described in `docs/`, update the docs in the same PR. Doc changes may land in a separate commit from the code change, but both must be in the same PR before it is marked ready for review. The files to keep in sync:
 
 | File | Update when |
 |---|---|

@@ -152,13 +152,13 @@ Follow this process for every GitHub issue:
 ## Rules
 
 - **Every code change must have tests.** New endpoints and services require integration tests before the PR is marked ready.
-- **Update docs in the same commit as code changes.** API changes → `docs/API.md`; service/worker changes → `docs/ARCHITECTURE.md`; workflow changes → `CONTRIBUTING.md`.
+- **Update docs in the same PR as code changes** (separate commit is fine). API changes → `docs/API.md`; service/worker changes → `docs/ARCHITECTURE.md`; workflow changes → `CONTRIBUTING.md`.
 - **Do not add features beyond what was asked.** No extra error handling, helpers, or abstractions for hypothetical cases.
 - **Do not mock the Suwayomi client in integration tests.** Use a real running instance.
 - **Always use `effective_priority(source, comic, db)`** when comparing source priorities — never read `source.priority` raw.
 - **Always use `comic.library_title`** (not `comic.title`) in `file_relocator` and `comicinfo_writer`.
 - **Always use `chapter_published_at`** for any time-based chapter calculations.
 - **Scan first and last CBZ pages only.** Banners appear only there. Do not scan inner pages.
-- **Update docs in the same commit as code changes.** See `CONTRIBUTING.md` for which doc to update.
+- **Update docs in the same PR as code changes** (separate commit is fine). See `CONTRIBUTING.md` for which doc to update.
 - **Commit format:** `type(scope): description` — see `CONTRIBUTING.md`.
 - **Quality threshold for upgrade swap:** new severity must be ≤ old severity. Equal is acceptable (same quality from better source is a win for future upgrades).

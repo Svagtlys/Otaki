@@ -354,20 +354,26 @@ Initialises APScheduler with an `AsyncIOScheduler`. On startup, registers two jo
 Maintains a persistent WebSocket connection to Suwayomi's `downloadChanged` GraphQL subscription. On each `DOWNLOADED` event, dispatches to `chapter_event_handler.handle(chapter_id)`. Implements exponential backoff reconnection; after N failed reconnects, falls back to polling `GET /api/v1/downloads` every `DOWNLOAD_POLL_FALLBACK_SECONDS`.
 
 #### `backend/app/workers/chapter_event_handler.py`
-Orchestrates quality checking and relocation for every completed chapter download. Does not drive upgrade or poll scheduling — those are APScheduler jobs.
+Orchestrates relocation for every completed chapter download. Does not drive upgrade or
+poll scheduling — those are APScheduler jobs.
 
 ```
-handle(chapter_id)
-  1. scan     → quality_scanner.scan_chapter()
-  2. write    → QualityScan row
-  3. fix      → image_processor.crop_chapter()  (if AUTO_FIX_BANNERS and has_header/footer)
-  4. comicinfo → comicinfo_writer.write()  (set <Series> to library_title, <Number>, <Volume>)
-  5. cover    → cover_injector.inject()    (add cover.png if comic.cover_path is set)
-  6. relocate → file_relocator.relocate()
+handle(suwayomi_chapter_id)
+  1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
+  2. Set download_status=done, downloaded_at=now(UTC)
+  3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
+  4. [deferred 1.4] write    → QualityScan row
+  5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
+  6. [deferred 1.1] comicinfo → comicinfo_writer.write()
+  7. [deferred 1.1] cover    → cover_injector.inject()
+  8. Check for upgrade: query for existing active ChapterAssignment with same
+     comic_id + chapter_number but different id
+     - None found → regular download: file_relocator.relocate(), set is_active=True
+     - Found      → upgrade download: file_relocator.replace_in_library(old, new),
+                    set old.is_active=False, new.is_active=True
 
-on upgrade download complete → handle() called for the new assignment
-  → if new severity ≤ old: file_relocator.replace_in_library(), flip is_active
-  → else: discard new assignment
+on upgrade download (1.0): always swap — no quality condition until scanner added in 1.4
+on upgrade download (1.4+): swap only if new severity ≤ old severity
 ```
 
 ---

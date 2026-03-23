@@ -2,9 +2,10 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, Integer, String
+from sqlalchemy import DateTime, Enum, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from ..config import settings
 from ..database import Base
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ class Comic(Base):
         nullable=False,
         default=ComicStatus.tracking,
     )
+    poll_override_days: Mapped[float] = mapped_column(Float, nullable=False, default=settings.DEFAULT_POLL_DAYS)
     cover_path: Mapped[str | None] = mapped_column(String, nullable=True)
     next_poll_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

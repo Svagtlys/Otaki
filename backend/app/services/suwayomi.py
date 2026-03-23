@@ -110,6 +110,24 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
     return chapters
 
 
+async def enqueue_downloads(chapter_ids: list[str]) -> None:
+    async with _make_client(
+        settings.SUWAYOMI_URL,
+        settings.SUWAYOMI_USERNAME,
+        settings.SUWAYOMI_PASSWORD,
+    ) as session:
+        await session.execute(
+            gql("""
+                mutation EnqueueChapterDownloads($input: EnqueueChapterDownloadsInput!) {
+                    enqueueChapterDownloads(input: $input) {
+                        clientMutationId
+                    }
+                }
+            """),
+            variable_values={"input": {"ids": [int(cid) for cid in chapter_ids]}},
+        )
+
+
 async def list_sources() -> list[dict]:
     async with _make_client(
         settings.SUWAYOMI_URL,

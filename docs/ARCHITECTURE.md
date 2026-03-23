@@ -349,7 +349,23 @@ Moves settled chapters from Suwayomi's staging folder to the final library. Rada
 ### Workers
 
 #### `backend/app/workers/scheduler.py`
+<<<<<<< feat/download-listener
 Initialises APScheduler with an `AsyncIOScheduler`. On startup, registers two jobs per tracked comic: a **poll job** (fires at `next_poll_at`, interval = `poll_override_days` or `inferred_cadence_days`) and an **upgrade job** (fires at `next_upgrade_check_at`, interval = `upgrade_override_days` or `inferred_cadence_days`). When a new comic is requested via the API, both jobs are registered immediately.
+=======
+Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes, advancing `next_poll_at` by the poll interval (hardcoded 7-day MVP fallback; cadence inference deferred to #16).
+
+Public API:
+
+- `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers a poll job for each via `_register_poll_job`, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
+- `register_comic_jobs(comic: Comic) → None` — registers jobs for a newly created comic. Called by `POST /api/requests` (#13) after committing the new `Comic` row.
+
+Internal:
+
+- `_register_poll_job(comic)` — calls `scheduler.add_job` with `trigger="date"`, `run_date=comic.next_poll_at` (or `now(UTC)` if unset), `id=f"poll_{comic.id}"`, `replace_existing=True`.
+- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, groups new chapters by `(source_id, suwayomi_manga_id)`, calls `fetch_chapters` per group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`, `chapter_published_at` from fetch result), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
+
+Upgrade job deferred to #19 — no stub present.
+>>>>>>> develop
 
 #### `backend/app/workers/download_listener.py`
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.

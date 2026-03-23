@@ -128,7 +128,7 @@ async def _poll_comic(comic_id: int) -> None:
                             exc,
                         )
 
-        comic.next_poll_at = datetime.now(timezone.utc) + timedelta(days=7)
+        comic.next_poll_at = datetime.now(timezone.utc) + timedelta(days=comic.poll_override_days)
         _register_poll_job(comic)
 
         await db.commit()

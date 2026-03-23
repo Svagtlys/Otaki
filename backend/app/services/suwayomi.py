@@ -102,8 +102,8 @@ async def enqueue_downloads(chapter_ids: list[str]) -> None:
     ) as session:
         await session.execute(
             gql("""
-                mutation DownloadChapters($input: DownloadChaptersInput!) {
-                    downloadChapters(input: $input) {
+                mutation EnqueueChapterDownloads($input: EnqueueChapterDownloadsInput!) {
+                    enqueueChapterDownloads(input: $input) {
                         clientMutationId
                     }
                 }

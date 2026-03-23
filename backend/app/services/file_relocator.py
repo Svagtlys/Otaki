@@ -9,7 +9,13 @@ from ..models.comic import Comic
 
 
 async def relocate(
-    assignment: ChapterAssignment, comic: Comic, db: AsyncSession
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+    *,
+    chapter_name: str = "",
+    manga_title: str = "",
+    source_display_name: str = "",
 ) -> None:
     raise NotImplementedError("file_relocator.relocate is implemented in #14")
 
@@ -19,5 +25,9 @@ async def replace_in_library(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
+    *,
+    chapter_name: str = "",
+    manga_title: str = "",
+    source_display_name: str = "",
 ) -> None:
     raise NotImplementedError("file_relocator.replace_in_library is implemented in #14")

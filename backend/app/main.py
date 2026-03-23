@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import jwt
 from contextlib import asynccontextmanager
 
@@ -9,6 +11,7 @@ from . import database
 from .api import auth, search, setup
 from .config import settings
 from .services import auth as auth_service
+from .workers import download_listener
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 
@@ -16,7 +19,11 @@ _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init()
+    task = asyncio.create_task(download_listener.run())
     yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 app = FastAPI(title="Otaki", lifespan=lifespan)

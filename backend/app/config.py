@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     SUWAYOMI_DOWNLOAD_PATH: str | None = None
     LIBRARY_PATH: str | None = None
 
+    DOWNLOAD_POLL_FALLBACK_SECONDS: int = 60
+    MAX_RECONNECT_ATTEMPTS: int = 5
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

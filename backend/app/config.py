@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -18,6 +19,8 @@ class Settings(BaseSettings):
     SUWAYOMI_DOWNLOAD_PATH: str | None = None
     LIBRARY_PATH: str | None = None
 
+    CHAPTER_NAMING_FORMAT: str = "{title}/{title} - Ch.{chapter}.cbz"
+    RELOCATION_STRATEGY: Literal["auto", "hardlink", "copy", "move"] = "auto"
     DOWNLOAD_POLL_FALLBACK_SECONDS: int = 60
     MAX_RECONNECT_ATTEMPTS: int = 5
 

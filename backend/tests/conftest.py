@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app import database
 from app.config import settings
 from app.main import app
+from app.workers import scheduler as scheduler_module
 
 
 @pytest_asyncio.fixture
@@ -101,6 +102,9 @@ async def auth_client(monkeypatch):
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", "/tmp")
     monkeypatch.setattr(settings, "LIBRARY_PATH", "/tmp")
     monkeypatch.setattr("app.api.setup._write_env", lambda key, value: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "start", lambda: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "shutdown", lambda **kw: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "add_job", lambda *a, **kw: None)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -143,6 +147,9 @@ async def client(monkeypatch):
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", None)
     monkeypatch.setattr(settings, "LIBRARY_PATH", None)
     monkeypatch.setattr("app.api.setup._write_env", lambda key, value: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "start", lambda: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "shutdown", lambda **kw: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "add_job", lambda *a, **kw: None)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

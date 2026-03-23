@@ -10,6 +10,8 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "dev-secret-key-change-in-production"
 
+    DEFAULT_POLL_DAYS: int = 7
+
     SUWAYOMI_URL: str | None = None
     SUWAYOMI_USERNAME: str | None = None
     SUWAYOMI_PASSWORD: str | None = None

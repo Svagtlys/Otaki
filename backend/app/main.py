@@ -8,7 +8,9 @@ from starlette.requests import Request
 from . import database
 from .api import auth, search, setup
 from .config import settings
+from .database import AsyncSessionLocal
 from .services import auth as auth_service
+from .workers import scheduler
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 
@@ -16,7 +18,11 @@ _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init()
+    async with AsyncSessionLocal() as db:
+        await scheduler.start(db)
     yield
+    if scheduler.scheduler.running:
+        scheduler.scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Otaki", lifespan=lifespan)

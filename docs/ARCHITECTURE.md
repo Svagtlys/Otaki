@@ -284,8 +284,8 @@ Not yet implemented:
 Per-chapter source selection logic. Stateless — takes a DB session as argument.
 
 - `effective_priority(source, comic, db) → int` — async; returns `source.priority` for MVP. Stubbed as `async def` so callers need no changes when 1.3 adds `ComicSourceOverride` lookup.
-- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str]]` — fans out to all enabled sources in parallel using `comic.title` (alias lookup deferred to 1.1). For each source: searches for the title, then fetches chapters. Returns `{chapter_number: (best_source, suwayomi_manga_id)}`. `suwayomi_manga_id` is bundled in the return value so callers don't need a second lookup. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
-- `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns pairs where a better-priority source now has the chapter.
+- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel using `comic.title` (alias lookup deferred to 1.1). For each source: searches for the title, then fetches chapters. Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
+- `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source, str, dict]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns `(assignment, candidate_source, manga_id, chapter_data)` tuples where a better-priority source now has the chapter. `chapter_data` contains everything needed to create a new `ChapterAssignment` and enqueue the download.
 
 #### `backend/app/services/cadence_inferrer.py`
 Infers release cadence from chapter history.
@@ -351,16 +351,16 @@ Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All j
 
 Public API:
 
-- `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers a poll job for each via `_register_poll_job`, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
-- `register_comic_jobs(comic: Comic) → None` — registers jobs for a newly created comic. Called by `POST /api/requests` after committing the new `Comic` row.
+- `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers poll and upgrade jobs for each, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
+- `register_comic_jobs(comic: Comic) → None` — registers poll and upgrade jobs for a newly created comic. Called by `POST /api/requests` after committing the new `Comic` row.
 - `remove_comic_jobs(comic_id: int) → None` — removes all APScheduler jobs for a comic (poll and upgrade). Called by `DELETE /api/requests/{id}`. `JobLookupError` is silently suppressed — safe to call even if jobs were never registered.
 
 Internal:
 
 - `_register_poll_job(comic)` — calls `scheduler.add_job` with `trigger="date"`, `run_date=comic.next_poll_at` (or `now(UTC)` if unset), `id=f"poll_{comic.id}"`, `replace_existing=True`.
-- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, groups new chapters by `(source_id, suwayomi_manga_id)`, calls `fetch_chapters` per group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`, `chapter_published_at` from fetch result), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
-
-Upgrade job deferred to #19 — no stub present.
+- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, creates `ChapterAssignment` rows directly from the chapter data in the map (`download_status=queued`, `is_active=True`), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
+- `_register_upgrade_job(comic)` — same shape as `_register_poll_job`; uses `comic.next_upgrade_check_at`, `id=f"upgrade_{comic.id}"`.
+- `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` (interval = `upgrade_override_days ?? poll_override_days`), re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
 
 #### `backend/app/workers/download_listener.py`
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.

@@ -85,7 +85,7 @@ Two middleware functions run on every request (last registered runs first):
 2. **`require_auth_middleware`** (runs second) — blocks non-exempt routes with 401 if no valid JWT is present in the `Authorization: Bearer` header or `otaki_session` cookie. Validates signature only (no DB lookup). Same exempt prefix as above.
 
 #### `backend/app/config.py`
-Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_POLL_DAYS`, `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `RELOCATION_STRATEGY`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`. All Suwayomi/path fields are optional at startup — if `SUWAYOMI_URL` is unset, the setup middleware blocks non-exempt routes with 503.
+Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_POLL_DAYS`, `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `RELOCATION_STRATEGY`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`, `MAX_DOWNLOAD_RETRIES` (default 2). All Suwayomi/path fields are optional at startup — if `SUWAYOMI_URL` is unset, the setup middleware blocks non-exempt routes with 503.
 
 #### `backend/app/database.py`
 SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
@@ -143,6 +143,7 @@ SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
 | `downloaded_at` | datetime nullable | |
 | `library_path` | str nullable | Absolute path in `LIBRARY_PATH` after relocation |
 | `relocation_status` | enum | `pending` / `done` / `failed` / `skipped` |
+| `retry_count` | int | Number of retry attempts made after download failures; starts at 0 |
 
 #### `backend/app/models/quality_scan.py`
 Two tables:
@@ -289,8 +290,8 @@ Implemented:
 - `search_source(source_id, query)` → `list[{manga_id, title, cover_url, synopsis, url}]` — searches a single source by title string; `manga_id` is a string; `cover_url`, `synopsis`, and `url` may be null
 - `fetch_chapters(manga_id)` → `list[{chapter_number, volume_number, suwayomi_chapter_id, chapter_published_at}]` — fetches all chapters for a manga from Suwayomi. `uploadDate` is a ms-epoch string; converted to `datetime` (UTC). `volume_number` is always `None` (not exposed by Suwayomi's chapter API).
 - `enqueue_downloads(chapter_ids)` → void — enqueues a list of chapter IDs for download via `enqueueChapterDownloads` mutation.
-- `subscribe_download_changed()` → async generator of `(chapter_id, chapter_name, manga_title, source_display_name)` tuples — maintains a `graphql-transport-ws` WebSocket subscription to Suwayomi's `downloadStatusChanged(input: DownloadChangedInput!)` subscription. Yields one tuple per `FINISHED` event (checked via `DownloadUpdate.type`). On the first event, also yields any entries in the `initial` field (chapters already `FINISHED` in the queue at connect time).
-- `poll_downloads()` → `list[tuple]` — REST fallback used when the WebSocket subscription is unavailable. Polls `GET /api/v1/downloads` and returns the same tuple format as `subscribe_download_changed`.
+- `subscribe_download_changed()` → async generator of `(event_type, chapter_id, chapter_name, manga_title, source_display_name)` tuples — maintains a `graphql-transport-ws` WebSocket subscription to Suwayomi's `downloadStatusChanged(input: DownloadChangedInput!)` subscription. Yields one tuple per `FINISHED` or `ERROR` event (checked via `DownloadUpdate.type`). On the first event, also yields any entries in the `initial` field with `state` of `FINISHED` or `ERROR`.
+- `poll_downloads()` → `list[tuple]` — REST fallback used when the WebSocket subscription is unavailable. Polls `GET /api/v1/downloads` and returns the same 5-tuple format as `subscribe_download_changed`.
 
 Not yet implemented:
 - `add_to_library(source_id, manga_url)` → Suwayomi manga ID (deferred — not required for download flow)
@@ -378,7 +379,7 @@ Internal:
 - `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` (interval = `upgrade_override_days ?? poll_override_days`), re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
 
 #### `backend/app/workers/download_listener.py`
-Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.
+Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` or `ERROR` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.
 
 State machine:
 - **SUBSCRIPTION mode** (default): connect via `subscribe_download_changed()`; on error, retry with exponential backoff (2s, 4s, 8s… capped at 30s). After `MAX_RECONNECT_ATTEMPTS` consecutive failures, switch to POLLING mode.
@@ -387,26 +388,40 @@ State machine:
 Started by `main.py` lifespan as `asyncio.create_task(download_listener.run())` and cancelled on shutdown. Runs for the lifetime of the process regardless of whether Otaki has active downloads — unrecognised chapter IDs (downloads not initiated by Otaki) are silently ignored in `chapter_event_handler`.
 
 #### `backend/app/workers/chapter_event_handler.py`
-Orchestrates relocation for every completed chapter download. Does not drive upgrade or
+Orchestrates the post-download pipeline and retry logic. Does not drive upgrade or
 poll scheduling — those are APScheduler jobs.
 
 ```
-handle(suwayomi_chapter_id, chapter_name, manga_title, source_display_name)
-  1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
-  2. Set download_status=done, downloaded_at=now(UTC)
-  3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
-  4. [deferred 1.4] write    → QualityScan row
-  5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
-  6. [deferred 1.1] comicinfo → comicinfo_writer.write()
-  7. [deferred 1.1] cover    → cover_injector.inject()
-  8. Check for upgrade: query for existing active ChapterAssignment with same
-     comic_id + chapter_number but different id
-     - None found → regular download: file_relocator.relocate(), set is_active=True
-     - Found      → upgrade download: file_relocator.replace_in_library(old, new),
-                    set old.is_active=False, new.is_active=True
+handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_display_name)
+  ERROR   → _handle_error()
+  FINISHED →
+    1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
+    2. Set download_status=done, downloaded_at=now(UTC)
+    3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
+    4. [deferred 1.4] write    → QualityScan row
+    5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
+    6. [deferred 1.1] comicinfo → comicinfo_writer.write()
+    7. [deferred 1.1] cover    → cover_injector.inject()
+    8. Check for upgrade: query for existing active ChapterAssignment with same
+       comic_id + chapter_number but different id
+       - None found → regular download: file_relocator.relocate(), set is_active=True
+       - Found      → upgrade download: file_relocator.replace_in_library(old, new),
+                      set old.is_active=False, new.is_active=True
 
 on upgrade download (1.0): always swap — no quality condition until scanner added in 1.4
 on upgrade download (1.4+): swap only if new severity ≤ old severity
+
+_handle_error(suwayomi_chapter_id, ...)
+  1. Load ChapterAssignment (warn + return if not found)
+  2. Set download_status=failed, increment retry_count
+  3. If retry_count > MAX_DOWNLOAD_RETRIES → log error, commit, return (permanently failed)
+  4. Compute delay: min(300 * 2^(retry_count-1), 86400) seconds
+     (5 min → 10 min → 20 min → … capped at 24 h)
+  5. Schedule _retry_download via APScheduler date trigger at now + delay
+
+_retry_download(assignment_id, suwayomi_chapter_id)
+  Scheduled by _handle_error. Sets download_status=queued, calls
+  suwayomi.enqueue_downloads(). If enqueue raises, reverts status to failed.
 ```
 
 ---

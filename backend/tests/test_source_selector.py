@@ -161,10 +161,12 @@ async def test_build_chapter_source_map_returns_dict(db_session, suwayomi_settin
 
     assert isinstance(result, dict)
     assert len(result) > 0
-    for ch_num, (src, manga_id) in result.items():
+    for ch_num, (src, manga_id, ch_data) in result.items():
         assert isinstance(ch_num, float)
         assert isinstance(src, Source)
         assert isinstance(manga_id, str)
+        assert "suwayomi_chapter_id" in ch_data
+        assert "chapter_published_at" in ch_data
 
 
 async def test_find_upgrade_candidates_no_upgrades_when_single_source(
@@ -180,7 +182,7 @@ async def test_find_upgrade_candidates_no_upgrades_when_single_source(
     if not chapter_map:
         pytest.skip("No chapters returned from live Suwayomi instance")
 
-    ch_num, (_, manga_id) = next(iter(chapter_map.items()))
+    ch_num, (_, manga_id, _ch_data) = next(iter(chapter_map.items()))
     await _make_assignment(
         db_session, comic=comic, source=source, chapter_number=ch_num
     )

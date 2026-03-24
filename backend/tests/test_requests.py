@@ -134,19 +134,14 @@ async def test_post_creates_assignments(logged_in_client, monkeypatch):
     published = datetime(2024, 3, 1, tzinfo=timezone.utc)
 
     async def _fake_build_map(comic, db):
-        return {1.0: (fake_source, "manga-99")}
-
-    fake_chapters = [
-        {
+        return {1.0: (fake_source, "manga-99", {
             "chapter_number": 1.0,
             "volume_number": None,
             "suwayomi_chapter_id": "ch-1",
             "chapter_published_at": published,
-        }
-    ]
+        })}
 
     monkeypatch.setattr(source_selector, "build_chapter_source_map", _fake_build_map)
-    monkeypatch.setattr(suwayomi, "fetch_chapters", AsyncMock(return_value=fake_chapters))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post("/api/requests", json={"primary_title": "Chapter Comic"})

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     RELOCATION_STRATEGY: Literal["auto", "hardlink", "copy", "move"] = "auto"
     DOWNLOAD_POLL_FALLBACK_SECONDS: int = 60
     MAX_RECONNECT_ATTEMPTS: int = 5
+    MAX_DOWNLOAD_RETRIES: int = 2
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

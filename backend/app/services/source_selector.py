@@ -25,12 +25,12 @@ async def effective_priority(source: Source, comic: Comic, db: AsyncSession) -> 
 async def build_chapter_source_map(
     comic: Comic,
     db: AsyncSession,
-) -> dict[float, tuple[Source, str]]:
+) -> dict[float, tuple[Source, str, dict]]:
     """Return the best source for each chapter available across all enabled sources.
 
-    Returns {chapter_number: (best_source, suwayomi_manga_id)}.
-    The manga ID is included so callers can create ChapterAssignment rows
-    without a second Suwayomi lookup.
+    Returns {chapter_number: (best_source, suwayomi_manga_id, chapter_data)}.
+    All three values are included so callers can create ChapterAssignment rows
+    and enqueue downloads without any additional Suwayomi calls.
 
     Uses comic.title only — alias lookup is deferred to 1.1.
     Per-comic source priority overrides are deferred to 1.3.
@@ -65,23 +65,23 @@ async def build_chapter_source_map(
 
     # For each chapter number, keep the entry from the highest-priority source
     # (lowest effective_priority value).
-    best: dict[float, tuple[int, Source, str]] = {}  # chapter_number → (eff_priority, source, manga_id)
+    best: dict[float, tuple[int, Source, str, dict]] = {}  # chapter_number → (eff_priority, source, manga_id, ch_data)
     for source_results in gathered:
         for source, manga_id, chapter in source_results:
             ch_num = chapter["chapter_number"]
             eff = await effective_priority(source, comic, db)
             if ch_num not in best or eff < best[ch_num][0]:
-                best[ch_num] = (eff, source, manga_id)
+                best[ch_num] = (eff, source, manga_id, chapter)
 
-    return {ch_num: (source, manga_id) for ch_num, (_, source, manga_id) in best.items()}
+    return {ch_num: (source, manga_id, ch_data) for ch_num, (_, source, manga_id, ch_data) in best.items()}
 
 
 async def find_upgrade_candidates(
     comic: Comic,
     db: AsyncSession,
-) -> list[tuple[ChapterAssignment, Source]]:
-    """Return (assignment, candidate_source) pairs where a higher-priority
-    source now has a chapter that is currently assigned to a lower-priority one.
+) -> list[tuple[ChapterAssignment, Source, str, dict]]:
+    """Return (assignment, candidate_source, manga_id, chapter_data) tuples where
+    a higher-priority source now has a chapter currently assigned to a lower-priority one.
     """
     result = await db.execute(
         select(ChapterAssignment)
@@ -102,10 +102,10 @@ async def find_upgrade_candidates(
         entry = source_map.get(assignment.chapter_number)
         if entry is None:
             continue
-        candidate_source, _ = entry
+        candidate_source, manga_id, ch_data = entry
         current_eff = await effective_priority(assignment.source, comic, db)
         candidate_eff = await effective_priority(candidate_source, comic, db)
         if candidate_eff < current_eff:
-            candidates.append((assignment, candidate_source))
+            candidates.append((assignment, candidate_source, manga_id, ch_data))
 
     return candidates

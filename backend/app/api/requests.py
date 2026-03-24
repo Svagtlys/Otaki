@@ -139,56 +139,34 @@ async def create_request(
     # 3. Build per-chapter source map
     chapter_map = await source_selector.build_chapter_source_map(comic, db)
 
-    # 4. Group by (source_id, manga_id) to batch fetch_chapters calls
-    groups: dict[tuple[int, str], list[float]] = {}
-    for ch_num, (source, manga_id) in chapter_map.items():
-        groups.setdefault((source.id, manga_id), []).append(ch_num)
+    # 4. Create assignments and enqueue downloads directly from the source map
+    enqueue_by_manga: dict[str, list[str]] = {}
+    for ch_num, (source, manga_id, ch_data) in chapter_map.items():
+        assignment = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=ch_num,
+            volume_number=ch_data.get("volume_number"),
+            source_id=source.id,
+            suwayomi_manga_id=manga_id,
+            suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+            chapter_published_at=ch_data["chapter_published_at"],
+            download_status=DownloadStatus.queued,
+            is_active=True,
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(assignment)
+        enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
 
-    # 5. Fetch chapters and create assignments
-    for (source_id, manga_id), ch_nums in groups.items():
+    # 5. Enqueue downloads batched by manga_id
+    for manga_id, chapter_ids in enqueue_by_manga.items():
         try:
-            fetched = await suwayomi.fetch_chapters(manga_id)
+            await suwayomi.enqueue_downloads(chapter_ids)
         except Exception as exc:
-            log.warning("create_request: fetch_chapters failed for manga_id=%s: %r", manga_id, exc)
-            continue
-
-        fetched_by_num = {ch["chapter_number"]: ch for ch in fetched}
-        chapter_ids_to_enqueue: list[str] = []
-
-        for ch_num in ch_nums:
-            ch_data = fetched_by_num.get(ch_num)
-            if ch_data is None:
-                log.warning(
-                    "create_request: chapter %.1f not in fetch result for manga_id=%s",
-                    ch_num,
-                    manga_id,
-                )
-                continue
-
-            assignment = ChapterAssignment(
-                comic_id=comic.id,
-                chapter_number=ch_num,
-                volume_number=ch_data.get("volume_number"),
-                source_id=source_id,
-                suwayomi_manga_id=manga_id,
-                suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
-                chapter_published_at=ch_data["chapter_published_at"],
-                download_status=DownloadStatus.queued,
-                is_active=True,
-                relocation_status=RelocationStatus.pending,
+            log.warning(
+                "create_request: enqueue_downloads failed for manga_id=%s: %r",
+                manga_id,
+                exc,
             )
-            db.add(assignment)
-            chapter_ids_to_enqueue.append(ch_data["suwayomi_chapter_id"])
-
-        if chapter_ids_to_enqueue:
-            try:
-                await suwayomi.enqueue_downloads(chapter_ids_to_enqueue)
-            except Exception as exc:
-                log.warning(
-                    "create_request: enqueue_downloads failed for manga_id=%s: %r",
-                    manga_id,
-                    exc,
-                )
 
     # 6. Set next poll/upgrade times
     now = datetime.now(timezone.utc)

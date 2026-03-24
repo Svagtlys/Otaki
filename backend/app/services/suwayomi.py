@@ -168,9 +168,10 @@ DOWNLOAD_STATUS_SUBSCRIPTION = gql("""
 """)
 
 
-async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, str], None]:
-    """Async generator yielding (chapter_id, chapter_name, manga_title, source_display_name)
-    tuples for FINISHED download events from Suwayomi's WebSocket subscription."""
+async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, str, str], None]:
+    """Async generator yielding (event_type, chapter_id, chapter_name, manga_title,
+    source_display_name) tuples for FINISHED and ERROR download events from Suwayomi's
+    WebSocket subscription."""
     ws_url = settings.SUWAYOMI_URL.replace("https://", "wss://").replace("http://", "ws://")
     ws_url += "/api/graphql"
     _ssl_ctx = ssl.create_default_context()
@@ -189,28 +190,29 @@ async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, st
         ):
             data = result["downloadStatusChanged"]
             # On first event, also process initial (DownloadType list — chapters already
-            # in the queue when we connected, filtered to FINISHED state)
+            # in the queue when we connected, filtered to FINISHED/ERROR state)
             if first:
                 first = False
                 for item in (data.get("initial") or []):
-                    if item["state"] == "FINISHED":
+                    if item["state"] in ("FINISHED", "ERROR"):
                         chapter = item["chapter"]
                         manga = item["manga"]
                         source_name = (manga.get("source") or {}).get("displayName", "")
-                        yield (str(chapter["id"]), chapter["name"], manga["title"], source_name)
+                        yield (item["state"], str(chapter["id"]), chapter["name"], manga["title"], source_name)
             # updates is a list of DownloadUpdate: { type: DownloadUpdateType, download: DownloadType }
             for update in data["updates"]:
-                if update["type"] == "FINISHED":
+                if update["type"] in ("FINISHED", "ERROR"):
                     chapter = update["download"]["chapter"]
                     manga = update["download"]["manga"]
                     source_name = (manga.get("source") or {}).get("displayName", "")
-                    yield (str(chapter["id"]), chapter["name"], manga["title"], source_name)
+                    yield (update["type"], str(chapter["id"]), chapter["name"], manga["title"], source_name)
 
 
-async def poll_downloads() -> list[tuple[str, str, str, str]]:
-    """Poll Suwayomi's REST endpoint for FINISHED downloads.
+async def poll_downloads() -> list[tuple[str, str, str, str, str]]:
+    """Poll Suwayomi's REST endpoint for FINISHED and ERROR downloads.
 
-    Returns a list of (chapter_id, chapter_name, manga_title, source_display_name) tuples.
+    Returns a list of (event_type, chapter_id, chapter_name, manga_title,
+    source_display_name) tuples.
     """
     url = f"{settings.SUWAYOMI_URL}/api/v1/downloads"
     auth = None
@@ -223,11 +225,13 @@ async def poll_downloads() -> list[tuple[str, str, str, str]]:
 
     results = []
     for item in data:
-        if item.get("state") == "FINISHED":
+        state = item.get("state")
+        if state in ("FINISHED", "ERROR"):
             chapter = item.get("chapter") or {}
             manga = item.get("manga") or {}
             source_name = (manga.get("source") or {}).get("displayName", "")
             results.append((
+                state,
                 str(chapter.get("id", "")),
                 chapter.get("name", ""),
                 manga.get("title", ""),

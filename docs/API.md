@@ -224,7 +224,7 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 
 ### `POST /api/requests`
 
-Track a new comic. Triggers source selection, adds the manga to Suwayomi, and enqueues all available chapter downloads.
+Track a new comic. Triggers source selection and enqueues all available chapter downloads.
 
 **Request Body**
 
@@ -233,11 +233,7 @@ Track a new comic. Triggers source selection, adds the manga to Suwayomi, and en
   "primary_title": "One Piece",
   "library_title": "One Piece",
   "cover_url": "https://source1-url/cover.jpg",
-  "aliases": [
-    { "title": "One Piece", "url": "https://source1-url/manga/one-piece" },
-    { "title": "ワンピース", "url": "https://source2-url/manga/wan-piisu" }
-  ],
-  "poll_override_days": null,
+  "poll_override_days": 7.0,
   "upgrade_override_days": null
 }
 ```
@@ -245,13 +241,10 @@ Track a new comic. Triggers source selection, adds the manga to Suwayomi, and en
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `primary_title` | string | yes | Display name for the comic in the Otaki UI |
-| `library_title` | string | no | Name used for the library folder path and `ComicInfo.xml` `<Series>` tag. Defaults to `primary_title` if omitted. Must be consistent to avoid comic readers splitting one series into multiple. |
-| `cover_url` | string \| null | no | URL of the cover image to download and store (typically a `cover_url` from a search result). If omitted, no cover is set — can be added later via `POST /api/requests/{id}/cover`. |
-| `aliases` | array | yes | One or more `{title, url}` pairs from search results. Each entry is a known name for this series on a specific source. At least one required. |
-| `aliases[].title` | string | yes | Title as returned by that source's search result |
-| `aliases[].url` | string | yes | Source-specific manga URL from the search result |
-| `poll_override_days` | int \| null | no | Days between new-chapter polls; `null` = use inferred cadence (default 7d until history exists) |
-| `upgrade_override_days` | int \| null | no | Days between upgrade checks; `null` = use inferred cadence |
+| `library_title` | string | no | Name used for the library folder path and `ComicInfo.xml` `<Series>` tag. Defaults to `primary_title` if omitted. |
+| `cover_url` | string \| null | no | Stored for future use (cover injection deferred to 1.1). |
+| `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` = use `DEFAULT_POLL_DAYS` (default 7) |
+| `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
 
 **Response `201`**
 
@@ -260,10 +253,9 @@ Track a new comic. Triggers source selection, adds the manga to Suwayomi, and en
   "id": 1,
   "title": "One Piece",
   "library_title": "One Piece",
-  "cover_url": "/api/requests/1/cover",
+  "cover_url": null,
   "status": "tracking",
-  "inferred_cadence_days": null,
-  "poll_override_days": null,
+  "poll_override_days": 7.0,
   "upgrade_override_days": null,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
@@ -274,23 +266,21 @@ Track a new comic. Triggers source selection, adds the manga to Suwayomi, and en
 
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
-2. Creates one `ComicAlias` row per entry in `aliases`.
-3. Calls `source_selector.build_chapter_source_map()` — queries all enabled sources using all known aliases and assigns each chapter to the highest-priority source that has it.
-4. For each distinct source needed, calls Suwayomi `addMangaToLibrary` + `fetchChapterList`.
-5. Calls `enqueueChapterDownloads` grouped by source.
-6. Creates one `ChapterAssignment` row per chapter with the assigned source and `download_status=queued`.
-7. Registers two APScheduler jobs for this comic: a poll job and an upgrade job, both initialised to fire in `inferred_cadence_days` (default 7 days).
+2. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources by `primary_title` and assigns each chapter to the highest-priority source that has it.
+3. Calls `suwayomi.fetch_chapters()` per source group.
+4. Calls `suwayomi.enqueue_downloads()` grouped by source.
+5. Creates one `ChapterAssignment` row per chapter with `download_status=queued`, `is_active=True`.
+6. Registers an APScheduler poll job for this comic.
 
 **Error Cases**
 - `409 Conflict` — a `Comic` with the same title is already being tracked.
 - `422 Unprocessable Entity` — missing or invalid fields.
-- `503 Service Unavailable` — Suwayomi is unreachable.
 
 ---
 
 ### `GET /api/requests`
 
-List all tracked comics with a summary of download progress and worst quality severity.
+List all tracked comics with a summary of download progress.
 
 **Response `200`**
 
@@ -299,8 +289,8 @@ List all tracked comics with a summary of download progress and worst quality se
   {
     "id": 1,
     "title": "One Piece",
+    "library_title": "One Piece",
     "status": "tracking",
-    "worst_severity": "minor",
     "chapter_counts": {
       "total": 120,
       "done": 118,
@@ -308,8 +298,7 @@ List all tracked comics with a summary of download progress and worst quality se
       "queued": 1,
       "failed": 0
     },
-    "inferred_cadence_days": 7.0,
-    "poll_override_days": null,
+    "poll_override_days": 7.0,
     "upgrade_override_days": null,
     "next_poll_at": "2025-03-22T09:00:00Z",
     "next_upgrade_check_at": "2025-03-22T09:00:00Z",
@@ -320,11 +309,9 @@ List all tracked comics with a summary of download progress and worst quality se
 
 | Field | Type | Notes |
 |---|---|---|
-| `worst_severity` | `"clean"` \| `"minor"` \| `"moderate"` \| `"severe"` \| `null` | Worst severity across all scanned chapters; `null` if no scans yet |
-| `chapter_counts` | object | Counts by `download_status` |
-| `inferred_cadence_days` | float \| null | Inferred release cadence; `null` until enough history |
-| `poll_override_days` | int \| null | User override for poll interval |
-| `upgrade_override_days` | int \| null | User override for upgrade interval |
+| `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
+| `poll_override_days` | float | Effective poll interval in days |
+| `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
 | `next_poll_at` | datetime \| null | When the next new-chapter poll will run |
 | `next_upgrade_check_at` | datetime \| null | When the next upgrade check will run |
 | `last_upgrade_check_at` | datetime \| null | When upgrade checks last ran |
@@ -333,7 +320,7 @@ List all tracked comics with a summary of download progress and worst quality se
 
 ### `GET /api/requests/{id}`
 
-Full detail for one comic: all chapters with quality badges and library paths.
+Full detail for one comic: all chapter assignments with download and relocation status.
 
 **Path Parameters**
 
@@ -347,9 +334,10 @@ Full detail for one comic: all chapters with quality badges and library paths.
 {
   "id": 1,
   "title": "One Piece",
+  "library_title": "One Piece",
+  "cover_url": null,
   "status": "tracking",
-  "inferred_cadence_days": 7.0,
-  "poll_override_days": null,
+  "poll_override_days": 7.0,
   "upgrade_override_days": null,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
@@ -360,32 +348,20 @@ Full detail for one comic: all chapters with quality badges and library paths.
       "assignment_id": 55,
       "chapter_number": 12.5,
       "volume_number": 2,
-      "source": {
-        "id": 2,
-        "name": "MangaDex"
-      },
+      "source_id": 2,
+      "source_name": "MangaDex",
       "download_status": "done",
       "is_active": true,
       "downloaded_at": "2025-03-15T09:30:00Z",
       "library_path": "/library/One Piece/One Piece - Ch.0012.5.cbz",
-      "relocation_status": "done",
-      "quality": {
-        "scanned_at": "2025-03-15T09:31:00Z",
-        "watermark_count": 0,
-        "watermark_templates_matched": [],
-        "has_header": false,
-        "has_footer": false,
-        "severity": "clean",
-        "auto_fixed": false
-      }
+      "relocation_status": "done"
     }
   ]
 }
 ```
 
 **Notes**
-- `chapters` contains only rows where `is_active=true` by default (the canonical copy per chapter number).
-- `quality` is `null` if the chapter has not been scanned yet.
+- `chapters` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
 - `library_path` is `null` until relocation completes.
 
 **Error Cases**
@@ -395,7 +371,7 @@ Full detail for one comic: all chapters with quality badges and library paths.
 
 ### `DELETE /api/requests/{id}`
 
-Stop tracking a comic. Optionally removes library files and the Suwayomi entry.
+Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, and the `Comic` row. Optionally deletes library files.
 
 **Path Parameters**
 
@@ -407,8 +383,7 @@ Stop tracking a comic. Optionally removes library files and the Suwayomi entry.
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `delete_files` | bool | `false` | If `true`, deletes all files at `library_path` for active assignments |
-| `remove_from_suwayomi` | bool | `false` | If `true`, calls Suwayomi `deleteManga` mutation |
+| `delete_files` | bool | `false` | If `true`, deletes any files referenced by `library_path` on assignments |
 
 **Response `204 No Content`**
 

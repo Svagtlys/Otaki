@@ -74,10 +74,10 @@ Otaki/
 
 #### `backend/app/main.py`
 FastAPI app entry point. Responsibilities:
-- Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`, `/api/sources`, `/api/quality`)
+- Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`)
 - Call `database.init()` on startup (creates tables if not present)
-- Start `download_listener` as a background task on startup
-- Start APScheduler via `scheduler.start()`
+- Start APScheduler via `scheduler.start(db)` then start `download_listener` as a long-lived background task
+- Cancel `download_listener` task and shut down APScheduler on shutdown
 
 Two middleware functions run on every request (last registered runs first):
 
@@ -85,7 +85,7 @@ Two middleware functions run on every request (last registered runs first):
 2. **`require_auth_middleware`** (runs second) — blocks non-exempt routes with 401 if no valid JWT is present in the `Authorization: Bearer` header or `otaki_session` cookie. Validates signature only (no DB lookup). Same exempt prefix as above.
 
 #### `backend/app/config.py`
-Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `WATERMARKS_PATH`, `COVERS_PATH`, `AUTO_FIX_BANNERS`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`. All fields are optional at startup — if `SUWAYOMI_URL` is unset, the app serves the setup wizard instead of the normal UI.
+Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_POLL_DAYS`, `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `RELOCATION_STRATEGY`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`. All Suwayomi/path fields are optional at startup — if `SUWAYOMI_URL` is unset, the setup middleware blocks non-exempt routes with 503.
 
 #### `backend/app/database.py`
 SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
@@ -104,11 +104,10 @@ SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
 | `id` | int PK | |
 | `title` | str | Display name in Otaki UI |
 | `library_title` | str | Canonical name used for folder path and `ComicInfo.xml` `<Series>` tag; set at request time, defaults to `primary_title` |
-| `cover_path` | str \| null | Path to stored cover image under `COVERS_PATH`; `null` if no cover set |
+| `cover_path` | str \| null | Path to stored cover image; `null` until cover injection is implemented (1.1) |
 | `status` | enum | `tracking` / `complete` |
-| `inferred_cadence_days` | float \| null | Median days between recent chapters, recalculated after each poll |
-| `poll_override_days` | int \| null | User override for new-chapter poll interval; `null` = use inferred |
-| `upgrade_override_days` | int \| null | User override for upgrade check interval; `null` = use inferred |
+| `poll_override_days` | float | Days between new-chapter polls; defaults to `DEFAULT_POLL_DAYS` (7) |
+| `upgrade_override_days` | float \| null | Days between upgrade checks; `null` = use `poll_override_days` |
 | `next_poll_at` | datetime \| null | When Otaki will next poll for new chapters |
 | `next_upgrade_check_at` | datetime \| null | When Otaki will next run upgrade checks |
 | `last_upgrade_check_at` | datetime \| null | When upgrade checks last ran |
@@ -246,10 +245,10 @@ Fans out to all enabled sources via `suwayomi.search_source()` in parallel. Retu
 #### `backend/app/api/requests.py`
 CRUD for tracked comics.
 
-- `POST /api/requests` — creates a `Comic`, calls `source_selector.build_chapter_source_map()`, adds manga to Suwayomi per source, enqueues downloads, creates `ChapterAssignment` rows, registers APScheduler jobs for poll and upgrade
-- `GET /api/requests` — list with download status and worst quality severity
-- `GET /api/requests/{id}` — full detail: chapters, quality badges, library paths
-- `DELETE /api/requests/{id}` — remove tracking; optionally removes library files and Suwayomi entry
+- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. Returns `201 ComicResponse`.
+- `GET /api/requests` — list all tracked comics with per-comic chapter counts by download status (`total`, `done`, `downloading`, `queued`, `failed`). Uses a single `GROUP BY` query across all comics.
+- `GET /api/requests/{id}` — full detail: comic metadata plus list of `ChapterSummary` rows ordered by chapter number (includes source name, download status, relocation status, library path).
+- `DELETE /api/requests/{id}?delete_files=false` — untrack a comic: removes APScheduler jobs via `scheduler.remove_comic_jobs()`, bulk-deletes all `ChapterAssignment` rows, deletes the `Comic` row. If `delete_files=true`, also unlinks any existing `library_path` files. Returns 204.
 
 #### `backend/app/api/sources.py`
 - `GET/POST/PATCH/DELETE /api/sources` — source priority list CRUD
@@ -279,8 +278,7 @@ Implemented:
 - `poll_downloads()` → `list[tuple]` — REST fallback used when the WebSocket subscription is unavailable. Polls `GET /api/v1/downloads` and returns the same tuple format as `subscribe_download_changed`.
 
 Not yet implemented:
-- `add_to_library(source_id, manga_url)` → Suwayomi manga ID
-- `delete_manga(manga_id)` → void
+- `add_to_library(source_id, manga_url)` → Suwayomi manga ID (deferred — not required for download flow)
 
 #### `backend/app/services/source_selector.py`
 Per-chapter source selection logic. Stateless — takes a DB session as argument.
@@ -349,15 +347,13 @@ Moves settled chapters from Suwayomi's staging folder to the final library. Rada
 ### Workers
 
 #### `backend/app/workers/scheduler.py`
-<<<<<<< feat/download-listener
-Initialises APScheduler with an `AsyncIOScheduler`. On startup, registers two jobs per tracked comic: a **poll job** (fires at `next_poll_at`, interval = `poll_override_days` or `inferred_cadence_days`) and an **upgrade job** (fires at `next_upgrade_check_at`, interval = `upgrade_override_days` or `inferred_cadence_days`). When a new comic is requested via the API, both jobs are registered immediately.
-=======
 Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes, advancing `next_poll_at` by the poll interval (hardcoded 7-day MVP fallback; cadence inference deferred to #16).
 
 Public API:
 
 - `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers a poll job for each via `_register_poll_job`, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
-- `register_comic_jobs(comic: Comic) → None` — registers jobs for a newly created comic. Called by `POST /api/requests` (#13) after committing the new `Comic` row.
+- `register_comic_jobs(comic: Comic) → None` — registers jobs for a newly created comic. Called by `POST /api/requests` after committing the new `Comic` row.
+- `remove_comic_jobs(comic_id: int) → None` — removes all APScheduler jobs for a comic (poll and upgrade). Called by `DELETE /api/requests/{id}`. `JobLookupError` is silently suppressed — safe to call even if jobs were never registered.
 
 Internal:
 
@@ -365,7 +361,6 @@ Internal:
 - `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, groups new chapters by `(source_id, suwayomi_manga_id)`, calls `fetch_chapters` per group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`, `chapter_published_at` from fetch result), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
 
 Upgrade job deferred to #19 — no stub present.
->>>>>>> develop
 
 #### `backend/app/workers/download_listener.py`
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.

@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,14 +10,9 @@ from ..database import get_db
 from ..models.source import Source
 from ..models.user import User
 from ..services import auth, suwayomi
+from ..services.settings import validate_path, validate_suwayomi, write_env
 
 router = APIRouter(prefix="/setup", tags=["setup"])
-
-
-def _write_env(key: str, value: str) -> None:
-    from dotenv import set_key
-
-    set_key(".env", key, value)
 
 
 def require_setup_incomplete() -> None:
@@ -88,16 +82,13 @@ async def connect(
     body: ConnectRequest,
     _: None = Depends(require_setup_incomplete),
 ) -> None:
-    ok = await suwayomi.ping(body.url, body.username, body.password)
+    ok = await validate_suwayomi(body.url, body.username, body.password)
     if not ok:
         raise HTTPException(status_code=400, detail="Could not connect to Suwayomi")
 
-    _write_env("SUWAYOMI_URL", body.url)
-    _write_env("SUWAYOMI_USERNAME", body.username)
-    _write_env("SUWAYOMI_PASSWORD", body.password)
-    settings.SUWAYOMI_URL = body.url
-    settings.SUWAYOMI_USERNAME = body.username
-    settings.SUWAYOMI_PASSWORD = body.password
+    write_env("SUWAYOMI_URL", body.url)
+    write_env("SUWAYOMI_USERNAME", body.username)
+    write_env("SUWAYOMI_PASSWORD", body.password)
 
 
 @router.get("/sources")
@@ -138,12 +129,10 @@ async def save_paths(
         ("download_path", body.download_path),
         ("library_path", body.library_path),
     ):
-        if not Path(value).is_dir():
+        if not validate_path(value):
             raise HTTPException(
                 status_code=400, detail=f"Invalid {field}: {value!r} is not a directory"
             )
 
-    _write_env("SUWAYOMI_DOWNLOAD_PATH", body.download_path)
-    _write_env("LIBRARY_PATH", body.library_path)
-    settings.SUWAYOMI_DOWNLOAD_PATH = body.download_path
-    settings.LIBRARY_PATH = body.library_path
+    write_env("SUWAYOMI_DOWNLOAD_PATH", body.download_path)
+    write_env("LIBRARY_PATH", body.library_path)

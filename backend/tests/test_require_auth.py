@@ -36,7 +36,7 @@ async def auth_client(monkeypatch):
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", "/tmp")
     monkeypatch.setattr(settings, "LIBRARY_PATH", "/tmp")
-    monkeypatch.setattr("app.api.setup._write_env", lambda key, value: None)
+    monkeypatch.setattr("app.services.settings.write_env", lambda key, value: None)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

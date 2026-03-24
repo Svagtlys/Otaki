@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 async def run() -> None:
     """Maintain a persistent connection to Suwayomi's downloadChanged subscription.
 
-    Dispatches FINISHED events to chapter_event_handler.handle() via asyncio.create_task()
-    so slow relocations do not block the listener.
+    Dispatches FINISHED and ERROR events to chapter_event_handler.handle() via
+    asyncio.create_task() so slow relocations do not block the listener.
 
     State machine:
     - SUBSCRIPTION mode (default): connect via WebSocket subscription; on failure, retry
@@ -30,13 +30,13 @@ async def run() -> None:
             attempt = 0
             while True:
                 try:
-                    async for (chapter_id, chapter_name, manga_title, source_name) in (
+                    async for (event_type, chapter_id, chapter_name, manga_title, source_name) in (
                         suwayomi.subscribe_download_changed()
                     ):
                         attempt = 0
                         asyncio.create_task(
                             chapter_event_handler.handle(
-                                chapter_id, chapter_name, manga_title, source_name
+                                event_type, chapter_id, chapter_name, manga_title, source_name
                             )
                         )
                     # Generator exhausted cleanly — reconnect immediately.

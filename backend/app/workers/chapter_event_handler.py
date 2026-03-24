@@ -1,33 +1,44 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from ..config import settings
 from ..database import AsyncSessionLocal
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
 from ..models.comic import Comic
-from ..services import file_relocator
+from ..services import file_relocator, suwayomi
+from . import scheduler as scheduler_module
 
 logger = logging.getLogger(__name__)
 
+_RETRY_BASE_SECONDS = 300   # 5 minutes
+_RETRY_CAP_SECONDS = 86400  # 24 hours
+
 
 async def handle(
+    event_type: str,
     suwayomi_chapter_id: str,
     chapter_name: str,
     manga_title: str,
     source_display_name: str,
 ) -> None:
-    """Run the post-download pipeline for a completed chapter.
+    """Dispatch a download event from Suwayomi.
 
-    Called by the download listener on each FINISHED event. Does not drive
-    scheduling — that is APScheduler's responsibility.
+    FINISHED → run the post-download pipeline (relocate / upgrade-swap).
+    ERROR    → increment retry_count and schedule a re-enqueue, or mark
+               permanently failed once MAX_DOWNLOAD_RETRIES is exhausted.
 
-    chapter_name, manga_title, and source_display_name are passed through to
-    file_relocator calls for logging and future use.
+    Does not drive scheduling — that is APScheduler's responsibility.
 
     Deferred to 1.1: comicinfo_writer, cover_injector
     Deferred to 1.4: quality_scanner, QualityScan row, image_processor
     """
+    if event_type == "ERROR":
+        await _handle_error(suwayomi_chapter_id, chapter_name, manga_title, source_display_name)
+        return
+
+    # FINISHED path
     async with AsyncSessionLocal() as db:
         assignment = await db.scalar(
             select(ChapterAssignment).where(
@@ -85,3 +96,101 @@ async def handle(
             assignment.is_active = True
 
         await db.commit()
+
+
+async def _handle_error(
+    suwayomi_chapter_id: str,
+    chapter_name: str,
+    manga_title: str,
+    source_display_name: str,
+) -> None:
+    async with AsyncSessionLocal() as db:
+        assignment = await db.scalar(
+            select(ChapterAssignment).where(
+                ChapterAssignment.suwayomi_chapter_id == suwayomi_chapter_id
+            )
+        )
+        if assignment is None:
+            logger.warning(
+                "_handle_error() called for unknown suwayomi_chapter_id=%s — ignoring",
+                suwayomi_chapter_id,
+            )
+            return
+
+        assignment.download_status = DownloadStatus.failed
+        assignment.retry_count = (assignment.retry_count or 0) + 1
+
+        if assignment.retry_count > settings.MAX_DOWNLOAD_RETRIES:
+            logger.error(
+                "_handle_error: chapter_id=%s exhausted %d retries — permanently failed",
+                suwayomi_chapter_id,
+                settings.MAX_DOWNLOAD_RETRIES,
+            )
+            await db.commit()
+            return
+
+        delay_seconds = min(
+            _RETRY_BASE_SECONDS * (2 ** (assignment.retry_count - 1)),
+            _RETRY_CAP_SECONDS,
+        )
+        run_date = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+
+        logger.info(
+            "_handle_error: chapter_id=%s retry %d/%d scheduled in %ds",
+            suwayomi_chapter_id,
+            assignment.retry_count,
+            settings.MAX_DOWNLOAD_RETRIES,
+            delay_seconds,
+        )
+
+        assignment_id = assignment.id
+        retry_count = assignment.retry_count
+        chapter_id_str = assignment.suwayomi_chapter_id
+        await db.commit()
+
+    scheduler_module.scheduler.add_job(
+        func=_retry_download,
+        trigger="date",
+        run_date=run_date,
+        id=f"retry_download_{assignment_id}_{retry_count}",
+        args=[assignment_id, chapter_id_str],
+        replace_existing=True,
+    )
+
+
+async def _retry_download(assignment_id: int, suwayomi_chapter_id: str) -> None:
+    """Re-enqueue a failed chapter download. Scheduled by _handle_error."""
+    async with AsyncSessionLocal() as db:
+        assignment = await db.get(ChapterAssignment, assignment_id)
+        if assignment is None:
+            logger.warning(
+                "_retry_download: assignment_id=%d not found — skipping", assignment_id
+            )
+            return
+        if assignment.download_status != DownloadStatus.failed:
+            logger.info(
+                "_retry_download: assignment_id=%d status=%s — skipping",
+                assignment_id,
+                assignment.download_status,
+            )
+            return
+
+        assignment.download_status = DownloadStatus.queued
+        await db.commit()
+
+    try:
+        await suwayomi.enqueue_downloads([suwayomi_chapter_id])
+        logger.info(
+            "_retry_download: enqueued chapter_id=%s for retry", suwayomi_chapter_id
+        )
+    except Exception as exc:
+        logger.warning(
+            "_retry_download: enqueue_downloads failed for chapter_id=%s: %r",
+            suwayomi_chapter_id,
+            exc,
+        )
+        async with AsyncSessionLocal() as db:
+            assignment = await db.get(ChapterAssignment, assignment_id)
+            if assignment is not None:
+                assignment.download_status = DownloadStatus.failed
+                await db.commit()

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -53,6 +53,23 @@ def mock_relocator(monkeypatch):
     return mock
 
 
+@pytest.fixture
+def mock_scheduler_module(monkeypatch):
+    """Replaces scheduler_module inside the handler so add_job calls are captured."""
+    mock = MagicMock()
+    monkeypatch.setattr(chapter_event_handler, "scheduler_module", mock)
+    return mock
+
+
+@pytest.fixture
+def mock_suwayomi(monkeypatch):
+    """Replaces the suwayomi service inside the handler."""
+    mock = MagicMock()
+    mock.enqueue_downloads = AsyncMock()
+    monkeypatch.setattr(chapter_event_handler, "suwayomi", mock)
+    return mock
+
+
 async def _seed_comic(session_factory) -> tuple[Comic, Source]:
     async with session_factory() as db:
         source = Source(
@@ -81,7 +98,7 @@ async def _seed_comic(session_factory) -> tuple[Comic, Source]:
         return comic.id, source.id
 
 
-def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_number=1.0):
+def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_number=1.0, retry_count=0):
     return ChapterAssignment(
         comic_id=comic_id,
         chapter_number=chapter_number,
@@ -92,6 +109,7 @@ def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_numb
         is_active=is_active,
         chapter_published_at=datetime.now(UTC),
         relocation_status=RelocationStatus.pending,
+        retry_count=retry_count,
     )
 
 
@@ -103,7 +121,7 @@ def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_numb
 @pytest.mark.asyncio
 async def test_handle_unknown_chapter_id(handler_db, mock_relocator):
     """handle() logs a warning and returns without error for an unknown chapter ID."""
-    await chapter_event_handler.handle("does-not-exist", "Chapter 1", "Unknown Manga", "TestSrc")
+    await chapter_event_handler.handle("FINISHED", "does-not-exist", "Chapter 1", "Unknown Manga", "TestSrc")
 
     mock_relocator.relocate.assert_not_called()
     mock_relocator.replace_in_library.assert_not_called()
@@ -122,7 +140,7 @@ async def test_handle_regular_download(handler_db, mock_relocator):
         await db.commit()
         assignment_id = assignment.id
 
-    await chapter_event_handler.handle("ch-1", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle("FINISHED", "ch-1", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.relocate.assert_awaited_once()
     mock_relocator.replace_in_library.assert_not_called()
@@ -148,7 +166,7 @@ async def test_handle_upgrade_download(handler_db, mock_relocator):
         await db.commit()
         old_id, new_id = old.id, new.id
 
-    await chapter_event_handler.handle("ch-new", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle("FINISHED", "ch-new", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.replace_in_library.assert_awaited_once()
     mock_relocator.relocate.assert_not_called()
@@ -179,10 +197,158 @@ async def test_handle_upgrade_always_swaps(handler_db, mock_relocator):
         old_id, new_id = old.id, new.id
 
     # No severity comparison in 1.0 — swap always happens.
-    await chapter_event_handler.handle("ch-new-2", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle("FINISHED", "ch-new-2", "Chapter 1", "Test Comic", "TestSrc")
 
     mock_relocator.replace_in_library.assert_awaited_once()
 
     async with handler_db() as db:
         assert (await db.get(ChapterAssignment, old_id)).is_active is False
         assert (await db.get(ChapterAssignment, new_id)).is_active is True
+
+
+# ---------------------------------------------------------------------------
+# Retry tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_error_unknown_chapter_id(handler_db, mock_scheduler_module):
+    """ERROR event for unknown chapter ID logs a warning and does not schedule a job."""
+    await chapter_event_handler.handle("ERROR", "does-not-exist", "Ch 1", "Manga", "Src")
+    mock_scheduler_module.scheduler.add_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_error_first_retry_schedules_job(handler_db, mock_scheduler_module, monkeypatch):
+    """First ERROR: retry_count→1, status=failed, job scheduled ~300s out."""
+    monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-err-1", is_active=True)
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    before = datetime.now(UTC)
+    await chapter_event_handler.handle("ERROR", "ch-err-1", "Ch 1", "Manga", "Src")
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.download_status == DownloadStatus.failed
+        assert result.retry_count == 1
+
+    mock_scheduler_module.scheduler.add_job.assert_called_once()
+    call_kwargs = mock_scheduler_module.scheduler.add_job.call_args.kwargs
+    assert call_kwargs["trigger"] == "date"
+    assert call_kwargs["id"] == f"retry_download_{assignment_id}_1"
+    run_date = call_kwargs["run_date"]
+    assert run_date >= before + timedelta(seconds=290)
+    assert run_date <= before + timedelta(seconds=310)
+
+
+@pytest.mark.asyncio
+async def test_handle_error_second_retry_doubled_delay(handler_db, mock_scheduler_module, monkeypatch):
+    """Second ERROR: retry_count→2, job scheduled ~600s out."""
+    monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-err-2", is_active=True, retry_count=1)
+        a.download_status = DownloadStatus.failed
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    before = datetime.now(UTC)
+    await chapter_event_handler.handle("ERROR", "ch-err-2", "Ch 1", "Manga", "Src")
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.retry_count == 2
+
+    call_kwargs = mock_scheduler_module.scheduler.add_job.call_args.kwargs
+    run_date = call_kwargs["run_date"]
+    assert run_date >= before + timedelta(seconds=590)
+    assert run_date <= before + timedelta(seconds=610)
+
+
+@pytest.mark.asyncio
+async def test_handle_error_exhausts_retries(handler_db, mock_scheduler_module, monkeypatch):
+    """ERROR after MAX_DOWNLOAD_RETRIES: permanently failed, no job scheduled."""
+    monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-err-3", is_active=True, retry_count=2)
+        a.download_status = DownloadStatus.failed
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    await chapter_event_handler.handle("ERROR", "ch-err-3", "Ch 1", "Manga", "Src")
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.retry_count == 3
+        assert result.download_status == DownloadStatus.failed
+
+    mock_scheduler_module.scheduler.add_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_download_reenqueues_chapter(handler_db, mock_suwayomi):
+    """_retry_download sets status=queued and calls enqueue_downloads."""
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-1", is_active=True)
+        a.download_status = DownloadStatus.failed
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    await chapter_event_handler._retry_download(assignment_id, "ch-retry-1")
+
+    mock_suwayomi.enqueue_downloads.assert_awaited_once_with(["ch-retry-1"])
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.download_status == DownloadStatus.queued
+
+
+@pytest.mark.asyncio
+async def test_retry_download_skips_non_failed(handler_db, mock_suwayomi):
+    """_retry_download does nothing if the assignment is not in failed state."""
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-2", is_active=True)
+        a.download_status = DownloadStatus.done
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    await chapter_event_handler._retry_download(assignment_id, "ch-retry-2")
+
+    mock_suwayomi.enqueue_downloads.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_download_reverts_on_enqueue_failure(handler_db, mock_suwayomi):
+    """If enqueue_downloads raises, download_status reverts to failed."""
+    mock_suwayomi.enqueue_downloads.side_effect = Exception("network error")
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-3", is_active=True)
+        a.download_status = DownloadStatus.failed
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    await chapter_event_handler._retry_download(assignment_id, "ch-retry-3")
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.download_status == DownloadStatus.failed

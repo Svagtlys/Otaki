@@ -74,7 +74,7 @@ Otaki/
 
 #### `backend/app/main.py`
 FastAPI app entry point. Responsibilities:
-- Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`)
+- Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`, `/api/settings`)
 - Call `database.init()` on startup (creates tables if not present)
 - Start APScheduler via `scheduler.start(db)` then start `download_listener` as a long-lived background task
 - Cancel `download_listener` task and shut down APScheduler on shutdown
@@ -232,10 +232,18 @@ Shared bcrypt + JWT helpers used by both `setup.py` and `auth.py`.
 First-time setup wizard endpoints. Steps 2–5 are guarded by `require_setup_incomplete` (409 once all three settings are set). `POST /api/setup/user` has no such guard — user creation is allowed at any time. Wizard step order:
 
 1. `POST /api/setup/user` — creates the first admin user; 409 if any user already exists
-2. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `suwayomi.ping()`, saves credentials to config
+2. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `validate_suwayomi()` from `services/settings.py`, saves credentials via `write_env()`
 3. `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for priority ordering
 4. `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
-5. `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths exist, saves to config
+5. `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths via `validate_path()` from `services/settings.py`, saves via `write_env()`
+
+Write/validate helpers are shared with `api/settings.py` — see `services/settings.py`.
+
+#### `backend/app/api/settings.py`
+`GET /api/settings` and `PATCH /api/settings`. Accessible by any authenticated user.
+
+- `GET /api/settings` — returns all current settings; `SUWAYOMI_PASSWORD` is returned as `"**masked**"` if set or `null` if unset.
+- `PATCH /api/settings` — partial update; accepts any subset of fields. If any Suwayomi connection field is included, pings Suwayomi with the resulting credentials before saving (400 on failure). Path fields are validated as existing directories before saving. Each accepted field is persisted via `write_env()` from `services/settings.py`.
 
 #### `backend/app/api/search.py`
 `GET /api/search?q=<title>`
@@ -264,6 +272,13 @@ CRUD for tracked comics.
 ---
 
 ### Services
+
+#### `backend/app/services/settings.py`
+Shared write/validate helpers used by both `api/setup.py` and `api/settings.py`.
+
+- `write_env(key, value)` — persists a setting: calls `dotenv.set_key(".env", key, str(value))` then `setattr(settings, key, value)` with the raw (uncoerced) value so in-memory types are preserved.
+- `validate_path(path)` → bool — returns `True` if the path exists and is a directory.
+- `validate_suwayomi(url, username, password)` → bool — delegates to `suwayomi.ping()`.
 
 #### `backend/app/services/suwayomi.py`
 Async GraphQL client. All Suwayomi communication goes through here — nothing else should import `gql` directly. All Suwayomi operations that fetch remote data use GraphQL mutations (Suwayomi triggers a live fetch), not queries.

@@ -16,6 +16,7 @@ Obtain a token via `POST /api/auth/login`. Requests without a valid token return
 - [Auth](#auth)
 - [Search](#search)
 - [Requests (Comics)](#requests-comics)
+- [Settings](#settings)
 - [Sources](#sources)
 - [Watermark Templates](#watermark-templates)
 - [Quality](#quality)
@@ -440,6 +441,87 @@ Set or replace the cover image for a comic. Accepts either a URL to download fro
 Remove the cover image. Future chapter CBZs will not have `cover.png` injected.
 
 **Response `204 No Content`**
+
+---
+
+## Settings
+
+### `GET /api/settings`
+
+Return the current application settings. Any authenticated user may call this endpoint.
+
+**Response `200`**
+
+```json
+{
+  "suwayomi_url": "https://suwayomi.example.com",
+  "suwayomi_username": "admin",
+  "suwayomi_password": "**masked**",
+  "suwayomi_download_path": "/data/suwayomi/downloads",
+  "library_path": "/data/library",
+  "default_poll_days": 7,
+  "chapter_naming_format": "{title}/{title} - Ch.{chapter}.cbz",
+  "relocation_strategy": "auto"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `suwayomi_url` | string \| null | Suwayomi server URL |
+| `suwayomi_username` | string \| null | Suwayomi login username |
+| `suwayomi_password` | `"**masked**"` \| null | `"**masked**"` if a password is set; `null` if unset |
+| `suwayomi_download_path` | string \| null | Suwayomi's download staging directory |
+| `library_path` | string \| null | Final library directory |
+| `default_poll_days` | int | Default poll interval in days |
+| `chapter_naming_format` | string | Template for chapter file paths |
+| `relocation_strategy` | string | `"auto"` / `"hardlink"` / `"copy"` / `"move"` |
+
+**Error Cases**
+- `401 Unauthorized` — missing or invalid token.
+
+---
+
+### `PATCH /api/settings`
+
+Update one or more settings. All fields are optional; omitted fields are left unchanged. Any authenticated user may call this endpoint.
+
+**Request Body** — all fields optional:
+
+```json
+{
+  "suwayomi_url": "https://suwayomi.example.com",
+  "suwayomi_username": "admin",
+  "suwayomi_password": "newpassword",
+  "suwayomi_download_path": "/data/suwayomi/downloads",
+  "library_path": "/data/library",
+  "default_poll_days": 14,
+  "chapter_naming_format": "{title}/{title} - Ch.{chapter}.cbz",
+  "relocation_strategy": "hardlink"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `suwayomi_url` | string \| null | New Suwayomi URL |
+| `suwayomi_username` | string \| null | New username |
+| `suwayomi_password` | string \| null | New password; `null` = leave unchanged |
+| `suwayomi_download_path` | string \| null | Must be an existing directory |
+| `library_path` | string \| null | Must be an existing directory |
+| `default_poll_days` | int \| null | New default poll interval |
+| `chapter_naming_format` | string \| null | New naming format string |
+| `relocation_strategy` | `"auto"` \| `"hardlink"` \| `"copy"` \| `"move"` \| null | New relocation strategy |
+
+**Response `200`** — same schema as `GET /api/settings`, with the updated values (password still masked).
+
+**Behaviour**
+- If any of `suwayomi_url`, `suwayomi_username`, or `suwayomi_password` is provided, Otaki pings Suwayomi with the resulting credentials before saving. If connectivity fails, the request is rejected and no settings are changed.
+- Path fields (`suwayomi_download_path`, `library_path`) are validated to be existing directories before saving.
+- Values are persisted to `.env` and applied to the in-memory `settings` singleton immediately.
+
+**Error Cases**
+- `400 Bad Request` — Suwayomi ping failed (when connection fields are provided), or a path field is not a valid directory.
+- `401 Unauthorized` — missing or invalid token.
+- `422 Unprocessable Entity` — invalid `relocation_strategy` value.
 
 ---
 

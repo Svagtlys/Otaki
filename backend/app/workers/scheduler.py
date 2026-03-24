@@ -18,20 +18,22 @@ scheduler = AsyncIOScheduler()  # module-level singleton
 
 
 async def start(db: AsyncSession) -> None:
-    """Load all tracking comics and register poll jobs, then start the scheduler."""
+    """Load all tracking comics and register poll and upgrade jobs, then start the scheduler."""
     result = await db.execute(
         select(Comic).where(Comic.status == ComicStatus.tracking)
     )
     comics = result.scalars().all()
     for comic in comics:
         _register_poll_job(comic)
+        _register_upgrade_job(comic)
     if not scheduler.running:
         scheduler.start()
 
 
 def register_comic_jobs(comic: Comic) -> None:
-    """Register poll (and future upgrade) jobs for a comic. Called after creation."""
+    """Register poll and upgrade jobs for a comic. Called after creation."""
     _register_poll_job(comic)
+    _register_upgrade_job(comic)
 
 
 def remove_comic_jobs(comic_id: int) -> None:
@@ -111,5 +113,63 @@ async def _poll_comic(comic_id: int) -> None:
 
         comic.next_poll_at = datetime.now(timezone.utc) + timedelta(days=comic.poll_override_days)
         _register_poll_job(comic)
+
+        await db.commit()
+
+
+def _register_upgrade_job(comic: Comic) -> None:
+    scheduler.add_job(
+        func=_upgrade_comic,
+        trigger="date",
+        run_date=comic.next_upgrade_check_at or datetime.now(timezone.utc),
+        id=f"upgrade_{comic.id}",
+        args=[comic.id],
+        replace_existing=True,
+    )
+
+
+async def _upgrade_comic(comic_id: int) -> None:
+    async with AsyncSessionLocal() as db:
+        comic = await db.get(Comic, comic_id)
+        if comic is None:
+            logger.warning("_upgrade_comic: comic_id=%d not found — skipping", comic_id)
+            return
+        if comic.status == ComicStatus.complete:
+            logger.info("_upgrade_comic: comic_id=%d status=complete — skipping", comic_id)
+            return
+
+        candidates = await source_selector.find_upgrade_candidates(comic, db)
+
+        enqueue_by_manga: dict[str, list[str]] = {}
+        for assignment, candidate_source, manga_id, ch_data in candidates:
+            upgrade = ChapterAssignment(
+                comic_id=comic_id,
+                chapter_number=assignment.chapter_number,
+                volume_number=ch_data.get("volume_number"),
+                source_id=candidate_source.id,
+                suwayomi_manga_id=manga_id,
+                suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+                download_status=DownloadStatus.queued,
+                is_active=False,
+                chapter_published_at=ch_data["chapter_published_at"],
+            )
+            db.add(upgrade)
+            enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+
+        for manga_id, chapter_ids in enqueue_by_manga.items():
+            try:
+                await suwayomi.enqueue_downloads(chapter_ids)
+            except Exception as exc:
+                logger.warning(
+                    "_upgrade_comic: enqueue_downloads failed for manga_id=%s: %r",
+                    manga_id,
+                    exc,
+                )
+
+        now = datetime.now(timezone.utc)
+        comic.last_upgrade_check_at = now
+        interval = comic.upgrade_override_days if comic.upgrade_override_days is not None else comic.poll_override_days
+        comic.next_upgrade_check_at = now + timedelta(days=interval)
+        _register_upgrade_job(comic)
 
         await db.commit()

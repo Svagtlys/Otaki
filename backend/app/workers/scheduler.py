@@ -77,66 +77,37 @@ async def _poll_comic(comic_id: int) -> None:
         existing_numbers = {row[0] for row in existing_result.all()}
 
         new_entries = {
-            ch_num: (source, manga_id)
-            for ch_num, (source, manga_id) in chapter_map.items()
+            ch_num: (source, manga_id, ch_data)
+            for ch_num, (source, manga_id, ch_data) in chapter_map.items()
             if ch_num not in existing_numbers
         }
 
         if new_entries:
-            # Group new chapters by (source_id, suwayomi_manga_id) to batch
-            # fetch_chapters calls.
-            groups: dict[tuple[int, str], list[float]] = {}
-            for ch_num, (source, manga_id) in new_entries.items():
-                key = (source.id, manga_id)
-                groups.setdefault(key, []).append(ch_num)
+            enqueue_by_manga: dict[str, list[str]] = {}
+            for ch_num, (source, manga_id, ch_data) in new_entries.items():
+                assignment = ChapterAssignment(
+                    comic_id=comic_id,
+                    chapter_number=ch_num,
+                    volume_number=ch_data.get("volume_number"),
+                    source_id=source.id,
+                    suwayomi_manga_id=manga_id,
+                    suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+                    download_status=DownloadStatus.queued,
+                    is_active=True,
+                    chapter_published_at=ch_data["chapter_published_at"],
+                )
+                db.add(assignment)
+                enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
 
-            for (source_id, manga_id), ch_nums in groups.items():
+            for manga_id, chapter_ids in enqueue_by_manga.items():
                 try:
-                    fetched = await suwayomi.fetch_chapters(manga_id)
+                    await suwayomi.enqueue_downloads(chapter_ids)
                 except Exception as exc:
                     logger.warning(
-                        "_poll_comic: fetch_chapters failed for manga_id=%s: %r",
+                        "_poll_comic: enqueue_downloads failed for manga_id=%s: %r",
                         manga_id,
                         exc,
                     )
-                    continue
-
-                fetched_by_num = {ch["chapter_number"]: ch for ch in fetched}
-                chapter_ids_to_enqueue: list[str] = []
-
-                for ch_num in ch_nums:
-                    ch_data = fetched_by_num.get(ch_num)
-                    if ch_data is None:
-                        logger.warning(
-                            "_poll_comic: chapter %.1f not found in fetch result for manga_id=%s",
-                            ch_num,
-                            manga_id,
-                        )
-                        continue
-
-                    assignment = ChapterAssignment(
-                        comic_id=comic_id,
-                        chapter_number=ch_num,
-                        volume_number=ch_data.get("volume_number"),
-                        source_id=source_id,
-                        suwayomi_manga_id=manga_id,
-                        suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
-                        download_status=DownloadStatus.queued,
-                        is_active=True,
-                        chapter_published_at=ch_data["chapter_published_at"],
-                    )
-                    db.add(assignment)
-                    chapter_ids_to_enqueue.append(ch_data["suwayomi_chapter_id"])
-
-                if chapter_ids_to_enqueue:
-                    try:
-                        await suwayomi.enqueue_downloads(chapter_ids_to_enqueue)
-                    except Exception as exc:
-                        logger.warning(
-                            "_poll_comic: enqueue_downloads failed for manga_id=%s: %r",
-                            manga_id,
-                            exc,
-                        )
 
         comic.next_poll_at = datetime.now(timezone.utc) + timedelta(days=comic.poll_override_days)
         _register_poll_job(comic)

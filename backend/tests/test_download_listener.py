@@ -37,7 +37,7 @@ async def _raise_then_yield(exc, *items):
 @pytest.mark.asyncio
 async def test_dispatches_on_finished_event():
     """A single FINISHED tuple from the subscription is dispatched to handle()."""
-    item = ("42", "Chapter 1", "Test Manga", "TestSource")
+    item = ("FINISHED", "42", "Chapter 1", "Test Manga", "TestSource")
 
     with (
         patch(
@@ -119,7 +119,7 @@ async def test_ignores_non_finished_states():
 @pytest.mark.asyncio
 async def test_retries_with_backoff():
     """Subscription failures trigger exponential backoff sleep before retry."""
-    item = ("7", "Chapter 7", "Manga X", "Src")
+    item = ("FINISHED", "7", "Chapter 7", "Manga X", "Src")
 
     call_count = 0
 
@@ -196,7 +196,7 @@ async def test_switches_to_polling_after_max_retries():
 @pytest.mark.asyncio
 async def test_resumes_subscription_after_poll_success():
     """After a successful poll, the listener switches back to subscription mode."""
-    poll_item = ("99", "Chapter 99", "Some Manga", "SomeSrc")
+    poll_item = ("FINISHED", "99", "Chapter 99", "Some Manga", "SomeSrc")
     max_attempts = 2
 
     fail_count = 0
@@ -263,6 +263,42 @@ async def test_resumes_subscription_after_poll_success():
     assert sub_call_count_after_poll >= 1
 
 
+@pytest.mark.asyncio
+async def test_dispatches_error_event():
+    """A single ERROR tuple from the subscription is dispatched to handle()."""
+    item = ("ERROR", "55", "Chapter 5", "Test Manga", "TestSource")
+
+    call_count = 0
+
+    async def _subscribe_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield item
+        else:
+            raise asyncio.CancelledError()
+
+    with (
+        patch(
+            "app.workers.download_listener.suwayomi.subscribe_download_changed",
+            side_effect=_subscribe_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+        patch("app.workers.download_listener.settings") as mock_settings,
+    ):
+        mock_settings.MAX_RECONNECT_ATTEMPTS = 5
+        mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
+
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
+
+    await asyncio.sleep(0)
+    mock_handle.assert_awaited_once_with(*item)
+
+
 # ---------------------------------------------------------------------------
 # Integration tests
 # ---------------------------------------------------------------------------
@@ -301,7 +337,9 @@ async def test_enqueue_and_receive_via_subscription(suwayomi_settings, test_mang
     found = asyncio.Event()
 
     async def _listen():
-        async for (cid, *_) in real_suwayomi.subscribe_download_changed():
+        async for (event_type, cid, *_) in real_suwayomi.subscribe_download_changed():
+            if event_type != "FINISHED":
+                continue
             received_ids.append(cid)
             if cid == chapter_id:
                 found.set()

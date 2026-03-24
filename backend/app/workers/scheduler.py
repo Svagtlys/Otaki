@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +30,17 @@ async def start(db: AsyncSession) -> None:
 
 
 def register_comic_jobs(comic: Comic) -> None:
-    """Public API for #13 to call after creating a new comic."""
+    """Register poll (and future upgrade) jobs for a comic. Called after creation."""
     _register_poll_job(comic)
+
+
+def remove_comic_jobs(comic_id: int) -> None:
+    """Remove all scheduled jobs for a comic. Called when a comic is deleted."""
+    for job_id in (f"poll_{comic_id}", f"upgrade_{comic_id}"):
+        try:
+            scheduler.remove_job(job_id)
+        except JobLookupError:
+            pass
 
 
 def _register_poll_job(comic: Comic) -> None:

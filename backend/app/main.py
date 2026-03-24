@@ -8,15 +8,11 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import auth, search, setup
+from .api import auth, requests, search, setup
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
-<<<<<<< feat/download-listener
-from .workers import download_listener
-=======
-from .workers import scheduler
->>>>>>> develop
+from .workers import download_listener, scheduler
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 
@@ -24,25 +20,22 @@ _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init()
-<<<<<<< feat/download-listener
+    async with AsyncSessionLocal() as db:
+        await scheduler.start(db)
     task = asyncio.create_task(download_listener.run())
     yield
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
-=======
-    async with AsyncSessionLocal() as db:
-        await scheduler.start(db)
-    yield
     if scheduler.scheduler.running:
         scheduler.scheduler.shutdown(wait=False)
->>>>>>> develop
 
 
 app = FastAPI(title="Otaki", lifespan=lifespan)
 app.include_router(setup.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
+app.include_router(requests.router, prefix="/api")
 
 
 # Middleware runs in reverse registration order (last registered = outermost = runs first).

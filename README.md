@@ -35,15 +35,20 @@ Full details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Setup
 
-> **Prerequisites:** Docker + Docker Compose, a running Suwayomi-Server instance.
+> **Prerequisites:** Docker + Docker Compose.
 
 ```bash
+export UID GID          # ensures ./data, ./library, ./suwayomi are owned by your user
 cp .env.example .env
-# Edit .env — set SUWAYOMI_URL, SUWAYOMI_DOWNLOAD_PATH, LIBRARY_PATH
-docker compose up
+# Minimum required in .env:
+#   SECRET_KEY=<random string>
+#   SUWAYOMI_URL=http://suwayomi:4567   # if using the bundled suwayomi service
+docker compose -f docker/docker-compose.yml up
 ```
 
-Open `http://localhost:5173` — the setup wizard will guide you through connecting Suwayomi and configuring source priority on first run.
+Open `http://localhost` — the setup wizard will guide you through connecting Suwayomi and configuring source priority on first run.
+
+Host directories (`./data/`, `./library/`, `./suwayomi/`) are created automatically on first run. `LIBRARY_PATH` and `SUWAYOMI_DOWNLOAD_PATH` are pre-configured by docker-compose and do not need to be set in `.env`.
 
 ---
 

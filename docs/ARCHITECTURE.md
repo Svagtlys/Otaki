@@ -89,11 +89,13 @@ FastAPI app entry point. Responsibilities:
 
 Two middleware functions run on every request (last registered runs first):
 
-1. **`require_setup`** (runs first) — blocks non-exempt routes with 503 until all three settings are configured: `SUWAYOMI_URL`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`. Exempt prefix: `/api/setup`, `/api/auth`, `/docs`, `/openapi.json`, `/redoc`.
+1. **`require_setup`** (runs first) — blocks non-exempt routes with 503 until `SETUP_COMPLETE=True` is written to the env file. Exempt prefix: `/api/setup`, `/api/auth`, `/docs`, `/openapi.json`, `/redoc`.
 2. **`require_auth_middleware`** (runs second) — blocks non-exempt routes with 401 if no valid JWT is present in the `Authorization: Bearer` header or `otaki_session` cookie. Validates signature only (no DB lookup). Same exempt prefix as above.
 
 #### `backend/app/config.py`
-Reads `.env` using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_POLL_DAYS`, `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `RELOCATION_STRATEGY`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`, `MAX_DOWNLOAD_RETRIES` (default 2). All Suwayomi/path fields are optional at startup — if `SUWAYOMI_URL` is unset, the setup middleware blocks non-exempt routes with 503.
+Reads the env file using Pydantic `BaseSettings`. Exposes a singleton `settings` object used everywhere else. Fields: `SETUP_COMPLETE` (bool, default `False`), `DATABASE_URL`, `SECRET_KEY`, `DEFAULT_POLL_DAYS`, `SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `CHAPTER_NAMING_FORMAT`, `RELOCATION_STRATEGY`, `DOWNLOAD_POLL_FALLBACK_SECONDS`, `MAX_RECONNECT_ATTEMPTS`, `MAX_DOWNLOAD_RETRIES` (default 2).
+
+The path of the env file is resolved at module load time from the `ENV_FILE` environment variable (defaults to `.env`). In Docker, `ENV_FILE` is set to `/app/data/.env` so the env file lives inside the writable `data/` volume rather than the read-only `/app` directory.
 
 #### `backend/app/database.py`
 SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
@@ -238,13 +240,18 @@ Shared bcrypt + JWT helpers used by both `setup.py` and `auth.py`.
 - `decode_token(token)` — decodes and verifies; raises `jwt.InvalidTokenError` on failure
 
 #### `backend/app/api/setup.py`
-First-time setup wizard endpoints. Steps 2–5 are guarded by `require_setup_incomplete` (409 once all three settings are set). `POST /api/setup/user` has no such guard — user creation is allowed at any time. Wizard step order:
+First-time setup wizard endpoints. All endpoints except `GET /setup/complete` and `POST /setup/user` are guarded by `require_setup_incomplete`, which raises 409 once `SETUP_COMPLETE=True` is set. `POST /api/setup/user` has no such guard — user creation is idempotent (returns 409 if any user already exists, which the wizard uses as a signal to auto-login). Wizard step order:
 
-1. `POST /api/setup/user` — creates the first admin user; 409 if any user already exists
-2. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `validate_suwayomi()` from `services/settings.py`, saves credentials via `write_env()`
-3. `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for priority ordering
-4. `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
-5. `POST /api/setup/paths` — accepts `{download_path, library_path}`, validates both paths via `validate_path()` from `services/settings.py`, saves via `write_env()`
+1. `GET /api/setup/complete` — public, no auth. Returns `{complete: bool}`. Used by `App.tsx` on mount to decide whether to show the wizard or the normal app.
+2. `GET /api/setup/status` — requires `require_auth`. Returns full current config state (`complete`, `admin_created`, `suwayomi_url`, `suwayomi_username`, `download_path`, `library_path`) so the wizard can pre-fill fields on re-entry.
+3. `POST /api/setup/user` — creates the first admin user; 409 "Admin user already exists" if any user exists (wizard auto-logins on this response)
+4. `POST /api/setup/connect` — accepts `{url, username, password}`, calls `validate_suwayomi()` from `services/settings.py`, saves credentials via `write_env()`
+5. `GET /api/setup/sources` — calls `suwayomi.list_sources()` and returns installed sources for priority ordering
+6. `POST /api/setup/sources` — accepts an ordered list of source IDs, creates `Source` rows with assigned priorities
+7. `POST /api/setup/paths` — accepts `{download_path, library_path, create: bool}`. Two-phase flow:
+   - If `create=false` (default) and any path doesn't exist: returns 400 with `{code: "directories_missing", missing: [{field, path}]}`. The wizard shows a confirmation screen.
+   - If `create=true`: calls `Path.mkdir(parents=True, exist_ok=True)` for each path; 400 on `PermissionError`/`OSError`.
+   - On success: saves paths and writes `SETUP_COMPLETE=True` via `write_env()`.
 
 Write/validate helpers are shared with `api/settings.py` — see `services/settings.py`.
 
@@ -285,8 +292,7 @@ CRUD for tracked comics.
 #### `backend/app/services/settings.py`
 Shared write/validate helpers used by both `api/setup.py` and `api/settings.py`.
 
-- `write_env(key, value)` — persists a setting: calls `dotenv.set_key(".env", key, str(value))` then `setattr(settings, key, value)` with the raw (uncoerced) value so in-memory types are preserved.
-- `validate_path(path)` → bool — returns `True` if the path exists and is a directory.
+- `write_env(key, value)` — persists a setting: reads the env file path from the `ENV_FILE` environment variable (defaults to `.env`), calls `dotenv.set_key(env_file, key, str(value))`, then `setattr(settings, key, value)` with the raw (uncoerced) value so in-memory types are preserved. Using `ENV_FILE` ensures the temp files that `python-dotenv` creates during writes land in a writable directory (important in Docker where `/app` is not writable but `/app/data` is).
 - `validate_suwayomi(url, username, password)` → bool — delegates to `suwayomi.ping()`.
 
 #### `backend/app/services/suwayomi.py`
@@ -440,7 +446,10 @@ _retry_download(assignment_id, suwayomi_chapter_id)
 App entry point. Mounts `QueryClientProvider` (staleTime 30s, retry 1) wrapping `AuthProvider` wrapping `App`.
 
 #### `frontend/src/App.tsx`
-`BrowserRouter` with all routes. Public routes: `/setup`, `/login`. All others are wrapped in `RequireAuth`, which redirects to `/login` when `isAuthenticated` is false.
+On mount, fetches `GET /api/setup/complete` and stores the result in state. Returns `null` while this check is in flight to avoid a flash of the wrong route tree. Once resolved, renders one of two completely separate `BrowserRouter`+`Routes` trees:
+
+- **Setup incomplete** — every path routes to `/setup` (via a catch-all `<Navigate to="/setup" replace />`). Renders `<Setup onComplete={...} />`, which calls `setSetupComplete(true)` when the wizard finishes, switching to the complete tree in-memory without a page reload.
+- **Setup complete** — normal app routing. `/setup` redirects to `/login`. All non-public routes are wrapped in `RequireAuth`, which redirects to `/login` when `isAuthenticated` is false.
 
 #### `frontend/src/context/AuthContext.tsx`
 Stores the JWT in `localStorage` under key `otaki_token`. Exposes `{ token, isAuthenticated, login(token), logout() }` via `useAuth()`. Throws if `useAuth()` is called outside `AuthProvider`.
@@ -451,6 +460,20 @@ Stores the JWT in `localStorage` under key `otaki_token`. Exposes `{ token, isAu
 ---
 
 ## Frontend Pages
+
+#### `frontend/src/pages/Setup.tsx`
+Four-step first-run wizard. Accepts an `onComplete: () => void` prop from `App.tsx` which switches the route tree to the normal app when called.
+
+State: `currentStep: 1|2|3|4`, `loggedInUser` (set after admin login in step 1), `status` (from `GET /api/setup/status`).
+
+| Step | Heading | What it does |
+|---|---|---|
+| 1 | Create admin account | `POST /api/setup/user`; on 200 or 409 "Admin user already exists" → auto-logins via `POST /api/auth/login`, fetches `/api/setup/status`, advances to step 2 |
+| 2 | Connect to Suwayomi | `POST /api/setup/connect`; fields pre-filled from status but always editable; always shows Connect → success message → Continue/Confirm; password shows placeholder "(leave blank to keep current)" in confirm mode |
+| 3 | Order sources | `GET /api/setup/sources` on mount; two-panel add/reorder UI — available sources on left with "+" to add, selected sources on right with ↑↓× controls; `POST /api/setup/sources` with current order |
+| 4 | Set paths | `POST /api/setup/paths`; on `directories_missing` 400 shows a confirmation screen listing missing paths with "Yes, create" / "Go back"; on 200 calls `onComplete()` then navigates to `/login` |
+
+Source icons use an `onError` handler to hide `<img>` elements with broken URLs (Suwayomi icon paths are relative to Suwayomi's own origin and cannot be loaded by the frontend directly).
 
 #### `frontend/src/pages/Search.tsx`
 Search bar → `GET /api/search`. Results as cards (cover, title, synopsis). "Request" button → `POST /api/requests`. Optimistic UI with loading/success/error states.
@@ -465,6 +488,32 @@ Chapter-level detail. Table: chapter number, source, download status, severity b
 Two panels:
 - **Source priority** — drag-to-reorder list of sources. Each row: source name, priority number, enabled toggle, aggregate quality stats (% clean chapters from this source).
 - **Watermark templates** — list with name, source, threshold. "Add template": image upload + canvas crop selector to define the watermark region.
+
+---
+
+## End-to-End Tests
+
+Playwright tests live in `frontend/e2e/`. Config is at `frontend/playwright.config.ts`.
+
+- baseURL: `http://localhost:5173` (Vite dev server, auto-started by the `webServer` block)
+- Three browser projects: Chromium, Firefox, WebKit
+- `workers: 1` — all setup tests run sequentially to rely on shared DB state built up across tests
+- `video: 'retain-on-failure'`, `screenshot: 'only-on-failure'`
+- Reports saved to `playwright-report/`; test artefacts to `test-results/`
+
+**`frontend/e2e/reset-backend.ts`** — called in `beforeAll` via `setup.spec.ts`. Kills any running backend process, wipes the SQLite database, clears setup keys (`SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `SETUP_COMPLETE`) from the env file, then spawns a fresh backend.
+
+**`frontend/e2e/setup.spec.ts`** — DB state flows sequentially through tests:
+
+| Test | DB state after |
+|---|---|
+| step 2 bad URL | Admin created, Suwayomi not connected |
+| step 1 skip | (unchanged — admin exists, 409 auto-login) |
+| step 4 non-existent paths *(requires `SUWAYOMI_URL`)* | Suwayomi connected, sources saved; paths NOT written (user clicked Go back) |
+| happy path *(requires `SUWAYOMI_URL`)* | All 4 steps complete; `SETUP_COMPLETE=True` |
+| setup already complete *(requires `SUWAYOMI_URL`)* | `/setup` redirects to `/login` |
+
+Run with: `cd frontend && npm run test:e2e`. Requires a real Suwayomi instance — set `SUWAYOMI_URL` (and optionally `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`) in `frontend/.env.test` for the Suwayomi-dependent tests.
 
 ---
 

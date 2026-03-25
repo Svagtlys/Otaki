@@ -56,12 +56,20 @@ Otaki/
 │   ├── watermarks/
 │   └── requirements.txt
 ├── frontend/
-│   └── src/
-│       ├── pages/
-│       └── components/
+│   ├── src/
+│   │   ├── api/           (apiFetch client)
+│   │   ├── context/       (AuthContext)
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── App.tsx        (router + RequireAuth guard)
+│   │   └── main.tsx       (QueryClient + AuthProvider mount)
+│   ├── Dockerfile
+│   └── package.json
+├── docker/
+│   ├── docker-compose.yml
+│   └── nginx.conf
 ├── docs/
 │   └── ARCHITECTURE.md        <- you are here
-├── docker-compose.yml
 ├── .env.example
 └── README.md
 ```
@@ -423,6 +431,22 @@ _retry_download(assignment_id, suwayomi_chapter_id)
   Scheduled by _handle_error. Sets download_status=queued, calls
   suwayomi.enqueue_downloads(). If enqueue raises, reverts status to failed.
 ```
+
+---
+
+## Frontend Shell
+
+#### `frontend/src/main.tsx`
+App entry point. Mounts `QueryClientProvider` (staleTime 30s, retry 1) wrapping `AuthProvider` wrapping `App`.
+
+#### `frontend/src/App.tsx`
+`BrowserRouter` with all routes. Public routes: `/setup`, `/login`. All others are wrapped in `RequireAuth`, which redirects to `/login` when `isAuthenticated` is false.
+
+#### `frontend/src/context/AuthContext.tsx`
+Stores the JWT in `localStorage` under key `otaki_token`. Exposes `{ token, isAuthenticated, login(token), logout() }` via `useAuth()`. Throws if `useAuth()` is called outside `AuthProvider`.
+
+#### `frontend/src/api/client.ts`
+`apiFetch<T>(path, options?)` — reads token from localStorage, injects `Authorization: Bearer` header, parses JSON response. Returns `undefined as T` for 204. Throws `ApiError` (with `.status`) on non-2xx.
 
 ---
 

@@ -254,6 +254,28 @@ cd backend
 pytest tests/ -v
 ```
 
+### Running with Docker
+
+All services can be run locally with Docker Compose. From the project root:
+
+```bash
+export UID GID          # bind-mounted files (./data, ./library) are owned by your user
+mkdir -p data library   # created automatically by Docker on first run, but pre-creating avoids root ownership
+cp .env.example .env
+# Minimum required in .env:
+#   SECRET_KEY=<random string>
+#   SUWAYOMI_URL=http://suwayomi:4567   # if using the bundled suwayomi service
+docker compose -f docker/docker-compose.yml up
+```
+
+To run only the backend and frontend (skipping suwayomi), comment out the `suwayomi` service block in `docker/docker-compose.yml`.
+
+Rebuild after code changes:
+
+```bash
+docker compose -f docker/docker-compose.yml build
+```
+
 ### Integration tests
 
 Integration tests that require a live Suwayomi instance are **skipped automatically** when credentials are not configured. To run them:

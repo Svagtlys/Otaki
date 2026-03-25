@@ -15,3 +15,12 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker runtime data
+data/
+library/
+suwayomi/

@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
+import Setup from './pages/Setup'
 
 function RequireAuth() {
   const { isAuthenticated } = useAuth()
@@ -12,10 +14,35 @@ function Placeholder({ name }: { name: string }) {
 }
 
 export default function App() {
+  const [setupComplete, setSetupComplete] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetch('/api/setup/complete')
+      .then(r => r.json())
+      .then((data: { complete: boolean }) => setSetupComplete(data.complete))
+      .catch(() => setSetupComplete(false))
+  }, [])
+
+  if (setupComplete === null) return null
+
+  if (!setupComplete) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route
+            path="/setup"
+            element={<Setup onComplete={() => setSetupComplete(true)} />}
+          />
+          <Route path="*" element={<Navigate to="/setup" replace />} />
+        </Routes>
+      </BrowserRouter>
+    )
+  }
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/setup" element={<Placeholder name="Setup" />} />
+        <Route path="/setup" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Placeholder name="Login" />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<Placeholder name="Home" />} />

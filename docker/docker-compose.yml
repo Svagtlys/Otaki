@@ -1,11 +1,11 @@
 services:
-  suwayomi:
-    image: ghcr.io/suwayomi/suwayomi-server:latest
-    ports:
-      - "4567:4567"
-    volumes:
-      - ../suwayomi:/home/suwayomi/.local/share/Tachidesk
-    restart: unless-stopped
+  # suwayomi:
+  #   image: ghcr.io/suwayomi/suwayomi-server:latest
+  #   ports:
+  #     - "4567:4567"
+  #   volumes:
+  #     - ../suwayomi:/home/suwayomi/.local/share/Tachidesk
+  #   restart: unless-stopped
 
   backend:
     build: ../backend
@@ -21,8 +21,6 @@ services:
       - ../library:/app/library
     ports:
       - "8000:8000"
-    depends_on:
-      - suwayomi
     restart: unless-stopped
 
   frontend:

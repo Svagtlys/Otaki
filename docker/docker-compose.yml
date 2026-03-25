@@ -11,13 +11,13 @@ services:
     build: ../backend
     user: "${UID:-1000}:${GID:-1000}"
     environment:
+      ENV_FILE: "/app/data/.env"
       DATABASE_URL: "sqlite+aiosqlite:////app/data/otaki.db"
       LIBRARY_PATH: "/app/library"
       SUWAYOMI_DOWNLOAD_PATH: "/app/suwayomi_data/downloads"
     volumes:
-      - ../.env:/app/.env
       - ../data:/app/data
-      - ../suwayomi:/app/suwayomi_data:ro
+      - ../suwayomi:/app/suwayomi_data
       - ../library:/app/library
     ports:
       - "8000:8000"

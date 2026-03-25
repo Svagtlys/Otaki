@@ -10,17 +10,14 @@ from ..database import get_db
 from ..models.source import Source
 from ..models.user import User
 from ..services import auth, suwayomi
-from ..services.settings import validate_path, validate_suwayomi, write_env
+from ..services.settings import validate_suwayomi, write_env
+from .auth import require_auth
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 
 
 def require_setup_incomplete() -> None:
-    if (
-        settings.SUWAYOMI_URL is not None
-        and settings.SUWAYOMI_DOWNLOAD_PATH is not None
-        and settings.LIBRARY_PATH is not None
-    ):
+    if settings.SETUP_COMPLETE:
         raise HTTPException(status_code=409, detail="Setup already complete")
 
 
@@ -47,6 +44,7 @@ class SaveSourcesRequest(BaseModel):
 class PathsRequest(BaseModel):
     download_path: str
     library_path: str
+    create: bool = False
 
 
 class CreateUserRequest(BaseModel):
@@ -55,6 +53,40 @@ class CreateUserRequest(BaseModel):
 
 
 # --- Endpoints ---
+
+
+class SetupStatusResponse(BaseModel):
+    complete: bool
+    admin_created: bool
+    suwayomi_url: str | None
+    suwayomi_username: str | None
+    download_path: str | None
+    library_path: str | None
+
+
+class SetupCompleteResponse(BaseModel):
+    complete: bool
+
+
+@router.get("/complete")
+async def setup_complete() -> SetupCompleteResponse:
+    return SetupCompleteResponse(complete=settings.SETUP_COMPLETE)
+
+
+@router.get("/status")
+async def setup_status(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_auth),
+) -> SetupStatusResponse:
+    count = await db.scalar(select(func.count()).select_from(User))
+    return SetupStatusResponse(
+        complete=settings.SETUP_COMPLETE,
+        admin_created=(count or 0) > 0,
+        suwayomi_url=settings.SUWAYOMI_URL,
+        suwayomi_username=settings.SUWAYOMI_USERNAME,
+        download_path=settings.SUWAYOMI_DOWNLOAD_PATH,
+        library_path=settings.LIBRARY_PATH,
+    )
 
 
 @router.post("/user")
@@ -125,14 +157,31 @@ async def save_paths(
     body: PathsRequest,
     _: None = Depends(require_setup_incomplete),
 ) -> None:
-    for field, value in (
-        ("download_path", body.download_path),
-        ("library_path", body.library_path),
-    ):
-        if not validate_path(value):
+    from pathlib import Path as FsPath
+
+    fields = (("download_path", body.download_path), ("library_path", body.library_path))
+
+    # First pass: check which directories are missing.
+    missing = [
+        {"field": field, "path": value}
+        for field, value in fields
+        if not FsPath(value).is_dir()
+    ]
+    if missing and not body.create:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "directories_missing", "missing": missing},
+        )
+
+    # Second pass: create any that still don't exist.
+    for field, value in fields:
+        try:
+            FsPath(value).mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError) as exc:
             raise HTTPException(
-                status_code=400, detail=f"Invalid {field}: {value!r} is not a directory"
+                status_code=400, detail=f"Cannot create {field} {value!r}: {exc}"
             )
 
     write_env("SUWAYOMI_DOWNLOAD_PATH", body.download_path)
     write_env("LIBRARY_PATH", body.library_path)
+    write_env("SETUP_COMPLETE", True)

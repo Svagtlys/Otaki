@@ -6,9 +6,12 @@ from . import suwayomi
 
 def write_env(key: str, value) -> None:
     """Write a key/value to .env and update the in-memory settings object."""
+    import os
+
     from dotenv import set_key
 
-    set_key(".env", key, str(value))
+    env_file = os.environ.get("ENV_FILE", ".env")
+    set_key(env_file, key, str(value))
     setattr(settings, key, value)
 
 

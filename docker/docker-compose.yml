@@ -1,0 +1,36 @@
+services:
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server:latest
+    ports:
+      - "4567:4567"
+    volumes:
+      - ../suwayomi:/home/suwayomi/.local/share/Tachidesk
+    restart: unless-stopped
+
+  backend:
+    build: ../backend
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      DATABASE_URL: "sqlite+aiosqlite:////app/data/otaki.db"
+      LIBRARY_PATH: "/app/library"
+      SUWAYOMI_DOWNLOAD_PATH: "/app/suwayomi_data/downloads"
+    volumes:
+      - ../.env:/app/.env
+      - ../data:/app/data
+      - ../suwayomi:/app/suwayomi_data:ro
+      - ../library:/app/library
+    ports:
+      - "8000:8000"
+    depends_on:
+      - suwayomi
+    restart: unless-stopped
+
+  frontend:
+    build: ../frontend
+    ports:
+      - "80:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    restart: unless-stopped

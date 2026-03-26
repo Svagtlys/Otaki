@@ -28,11 +28,53 @@ Obtain a token via `POST /api/auth/login`. Requests without a valid token return
 
 ## Setup
 
-Setup endpoints are only callable while setup is incomplete. All return `409` once setup is done. Exempt from the auth middleware — no token required.
+The setup wizard walks through first-time configuration. Steps 2–5 are guarded: once `SETUP_COMPLETE=True` is written to `.env` (at the end of step 5), they return `409`. The status and completion-check endpoints have no guard and are always callable.
+
+Exempt from the auth middleware — no token required, except `GET /api/setup/status` which requires auth.
+
+### `GET /api/setup/complete`
+
+Lightweight public check used by the frontend on load to decide whether to show the setup wizard or the normal app.
+
+**Response `200`**
+
+```json
+{ "complete": false }
+```
+
+---
+
+### `GET /api/setup/status`
+
+Full setup state, used by the wizard to prefill fields on re-entry. Requires auth — call after step 1 completes and a token is available.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `Authorization` | yes | `Bearer <token>` |
+
+**Response `200`**
+
+```json
+{
+  "complete": false,
+  "admin_created": true,
+  "suwayomi_url": "http://suwayomi:4567",
+  "suwayomi_username": "admin",
+  "download_path": null,
+  "library_path": null
+}
+```
+
+**Error Cases**
+- `401 Unauthorized` — missing or invalid token.
+
+---
 
 ### `POST /api/setup/user`
 
-Create the first admin user. Must be called before any other setup step.
+Create the first admin user (step 1). Not guarded by `SETUP_COMPLETE`.
 
 **Request Body**
 
@@ -49,7 +91,7 @@ Create the first admin user. Must be called before any other setup step.
 
 ### `POST /api/setup/connect`
 
-Connect to Suwayomi. Validates connectivity and saves credentials.
+Connect to Suwayomi (step 2). Validates connectivity and writes credentials to `.env`.
 
 **Request Body**
 
@@ -61,13 +103,13 @@ Connect to Suwayomi. Validates connectivity and saves credentials.
 
 **Error Cases**
 - `400 Bad Request` — could not reach Suwayomi with the supplied credentials.
-- `409 Conflict` — setup already complete.
+- `409 Conflict` — setup already complete (`SETUP_COMPLETE=True`).
 
 ---
 
 ### `GET /api/setup/sources`
 
-List sources installed in Suwayomi for priority ordering.
+List sources installed in Suwayomi for priority ordering (step 3).
 
 **Response `200`**
 
@@ -77,11 +119,14 @@ List sources installed in Suwayomi for priority ordering.
 ]
 ```
 
+**Error Cases**
+- `409 Conflict` — setup already complete.
+
 ---
 
 ### `POST /api/setup/sources`
 
-Save source priority order. First item = highest priority.
+Save source priority order (step 3). First item = highest priority.
 
 **Request Body**
 
@@ -95,22 +140,48 @@ Save source priority order. First item = highest priority.
 
 **Response `200`** — no body. Idempotent — replaces all existing `Source` rows.
 
+**Error Cases**
+- `409 Conflict` — setup already complete.
+
 ---
 
 ### `POST /api/setup/paths`
 
-Set filesystem paths. Both must be existing directories.
+Set filesystem paths (step 4). On success, writes `SETUP_COMPLETE=True` to `.env`, locking all guarded setup endpoints.
 
 **Request Body**
 
 ```json
-{ "download_path": "/data/suwayomi/downloads", "library_path": "/data/library" }
+{
+  "download_path": "/data/suwayomi/downloads",
+  "library_path": "/data/library",
+  "create": false
+}
 ```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `download_path` | string | — | Suwayomi's download staging directory |
+| `library_path` | string | — | Final library directory |
+| `create` | bool | `false` | If `true`, create missing directories with `mkdir -p` |
 
 **Response `200`** — no body.
 
 **Error Cases**
-- `400 Bad Request` — either path does not exist or is not a directory.
+- `400 Bad Request` (directories missing) — one or more paths do not exist and `create=false`. Response body identifies which paths are missing:
+  ```json
+  {
+    "detail": {
+      "code": "directories_missing",
+      "missing": [
+        { "field": "download_path", "path": "/data/suwayomi/downloads" }
+      ]
+    }
+  }
+  ```
+  The frontend shows a confirmation screen; resubmit with `create=true` to create them.
+- `400 Bad Request` (permission denied) — `create=true` but the directory could not be created.
+- `409 Conflict` — setup already complete.
 
 ---
 

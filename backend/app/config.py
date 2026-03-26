@@ -1,9 +1,11 @@
+import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings
 
 _here = Path(__file__).parent.parent  # backend/
+_env_file = os.environ.get("ENV_FILE", ".env")
 
 
 class Settings(BaseSettings):
@@ -12,6 +14,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev-secret-key-change-in-production"
 
     DEFAULT_POLL_DAYS: int = 7
+
+    SETUP_COMPLETE: bool = False
 
     SUWAYOMI_URL: str | None = None
     SUWAYOMI_USERNAME: str | None = None
@@ -25,7 +29,7 @@ class Settings(BaseSettings):
     MAX_RECONNECT_ATTEMPTS: int = 5
     MAX_DOWNLOAD_RETRIES: int = 2
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": _env_file, "env_file_encoding": "utf-8"}
 
 
 settings = Settings()

@@ -482,7 +482,7 @@ Username/password login form. If the user is already authenticated (`isAuthentic
 Search bar → `GET /api/search`. Results as cards (cover, title, synopsis). "Request" button → `POST /api/requests`. Optimistic UI with loading/success/error states.
 
 #### `frontend/src/pages/Library.tsx`
-All tracked comics. Columns: cover, title, source, worst severity badge, download progress, next update time. Row click → Comic detail.
+All tracked comics. Data from `GET /api/requests` via TanStack Query (`queryKey: ['comics']`). Columns: cover thumbnail (`/api/requests/{id}/cover`, hidden on error), title, download progress (`done / total chapters`), next poll time (relative — "in X days" / "overdue" / "—"). Row click → `/comics/{id}`. Shows loading text, inline error (via `extractDetail`), or empty state. Severity badge column deferred until quality API is implemented.
 
 #### `frontend/src/pages/Comic.tsx`
 Chapter-level detail. Table: chapter number, source, download status, severity badge, library path, re-scan button, force-upgrade button. Severity badge tooltips show which templates matched and banner flags.
@@ -517,6 +517,8 @@ Playwright tests live in `frontend/e2e/`. Config is at `frontend/playwright.conf
 | setup already complete *(requires `SUWAYOMI_URL`)* | `/setup` redirects to `/login` |
 
 **`frontend/e2e/login.spec.ts`** — Resets backend in `beforeAll`, then creates admin via `POST /api/setup/user` and marks setup complete via `POST /api/setup/paths` (with `/tmp` paths). Tests: wrong credentials show inline error; correct credentials redirect away from `/login`; pre-loading a valid token in `localStorage` causes an immediate redirect when navigating to `/login`.
+
+**`frontend/e2e/library.spec.ts`** — Same `beforeAll` pattern as `login.spec.ts`. Tests: unauthenticated access to `/library` redirects to `/login`; authenticated access renders the Library heading; navigating to `/` redirects to `/library` (catch-all). Note: `GET /api/requests` returns 503 "Setup required" unless `SUWAYOMI_URL` is configured — this only affects content display, not auth routing.
 
 Run with: `cd frontend && npm run test:e2e`. Requires a real Suwayomi instance — set `SUWAYOMI_URL` (and optionally `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`) in `frontend/.env.test` for the Suwayomi-dependent tests.
 

@@ -475,6 +475,9 @@ State: `currentStep: 1|2|3|4`, `loggedInUser` (set after admin login in step 1),
 
 Source icons use an `onError` handler to hide `<img>` elements with broken URLs (Suwayomi icon paths are relative to Suwayomi's own origin and cannot be loaded by the frontend directly).
 
+#### `frontend/src/pages/Login.tsx`
+Username/password login form. If the user is already authenticated (`isAuthenticated` from `useAuth()`), immediately redirects to `/library`. On submit: `POST /api/auth/login`, calls `login(access_token)` from `AuthContext`, then navigates to `/library`. Errors are extracted from the FastAPI `{"detail": "..."}` response body and displayed inline in red.
+
 #### `frontend/src/pages/Search.tsx`
 Search bar → `GET /api/search`. Results as cards (cover, title, synopsis). "Request" button → `POST /api/requests`. Optimistic UI with loading/success/error states.
 
@@ -501,7 +504,7 @@ Playwright tests live in `frontend/e2e/`. Config is at `frontend/playwright.conf
 - `video: 'retain-on-failure'`, `screenshot: 'only-on-failure'`
 - Reports saved to `playwright-report/`; test artefacts to `test-results/`
 
-**`frontend/e2e/reset-backend.ts`** — called in `beforeAll` via `setup.spec.ts`. Kills any running backend process, wipes the SQLite database, clears setup keys (`SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `SETUP_COMPLETE`) from the env file, then spawns a fresh backend.
+**`frontend/e2e/reset-backend.ts`** — called in `beforeAll` by each spec file that needs a clean state. Kills any running backend process, wipes the SQLite database, clears setup keys (`SUWAYOMI_URL`, `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`, `SETUP_COMPLETE`) from the env file, then spawns a fresh backend.
 
 **`frontend/e2e/setup.spec.ts`** — DB state flows sequentially through tests:
 
@@ -512,6 +515,8 @@ Playwright tests live in `frontend/e2e/`. Config is at `frontend/playwright.conf
 | step 4 non-existent paths *(requires `SUWAYOMI_URL`)* | Suwayomi connected, sources saved; paths NOT written (user clicked Go back) |
 | happy path *(requires `SUWAYOMI_URL`)* | All 4 steps complete; `SETUP_COMPLETE=True` |
 | setup already complete *(requires `SUWAYOMI_URL`)* | `/setup` redirects to `/login` |
+
+**`frontend/e2e/login.spec.ts`** — Resets backend in `beforeAll`, then creates admin via `POST /api/setup/user` and marks setup complete via `POST /api/setup/paths` (with `/tmp` paths). Tests: wrong credentials show inline error; correct credentials redirect away from `/login`; pre-loading a valid token in `localStorage` causes an immediate redirect when navigating to `/login`.
 
 Run with: `cd frontend && npm run test:e2e`. Requires a real Suwayomi instance — set `SUWAYOMI_URL` (and optionally `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`) in `frontend/.env.test` for the Suwayomi-dependent tests.
 

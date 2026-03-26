@@ -456,6 +456,7 @@ Stores the JWT in `localStorage` under key `otaki_token`. Exposes `{ token, isAu
 
 #### `frontend/src/api/client.ts`
 `apiFetch<T>(path, options?)` — reads token from localStorage, injects `Authorization: Bearer` header, parses JSON response. Returns `undefined as T` for 204. Throws `ApiError` (with `.status`) on non-2xx.
+`extractDetail(err)` — extracts the FastAPI `detail` string from an `ApiError` response body; falls back to `err.message` or a generic string.
 
 ---
 
@@ -479,7 +480,7 @@ Source icons use an `onError` handler to hide `<img>` elements with broken URLs 
 Username/password login form. If the user is already authenticated (`isAuthenticated` from `useAuth()`), immediately redirects to `/library`. On submit: `POST /api/auth/login`, calls `login(access_token)` from `AuthContext`, then navigates to `/library`. Errors are extracted from the FastAPI `{"detail": "..."}` response body and displayed inline in red.
 
 #### `frontend/src/pages/Search.tsx`
-Search bar → `GET /api/search`. Results as cards (cover, title, synopsis). "Request" button → `POST /api/requests`. Optimistic UI with loading/success/error states.
+Two-step search flow. **Step 1:** debounced text input (400ms) → `GET /api/search` via TanStack Query (`queryKey: ['search', debouncedQuery]`, disabled when query is empty). Results rendered as a card grid — each card shows cover image (placeholder div when null), title, source label, synopsis snippet. Clicking a card toggles selection (tracked as `Set<string>` of URLs). "Review request (N)" button appears when ≥1 card is selected. **Step 2:** replaces results area — shows selected sources summary, display name and library title fields (library title syncs to display name until manually edited), cover picker (only rendered when selected results have covers), submit button → `POST /api/requests`. On success navigates to `/library`; on error shows inline message via `extractDetail`.
 
 #### `frontend/src/pages/Library.tsx`
 All tracked comics. Data from `GET /api/requests` via TanStack Query (`queryKey: ['comics']`). Columns: cover thumbnail (`/api/requests/{id}/cover`, hidden on error), title, download progress (`done / total chapters`), next poll time (relative — "in X days" / "overdue" / "—"). Row click → `/comics/{id}`. Shows loading text, inline error (via `extractDetail`), or empty state. Severity badge column deferred until quality API is implemented.

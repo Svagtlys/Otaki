@@ -15,6 +15,7 @@ export default defineConfig({
   retries: 0,
   reporter: 'html',
   globalSetup: './e2e/global-setup.ts',
+  globalTeardown: './e2e/global-teardown.ts',
   use: {
     baseURL: 'http://localhost:5173',
     video: 'retain-on-failure',

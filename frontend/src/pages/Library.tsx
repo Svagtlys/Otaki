@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ApiError, apiFetch } from '../api/client'
+import { apiFetch, extractDetail } from '../api/client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,17 +25,6 @@ interface ComicListItem {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractDetail(err: unknown): string {
-  if (err instanceof ApiError) {
-    try {
-      return (JSON.parse(err.message) as { detail: string }).detail
-    } catch {
-      return err.message
-    }
-  }
-  return 'An unexpected error occurred'
-}
-
 function formatRelative(isoString: string | null): string {
   if (!isoString) return '—'
   const diffMs = new Date(isoString).getTime() - Date.now()
@@ -59,7 +48,10 @@ export default function Library() {
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      <h1 style={{ marginTop: 0 }}>Library</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <h1 style={{ margin: 0 }}>Library</h1>
+        <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
+      </div>
 
       {isLoading && <p>Loading…</p>}
 
@@ -139,4 +131,13 @@ const tdStyle: React.CSSProperties = {
 
 const rowStyle: React.CSSProperties = {
   cursor: 'pointer',
+}
+
+const linkButtonStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: '#0070f3',
+  cursor: 'pointer',
+  fontSize: 14,
+  padding: 0,
 }

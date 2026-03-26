@@ -10,6 +10,17 @@ export class ApiError extends Error {
   }
 }
 
+export function extractDetail(err: unknown): string {
+  if (err instanceof ApiError) {
+    try {
+      return (JSON.parse(err.message) as { detail: string }).detail
+    } catch {
+      return err.message
+    }
+  }
+  return 'An unexpected error occurred'
+}
+
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers: Record<string, string> = {

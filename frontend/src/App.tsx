@@ -4,6 +4,7 @@ import { useAuth } from './context/AuthContext'
 import Library from './pages/Library'
 import Login from './pages/Login'
 import Setup from './pages/Setup'
+import Search from './pages/Search'
 
 function RequireAuth() {
   const { isAuthenticated } = useAuth()
@@ -48,7 +49,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route element={<RequireAuth />}>
           <Route path="/library" element={<Library />} />
-          <Route path="/search" element={<Placeholder name="Search" />} />
+          <Route path="/search" element={<Search />} />
           <Route path="/comics/:id" element={<Placeholder name="Comic" />} />
           <Route path="/sources" element={<Placeholder name="Sources" />} />
           <Route path="/settings" element={<Placeholder name="Settings" />} />

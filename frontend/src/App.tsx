@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
+import Login from './pages/Login'
 import Setup from './pages/Setup'
 
 function RequireAuth() {
@@ -43,7 +44,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/setup" element={<Navigate to="/login" replace />} />
-        <Route path="/login" element={<Placeholder name="Login" />} />
+        <Route path="/login" element={<Login />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<Placeholder name="Home" />} />
           <Route path="/search" element={<Placeholder name="Search" />} />

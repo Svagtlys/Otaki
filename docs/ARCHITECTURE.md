@@ -53,8 +53,9 @@ Otaki/
 │   │   ├── api/
 │   │   ├── services/
 │   │   └── workers/
-│   ├── watermarks/
+│   ├── watermarks/        (bind-mounted as /app/watermarks in Docker)
 │   └── requirements.txt
+├── covers/                (bind-mounted as /app/covers in Docker)
 ├── frontend/
 │   ├── src/
 │   │   ├── api/           (apiFetch client)
@@ -114,7 +115,7 @@ SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
 | `id` | int PK | |
 | `title` | str | Display name in Otaki UI |
 | `library_title` | str | Canonical name used for folder path and `ComicInfo.xml` `<Series>` tag; set at request time, defaults to `primary_title` |
-| `cover_path` | str \| null | Path to stored cover image; `null` until cover injection is implemented (1.1) |
+| `cover_path` | str \| null | Absolute path to the stored cover image under `COVERS_PATH`; `null` if no cover was provided at request creation |
 | `status` | enum | `tracking` / `complete` |
 | `poll_override_days` | float | Days between new-chapter polls; defaults to `DEFAULT_POLL_DAYS` (7) |
 | `upgrade_override_days` | float \| null | Days between upgrade checks; `null` = use `poll_override_days` |
@@ -262,16 +263,16 @@ Write/validate helpers are shared with `api/settings.py` — see `services/setti
 - `PATCH /api/settings` — partial update; accepts any subset of fields. If any Suwayomi connection field is included, pings Suwayomi with the resulting credentials before saving (400 on failure). Path fields are validated as existing directories before saving. Each accepted field is persisted via `write_env()` from `services/settings.py`.
 
 #### `backend/app/api/search.py`
-`GET /api/search?q=<title>`
-
-Fans out to all enabled sources via `suwayomi.search_source()` in parallel. Returns all results without deduplication, including `source_id` and `source_name` per result so the frontend can show which source each card came from. The user selects which results belong to the same series at request time.
+- `GET /api/search?q=<title>` — fans out to all enabled sources via `suwayomi.search_source()` in parallel. Requires auth. Returns all results without deduplication, including `source_id` and `source_name` per result. `cover_url` is rewritten to `/api/search/thumbnail?url=...` so the browser never fetches from Suwayomi directly.
+- `GET /api/search/thumbnail?url=` — thumbnail proxy: validates `url` starts with `SUWAYOMI_URL`, fetches from Suwayomi with Basic auth, streams image back. Returns 400 for disallowed URLs, 502 on upstream failure.
 
 #### `backend/app/api/requests.py`
 CRUD for tracked comics.
 
-- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. Returns `201 ComicResponse`.
+- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
 - `GET /api/requests` — list all tracked comics with per-comic chapter counts by download status (`total`, `done`, `downloading`, `queued`, `failed`). Uses a single `GROUP BY` query across all comics.
 - `GET /api/requests/{id}` — full detail: comic metadata plus list of `ChapterSummary` rows ordered by chapter number (includes source name, download status, relocation status, library path).
+- `GET /api/requests/{id}/cover` — serves the comic's cover image as a file response. Returns 404 if no cover has been stored.
 - `DELETE /api/requests/{id}?delete_files=false` — untrack a comic: removes APScheduler jobs via `scheduler.remove_comic_jobs()`, bulk-deletes all `ChapterAssignment` rows, deletes the `Comic` row. If `delete_files=true`, also unlinks any existing `library_path` files. Returns 204.
 
 #### `backend/app/api/sources.py`
@@ -330,12 +331,12 @@ Image quality analysis. Does **not** modify files.
 
 Watermark templates are loaded once at startup and cached in memory.
 
-#### `backend/app/services/cover_injector.py`
-Manages per-comic cover images and injects them into chapter CBZ archives.
+#### `backend/app/services/cover_handler.py`
+Manages per-comic cover images.
 
-- `save_from_url(comic_id, url) → Path` — downloads the image at `url` and saves it to `COVERS_PATH/{comic_id}.{ext}`. Returns the saved path.
-- `save_from_upload(comic_id, image_bytes, content_type) → Path` — saves a user-uploaded image to `COVERS_PATH/{comic_id}.{ext}`. Existing cover is replaced.
-- `inject(cbz_path, comic)` — if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
+- `save_from_url(comic_id, url) → Path | None` — downloads the image at `url` and saves it to `COVERS_PATH/{comic_id}.{ext}`. Returns the saved path on success, `None` on failure. Called by `create_request` when a `cover_url` is provided.
+- `save_from_upload(comic_id, image_bytes, content_type) → Path` — [deferred 1.1] saves a user-uploaded image to `COVERS_PATH/{comic_id}.{ext}`. Existing cover is replaced.
+- `inject(cbz_path, comic)` — [deferred 1.1] if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
 
 #### `backend/app/services/comicinfo_writer.py`
 Writes or updates `ComicInfo.xml` inside a CBZ archive, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
@@ -415,7 +416,7 @@ handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_displa
     4. [deferred 1.4] write    → QualityScan row
     5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
     6. [deferred 1.1] comicinfo → comicinfo_writer.write()
-    7. [deferred 1.1] cover    → cover_injector.inject()
+    7. [deferred 1.1] cover    → cover_handler.inject()
     8. Check for upgrade: query for existing active ChapterAssignment with same
        comic_id + chapter_number but different id
        - None found → regular download: file_relocator.relocate(), set is_active=True

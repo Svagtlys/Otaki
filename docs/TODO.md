@@ -19,7 +19,7 @@ Items are grouped by area. Add notes inline where context is useful.
 - [ ] Implement `template_extractor.py` (crop + save PNG + invalidate cache)
 - [ ] Implement `image_processor.py` (crop first/last pages, `.orig` backup, repack CBZ)
 - [ ] Implement `comicinfo_writer.py` (write/update `ComicInfo.xml` inside CBZ; set `<Series>` to `library_title`, `<Number>`, `<Volume>`; preserve all other existing fields)
-- [ ] Implement `cover_injector.py` (`save_from_url`, `save_from_upload`, `inject` — add/replace `cover.png` in CBZ)
+- [ ] Implement `cover_handler.py` (`save_from_url`, `save_from_upload`, `inject` — add/replace `cover.png` in CBZ)
 - [ ] Implement `file_relocator.py` (hardlink vs copy+delete, atomic upgrade swap)
 - [ ] Implement `auth.py` (local login, OAuth2/OIDC callback, session tokens, `require_permission` dependency)
 - [ ] Implement `setup.py` (first-run wizard: connect Suwayomi, order sources, set paths)

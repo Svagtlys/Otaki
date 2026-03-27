@@ -31,7 +31,7 @@ async def handle(
 
     Does not drive scheduling — that is APScheduler's responsibility.
 
-    Deferred to 1.1: comicinfo_writer, cover_injector
+    Deferred to 1.1: comicinfo_writer, cover_handler
     Deferred to 1.4: quality_scanner, QualityScan row, image_processor
     """
     if event_type == "ERROR":

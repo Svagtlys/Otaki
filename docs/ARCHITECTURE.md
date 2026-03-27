@@ -491,6 +491,9 @@ Chapter-level detail. Table: chapter number, source, download status, severity b
 #### `frontend/src/pages/Sources.tsx`
 Priority management page at `/sources`. Single list of configured sources ordered by priority. Each row: position number, source name, enabled checkbox (immediate `PATCH /api/sources/{id}`), ↑/↓ buttons for reordering. "Save order" button appears when local order differs from server order; clicking it fires `PATCH /api/sources/{id}` for each source with its new priority index. Data from `GET /api/sources` via TanStack Query (`queryKey: ['sources']`). Quality stats and watermark templates deferred to 1.4.
 
+#### `frontend/src/pages/Settings.tsx`
+Application settings page at `/settings`. Four independently-saveable sections, each submitting `PATCH /api/settings` with only its own fields: **Suwayomi connection** (URL, username, password — password omitted from body when blank, placeholder shown when one is stored; "Save & Test" button pings Suwayomi via the backend); **Paths** (download path, library path); **Chapter naming** (format string with `{title}` / `{chapter}` tokens and a live preview); **Polling** (default poll interval in days). Data from `GET /api/settings` via TanStack Query (`queryKey: ['settings']`).
+
 ---
 
 ## End-to-End Tests
@@ -518,6 +521,8 @@ Playwright tests live in `frontend/e2e/`. Config is at `frontend/playwright.conf
 **`frontend/e2e/login.spec.ts`** — Resets backend in `beforeAll`, then creates admin via `POST /api/setup/user` and marks setup complete via `POST /api/setup/paths` (with `/tmp` paths). Tests: wrong credentials show inline error; correct credentials redirect away from `/login`; pre-loading a valid token in `localStorage` causes an immediate redirect when navigating to `/login`.
 
 **`frontend/e2e/library.spec.ts`** — Same `beforeAll` pattern as `login.spec.ts`. Tests: unauthenticated access to `/library` redirects to `/login`; authenticated access renders the Library heading; navigating to `/` redirects to `/library` (catch-all). Note: `GET /api/requests` returns 503 "Setup required" unless `SUWAYOMI_URL` is configured — this only affects content display, not auth routing.
+
+**`frontend/e2e/settings.spec.ts`** — Mocks `GET /api/settings` and `PATCH /api/settings` via `page.route()`. Tests: unauthenticated redirect; Library page has a Settings button; nav to `/settings` and back; form fields populated from API response; naming format live preview; "Save & Test" fires PATCH with connection fields and shows success message; connection error is displayed; Paths, Chapter naming, and Polling Save buttons each fire PATCH with the correct field subset.
 
 Run with: `cd frontend && npm run test:e2e`. Requires a real Suwayomi instance — set `SUWAYOMI_URL` (and optionally `SUWAYOMI_USERNAME`, `SUWAYOMI_PASSWORD`, `SUWAYOMI_DOWNLOAD_PATH`, `LIBRARY_PATH`) in `frontend/.env.test` for the Suwayomi-dependent tests.
 

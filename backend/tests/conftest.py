@@ -96,6 +96,7 @@ async def auth_client(monkeypatch):
         from app import models  # noqa: F401
         await conn.run_sync(database.Base.metadata.create_all)
 
+    monkeypatch.setattr(settings, "SETUP_COMPLETE", False)
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", None)
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)
@@ -141,6 +142,7 @@ async def client(monkeypatch):
         from app import models  # noqa: F401 — registers models on Base.metadata
         await conn.run_sync(database.Base.metadata.create_all)
 
+    monkeypatch.setattr(settings, "SETUP_COMPLETE", False)
     monkeypatch.setattr(settings, "SUWAYOMI_URL", None)
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", None)
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)

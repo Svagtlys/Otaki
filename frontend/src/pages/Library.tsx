@@ -37,7 +37,10 @@ export default function Library() {
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ margin: 0 }}>Library</h1>
-        <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
+        <div style={{ display: 'flex', gap: 16 }}>
+          <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
+          <button onClick={() => navigate('/sources')} style={linkButtonStyle}>Sources</button>
+        </div>
       </div>
 
       {isLoading && <p>Loading…</p>}

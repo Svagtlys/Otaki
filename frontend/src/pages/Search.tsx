@@ -9,7 +9,8 @@ import { apiFetch, extractDetail } from '../api/client'
 
 interface SearchResult {
   title: string
-  cover_url: string | null
+  cover_url: string | null        // absolute Suwayomi URL — submitted to POST /api/requests
+  cover_display_url: string | null // proxied URL — used for <img> src
   synopsis: string | null
   source_id: number
   source_name: string
@@ -148,9 +149,9 @@ export default function Search() {
                     border: selected.has(r.url) ? '2px solid #0070f3' : '2px solid #eee',
                   }}
                 >
-                  {r.cover_url ? (
+                  {r.cover_display_url ? (
                     <img
-                      src={r.cover_url}
+                      src={r.cover_display_url}
                       alt=""
                       width={48}
                       height={64}
@@ -239,16 +240,16 @@ export default function Search() {
           </div>
 
           {/* Cover picker */}
-          {selectedResults.some(r => r.cover_url) && (
+          {selectedResults.some(r => r.cover_display_url) && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Cover</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 {selectedResults
-                  .filter(r => r.cover_url)
+                  .filter(r => r.cover_display_url)
                   .map(r => (
                     <img
                       key={r.url}
-                      src={r.cover_url!}
+                      src={r.cover_display_url!}
                       alt={r.source_name}
                       width={48}
                       height={64}

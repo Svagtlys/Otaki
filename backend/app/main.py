@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import auth, requests, search, settings as settings_api, setup
+from .api import auth, requests, search, settings as settings_api, setup, sources
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
@@ -37,6 +37,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(requests.router, prefix="/api")
 app.include_router(settings_api.router, prefix="/api")
+app.include_router(sources.router, prefix="/api")
 
 
 # Middleware runs in reverse registration order (last registered = outermost = runs first).

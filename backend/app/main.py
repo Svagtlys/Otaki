@@ -15,6 +15,18 @@ from .services import auth as auth_service
 from .workers import download_listener, scheduler
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
+# <img> tags cannot send JWT — these paths must be publicly accessible
+_AUTH_EXEMPT = ("/api/search/thumbnail",)
+
+
+def _auth_required(path: str) -> bool:
+    if any(path.startswith(p) for p in _SETUP_EXEMPT):
+        return False
+    if any(path.startswith(p) for p in _AUTH_EXEMPT):
+        return False
+    if path.endswith("/cover"):  # /api/requests/{id}/cover
+        return False
+    return True
 
 
 @asynccontextmanager
@@ -48,7 +60,7 @@ app.include_router(sources.router, prefix="/api")
 @app.middleware("http")
 async def require_auth_middleware(request: Request, call_next):
     path = request.url.path
-    if any(path.startswith(p) for p in _SETUP_EXEMPT):
+    if not _auth_required(path):
         return await call_next(request)
 
     token = None
@@ -80,3 +92,4 @@ async def require_setup(request: Request, call_next):
     if not setup_complete and not any(path.startswith(p) for p in _SETUP_EXEMPT):
         return JSONResponse({"detail": "Setup required"}, status_code=503)
     return await call_next(request)
+

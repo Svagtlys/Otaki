@@ -60,7 +60,7 @@ Otaki/
 │   │   │   ├── template_extractor.py # Extract watermark templates from sample images
 │   │   │   ├── image_processor.py# Crop/remove banners from pages
 │   │   │   ├── comicinfo_writer.py   # Write/update ComicInfo.xml inside CBZ
-│   │   │   ├── cover_injector.py     # Inject cover.png into each chapter CBZ
+│   │   │   ├── cover_handler.py     # Inject cover.png into each chapter CBZ
 │   │   │   └── file_relocator.py # Move settled chapters to final library path
 │   │   └── workers/
 │   │       ├── scheduler.py           # APScheduler setup
@@ -200,7 +200,7 @@ id, comic_id (FK), source_id (FK), priority_override (int — lower = more prefe
 3. Write `quality_scan` row to DB
 4. If banners detected and auto-fix enabled: `image_processor.crop_chapter(cbz_path, scan_result)` — crops first/last pages in-place, keeps `.orig` backup
 5. `comicinfo_writer.write(cbz_path, comic, assignment)` — updates or creates `ComicInfo.xml` inside the CBZ with the canonical `library_title` as `<Series>`, ensuring all chapters report the same series name regardless of source
-6. `cover_injector.inject(cbz_path, comic)` — if `comic.cover_path` is set, adds the cover image to the CBZ as `cover.png` (replaces any existing entry of that name)
+6. `cover_handler.inject(cbz_path, comic)` — if `comic.cover_path` is set, adds the cover image to the CBZ as `cover.png` (replaces any existing entry of that name)
 7. Relocate settled chapter (see F)
 
 ### C. Upgrade Checks (scheduled)

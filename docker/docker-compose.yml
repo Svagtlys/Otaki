@@ -15,10 +15,14 @@ services:
       DATABASE_URL: "sqlite+aiosqlite:////app/data/otaki.db"
       LIBRARY_PATH: "/app/library"
       SUWAYOMI_DOWNLOAD_PATH: "/app/suwayomi_data/downloads"
+      COVERS_PATH: "/app/covers"
+      WATERMARKS_PATH: "/app/watermarks"
     volumes:
       - ../data:/app/data
       - ../suwayomi:/app/suwayomi_data
       - ../library:/app/library
+      - ../covers:/app/covers
+      - ../watermarks:/app/watermarks
     ports:
       - "8000:8000"
     restart: unless-stopped

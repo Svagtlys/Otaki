@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     SUWAYOMI_PASSWORD: str | None = None
     SUWAYOMI_DOWNLOAD_PATH: str | None = None
     LIBRARY_PATH: str | None = None
+    COVERS_PATH: str = str(_here / "covers")
+    WATERMARKS_PATH: str = str(_here / "watermarks")
 
     CHAPTER_NAMING_FORMAT: str = "{title}/{title} - Ch.{chapter}.cbz"
     RELOCATION_STRATEGY: Literal["auto", "hardlink", "copy", "move"] = "auto"

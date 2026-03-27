@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from ..database import get_db
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from ..models.comic import Comic, ComicStatus
 from ..models.user import User
-from ..services import source_selector, suwayomi
+from ..services import cover_handler, source_selector, suwayomi
 from ..workers import scheduler
 from .auth import require_auth
 
@@ -178,6 +179,14 @@ async def create_request(
     await db.refresh(comic)
     scheduler.register_comic_jobs(comic)
 
+    # 8. Download cover if provided
+    if body.cover_url:
+        cover_path = await cover_handler.save_from_url(comic.id, body.cover_url)
+        if cover_path:
+            comic.cover_path = str(cover_path)
+            await db.commit()
+            await db.refresh(comic)
+
     return ComicResponse.model_validate(comic)
 
 
@@ -260,6 +269,20 @@ async def get_request(
         **ComicResponse.model_validate(comic).model_dump(),
         chapters=[_chapter_summary(a) for a in assignments],
     )
+
+
+@router.get("/{comic_id}/cover")
+async def get_cover(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    comic = await db.get(Comic, comic_id)
+    if comic is None or not comic.cover_path:
+        raise HTTPException(status_code=404, detail="Cover not found")
+    cover = Path(comic.cover_path)
+    if not cover.exists():
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return FileResponse(str(cover))
 
 
 @router.delete("/{comic_id}", status_code=204)

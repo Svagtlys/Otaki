@@ -116,6 +116,42 @@ async def auth_client(monkeypatch):
 
 
 @pytest_asyncio.fixture
+async def logged_in_client_with_session(monkeypatch):
+    """Like logged_in_client but also yields the test DB session for direct inserts."""
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    test_session = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(database, "engine", test_engine)
+    monkeypatch.setattr(database, "AsyncSessionLocal", test_session)
+
+    async with test_engine.begin() as conn:
+        from app import models  # noqa: F401
+        await conn.run_sync(database.Base.metadata.create_all)
+
+    monkeypatch.setattr(settings, "SETUP_COMPLETE", False)
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+    monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", None)
+    monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", None)
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", "/tmp")
+    monkeypatch.setattr(settings, "LIBRARY_PATH", "/tmp")
+    monkeypatch.setattr("app.services.settings.write_env", lambda key, value: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "start", lambda: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "shutdown", lambda **kw: None)
+    monkeypatch.setattr(scheduler_module.scheduler, "add_job", lambda *a, **kw: None)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        await c.post("/api/setup/user", json={"username": "admin", "password": "testpassword!"})
+        r = await c.post("/api/auth/login", json={"username": "admin", "password": "testpassword!"})
+        token = r.json()["access_token"]
+        c.headers = {**c.headers, "Authorization": f"Bearer {token}"}
+        async with test_session() as session:
+            yield c, session
+
+    await test_engine.dispose()
+
+
+@pytest_asyncio.fixture
 async def logged_in_client(auth_client):
     """auth_client with a valid JWT already set as a Bearer token.
     Use this for tests that need to hit authenticated routes."""

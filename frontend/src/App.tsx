@@ -7,6 +7,7 @@ import Setup from './pages/Setup'
 import Search from './pages/Search'
 import Comic from './pages/Comic'
 import Sources from './pages/Sources'
+import Settings from './pages/Settings'
 
 function RequireAuth() {
   const { isAuthenticated } = useAuth()
@@ -14,9 +15,6 @@ function RequireAuth() {
   return <Outlet />
 }
 
-function Placeholder({ name }: { name: string }) {
-  return <div>{name}</div>
-}
 
 export default function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null)
@@ -54,7 +52,7 @@ export default function App() {
           <Route path="/search" element={<Search />} />
           <Route path="/comics/:id" element={<Comic />} />
           <Route path="/sources" element={<Sources />} />
-          <Route path="/settings" element={<Placeholder name="Settings" />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>

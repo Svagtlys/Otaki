@@ -40,6 +40,7 @@ export default function Library() {
         <div style={{ display: 'flex', gap: 16 }}>
           <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
           <button onClick={() => navigate('/sources')} style={linkButtonStyle}>Sources</button>
+          <button onClick={() => navigate('/settings')} style={linkButtonStyle}>Settings</button>
         </div>
       </div>
 

@@ -1,0 +1,237 @@
+"""Tests for GET /api/search (issue #9).
+
+Unit-style tests mock suwayomi.search_source and seed sources directly in the DB.
+Integration tests require a configured Suwayomi instance via suwayomi_settings.
+"""
+
+import pytest
+from datetime import datetime, timezone
+
+from app.models.source import Source
+
+
+async def _add_source(*, name="Test Source", suwayomi_source_id="src-1", priority=1):
+    """Seed a source row directly via the DB session used by the app."""
+    from app import database
+    async with database.AsyncSessionLocal() as db:
+        source = Source(
+            suwayomi_source_id=suwayomi_source_id,
+            name=name,
+            priority=priority,
+            enabled=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(source)
+        await db.commit()
+        await db.refresh(source)
+        return source
+
+
+# ---------------------------------------------------------------------------
+# Unit-style tests — no live Suwayomi
+# ---------------------------------------------------------------------------
+
+
+async def test_search_requires_auth(auth_client):
+    r = await auth_client.get("/api/search?q=test")
+    assert r.status_code == 401
+
+
+async def test_search_missing_query(logged_in_client):
+    r = await logged_in_client.get("/api/search")
+    assert r.status_code == 422
+
+
+async def test_search_returns_empty_when_no_sources(logged_in_client):
+    r = await logged_in_client.get("/api/search?q=anything")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_search_skips_failed_source(logged_in_client, monkeypatch):
+    from app.services import suwayomi
+    await _add_source()
+
+    async def _failing_search(source_id, query):
+        raise Exception("source unavailable")
+
+    monkeypatch.setattr(suwayomi, "search_source", _failing_search)
+
+    r = await logged_in_client.get("/api/search?q=test")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_search_result_shape(logged_in_client, monkeypatch):
+    from app.services import suwayomi
+    await _add_source()
+
+    async def _mock_search(source_id, query):
+        return [{"manga_id": "1", "title": "Test Manga", "cover_url": None, "synopsis": None, "url": "http://example.com"}]
+
+    monkeypatch.setattr(suwayomi, "search_source", _mock_search)
+
+    r = await logged_in_client.get("/api/search?q=test")
+    assert r.status_code == 200
+    results = r.json()
+    assert len(results) == 1
+    result = results[0]
+    assert result["title"] == "Test Manga"
+    assert "source_id" in result
+    assert "source_name" in result
+    assert result["source_name"] == "Test Source"
+
+
+async def test_search_cover_urls(logged_in_client, monkeypatch):
+    """cover_url is absolute Suwayomi URL; cover_display_url is the proxied URL."""
+    from app.services import suwayomi
+    from app.config import settings
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+    await _add_source()
+
+    async def _mock_search(source_id, query):
+        return [{"manga_id": "1", "title": "Test Manga",
+                 "cover_url": "/api/v1/manga/1/thumbnail",
+                 "synopsis": None, "url": None}]
+
+    monkeypatch.setattr(suwayomi, "search_source", _mock_search)
+
+    r = await logged_in_client.get("/api/search?q=test")
+    assert r.status_code == 200
+    result = r.json()[0]
+    assert result["cover_url"] == "https://suwayomi.example.com/api/v1/manga/1/thumbnail"
+    assert result["cover_display_url"].startswith("/api/search/thumbnail?url=")
+
+
+async def test_thumbnail_proxy_no_auth_required(auth_client, monkeypatch):
+    """Thumbnail proxy must be accessible without JWT (img tags can't send auth headers)."""
+    from app.config import settings
+    import httpx
+
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw):
+            class R:
+                status_code = 200
+                content = b"img"
+                headers = {"content-type": "image/jpeg"}
+            return R()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    r = await auth_client.get("/api/search/thumbnail?url=https://suwayomi.example.com/img.jpg")
+    assert r.status_code == 200
+
+
+async def test_thumbnail_proxy_rejects_non_suwayomi_url(logged_in_client, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+    r = await logged_in_client.get("/api/search/thumbnail?url=https://evil.com/img.jpg")
+    assert r.status_code == 400
+
+
+async def test_thumbnail_proxy_fetches_from_suwayomi(logged_in_client, monkeypatch):
+    from app.config import settings
+    import httpx
+
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+
+    class FakeResponse:
+        status_code = 200
+        content = b"fake-thumbnail"
+        headers = {"content-type": "image/jpeg"}
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw): return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    import urllib.parse
+    url = urllib.parse.quote("https://suwayomi.example.com/api/v1/manga/1/thumbnail", safe="")
+    r = await logged_in_client.get(f"/api/search/thumbnail?url={url}")
+    assert r.status_code == 200
+    assert r.content == b"fake-thumbnail"
+
+
+async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
+    from app.services import suwayomi
+    await _add_source(name="Source A", suwayomi_source_id="src-1", priority=1)
+    await _add_source(name="Source B", suwayomi_source_id="src-2", priority=2)
+
+    called_with = []
+
+    async def _mock_search(source_id, query):
+        called_with.append(source_id)
+        return [{"manga_id": source_id, "title": f"Result from {source_id}", "cover_url": None, "synopsis": None, "url": None}]
+
+    monkeypatch.setattr(suwayomi, "search_source", _mock_search)
+
+    r = await logged_in_client.get("/api/search?q=test")
+    assert r.status_code == 200
+    assert len(r.json()) == 2
+    assert set(called_with) == {"src-1", "src-2"}
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — require live Suwayomi
+# ---------------------------------------------------------------------------
+
+
+async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+    from app.config import settings
+    from app.services.suwayomi import list_sources as _list_sources
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
+    monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
+    monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
+
+    sources = await _list_sources()
+    if not sources:
+        pytest.skip("No sources on live Suwayomi instance")
+
+    await _add_source(name=sources[0]["name"], suwayomi_source_id=sources[0]["id"])
+
+    r = await logged_in_client.get(f"/api/search?q={test_manga_title}")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+async def test_search_live_result_has_required_fields(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+    from app.config import settings
+    from app.services.suwayomi import list_sources as _list_sources, search_source as _search_source
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
+    monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
+    monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
+
+    sources = await _list_sources()
+    if not sources:
+        pytest.skip("No sources on live Suwayomi instance")
+
+    chosen = None
+    for s in sources:
+        results = await _search_source(s["id"], test_manga_title)
+        if results:
+            chosen = s
+            break
+    if not chosen:
+        pytest.skip(f"No source returned results for {test_manga_title!r}")
+
+    await _add_source(name=chosen["name"], suwayomi_source_id=chosen["id"])
+
+    r = await logged_in_client.get(f"/api/search?q={test_manga_title}")
+    assert r.status_code == 200
+    results = r.json()
+    assert len(results) > 0
+    for result in results:
+        assert "title" in result
+        assert "source_id" in result
+        assert "source_name" in result
+        assert "cover_url" in result
+        assert "synopsis" in result
+        assert "url" in result

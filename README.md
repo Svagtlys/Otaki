@@ -33,17 +33,51 @@ Full details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
-## Setup
+## Deploy
 
-> **Prerequisites:** Docker + Docker Compose, a running Suwayomi-Server instance.
+> **Prerequisites:** Docker + Docker Compose, and a running [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) instance.
+
+Download the deployment files:
 
 ```bash
-cp .env.example .env
-# Edit .env — set SUWAYOMI_URL, SUWAYOMI_DOWNLOAD_PATH, LIBRARY_PATH
-docker compose up
+mkdir otaki && cd otaki
+curl -fsSL https://raw.githubusercontent.com/Svagtlys/Otaki/main/deploy/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/Svagtlys/Otaki/main/deploy/nginx.conf -o nginx.conf
+mkdir -p data suwayomi library covers watermarks
+curl -fsSL https://raw.githubusercontent.com/Svagtlys/Otaki/main/deploy/.env.example -o data/.env
 ```
 
-Open `http://localhost:5173` — the setup wizard will guide you through connecting Suwayomi and configuring source priority on first run.
+Edit `data/.env` — at minimum, set these two values:
+
+```bash
+SUWAYOMI_URL=http://<your-suwayomi-host>:4567
+SECRET_KEY=<output of: openssl rand -hex 32>
+```
+
+Start Otaki:
+
+```bash
+UID=$(id -u) GID=$(id -g) docker compose up -d
+```
+
+Open `http://localhost` — the setup wizard will guide you through source configuration on first run.
+
+The `mkdir -p` step above creates the host directories as your user before Docker mounts them — this ensures the backend process has write access. All path variables (`LIBRARY_PATH`, `SUWAYOMI_DOWNLOAD_PATH`, etc.) are pre-configured by `docker-compose.yml`.
+
+To update to a new version: edit the image tags in `docker-compose.yml`, then run `docker compose pull && docker compose up -d`.
+
+---
+
+## For Developers (local build)
+
+```bash
+git clone https://github.com/Svagtlys/Otaki.git && cd Otaki
+cp .env.example .env
+# Minimum required in .env:
+#   SECRET_KEY=<random string>
+#   SUWAYOMI_URL=http://suwayomi:4567   # if using the bundled suwayomi service
+UID=$(id -u) GID=$(id -g) docker compose -f docker/docker-compose.yml up
+```
 
 ---
 
@@ -63,7 +97,7 @@ Available naming tokens: `{title}`, `{chapter}`, `{volume}`, `{year}`, `{source}
 
 ---
 
-## For Developers
+## Developer Docs
 
 - [docs/PLAN.md](docs/PLAN.md) — full design: data model, workflows, tech stack
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — file-by-file breakdown of every service and worker

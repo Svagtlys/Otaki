@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+pydantic-settings
+gql[httpx]
+python-dotenv
+bcrypt
+PyJWT
+apscheduler>=3.10,<4

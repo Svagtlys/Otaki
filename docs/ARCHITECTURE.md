@@ -489,9 +489,7 @@ All tracked comics. Data from `GET /api/requests` via TanStack Query (`queryKey:
 Chapter-level detail. Table: chapter number, source, download status, severity badge, library path, re-scan button, force-upgrade button. Severity badge tooltips show which templates matched and banner flags.
 
 #### `frontend/src/pages/Sources.tsx`
-Two panels:
-- **Source priority** — drag-to-reorder list of sources. Each row: source name, priority number, enabled toggle, aggregate quality stats (% clean chapters from this source).
-- **Watermark templates** — list with name, source, threshold. "Add template": image upload + canvas crop selector to define the watermark region.
+Priority management page at `/sources`. Single list of configured sources ordered by priority. Each row: position number, source name, enabled checkbox (immediate `PATCH /api/sources/{id}`), ↑/↓ buttons for reordering. "Save order" button appears when local order differs from server order; clicking it fires `PATCH /api/sources/{id}` for each source with its new priority index. Data from `GET /api/sources` via TanStack Query (`queryKey: ['sources']`). Quality stats and watermark templates deferred to 1.4.
 
 ---
 

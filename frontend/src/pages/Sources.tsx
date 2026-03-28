@@ -85,6 +85,7 @@ export default function Sources() {
         method: 'PATCH',
         body: JSON.stringify({ enabled: newEnabled }),
       })
+      await queryClient.invalidateQueries({ queryKey: ['sources'] })
     } catch (err) {
       setToggleError(extractDetail(err))
       setLocalSources(prev => prev.map(s => s.id === source.id ? { ...s, enabled: source.enabled } : s))

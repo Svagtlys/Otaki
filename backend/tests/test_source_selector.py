@@ -13,6 +13,7 @@ SUWAYOMI_URL is not configured in .env.test):
 """
 
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -91,6 +92,68 @@ async def test_effective_priority_returns_source_priority(db_session):
     comic = await _make_comic(db_session)
     result = await source_selector.effective_priority(source, comic, db_session)
     assert result == 3
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _find_matching_result / title-match guard
+# ---------------------------------------------------------------------------
+
+
+async def test_build_chapter_source_map_uses_second_result_when_first_title_does_not_match(
+    db_session,
+):
+    """If the first search result title does not match comic.title, the helper
+    must skip it and use the matching result further down the list."""
+    source = await _make_source(db_session, name="Source A", priority=1)
+    comic = await _make_comic(db_session, title="Correct Title")
+
+    fake_results = [
+        {"manga_id": "wrong-id", "title": "Completely Different Manga"},
+        {"manga_id": "correct-id", "title": "Correct Title"},
+    ]
+    fake_chapters = [
+        {
+            "chapter_number": 1.0,
+            "suwayomi_chapter_id": "ch-1",
+            "chapter_published_at": datetime.now(timezone.utc),
+            "volume_number": None,
+        }
+    ]
+
+    with (
+        patch(
+            "app.services.source_selector.suwayomi.search_source",
+            new=AsyncMock(return_value=fake_results),
+        ),
+        patch(
+            "app.services.source_selector.suwayomi.fetch_chapters",
+            new=AsyncMock(return_value=fake_chapters),
+        ),
+    ):
+        result = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert len(result) == 1
+    _src, manga_id, _ch = result[1.0]
+    assert manga_id == "correct-id"
+
+
+async def test_build_chapter_source_map_returns_empty_when_no_title_match(db_session):
+    """If no search result matches comic.title, the source must be skipped and
+    build_chapter_source_map must return an empty dict."""
+    source = await _make_source(db_session, name="Source A", priority=1)
+    comic = await _make_comic(db_session, title="Missing Title")
+
+    fake_results = [
+        {"manga_id": "some-id", "title": "Something Else Entirely"},
+    ]
+
+    with patch(
+        "app.services.source_selector.suwayomi.search_source",
+        new=AsyncMock(return_value=fake_results),
+    ):
+        result = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert result == {}
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +290,52 @@ async def _first_manga_id(query: str = "a") -> str:
     if not results:
         pytest.skip("No search results from live Suwayomi instance")
     return results[0]["manga_id"]
+
+
+async def _webtoons_en_source_id() -> str:
+    """Return the suwayomi_source_id for the Webtoons EN source, or skip."""
+    sources = await suwayomi.list_sources()
+    for source in sources:
+        name = source.get("name", "")
+        lang = source.get("lang", "")
+        if "webtoon" in name.lower() and lang.lower() == "en":
+            return source["id"]
+    pytest.skip("Webtoons EN source not installed on live Suwayomi instance")
+
+
+@pytest.mark.integration
+async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayomi_settings):
+    """Integration: build_chapter_source_map correctly matches 'The Tyrant of the Tower
+    Defense Game' on the Webtoons EN source and returns a non-empty chapter map.
+
+    Skips if the title is not present in the live Suwayomi instance's search results.
+    """
+    comic_title = "The Tyrant of the Tower Defense Game"
+    source_id = await _webtoons_en_source_id()
+
+    # Verify the title actually exists on this Suwayomi instance before asserting
+    search_results = await suwayomi.search_source(source_id, comic_title)
+    matched = source_selector._find_matching_result(search_results, [comic_title])
+    if matched is None:
+        pytest.skip(
+            f"{comic_title!r} not found in Webtoons EN search results on this Suwayomi instance"
+        )
+
+    source = await _make_source(
+        db_session,
+        name="Webtoons EN",
+        priority=1,
+        suwayomi_source_id=source_id,
+    )
+    comic = await _make_comic(db_session, title=comic_title)
+
+    result = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert isinstance(result, dict)
+    assert len(result) > 0
+    for ch_num, (src, manga_id, ch_data) in result.items():
+        assert isinstance(ch_num, float)
+        assert isinstance(src, Source)
+        assert isinstance(manga_id, str)
+        assert "suwayomi_chapter_id" in ch_data
+        assert "chapter_published_at" in ch_data

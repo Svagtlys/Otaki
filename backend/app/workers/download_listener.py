@@ -9,6 +9,8 @@ from . import chapter_event_handler
 
 logger = logging.getLogger(__name__)
 
+_background_tasks: set[asyncio.Task] = set()
+
 
 async def run() -> None:
     """Maintain a persistent connection to Suwayomi's downloadChanged subscription.
@@ -34,11 +36,13 @@ async def run() -> None:
                         suwayomi.subscribe_download_changed()
                     ):
                         attempt = 0
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             chapter_event_handler.handle(
                                 event_type, chapter_id, chapter_name, manga_title, source_name
                             )
                         )
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
                     # Generator exhausted cleanly — reconnect immediately.
                     attempt = 0
                 except (TransportError, ConnectionError, Exception) as exc:
@@ -64,7 +68,9 @@ async def run() -> None:
                 try:
                     items = await suwayomi.poll_downloads()
                     for item in items:
-                        asyncio.create_task(chapter_event_handler.handle(*item))
+                        task = asyncio.create_task(chapter_event_handler.handle(*item))
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
                     # Success — switch back to subscription mode.
                     logger.info(
                         "download_listener: poll succeeded — resuming subscription mode"

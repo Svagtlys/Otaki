@@ -299,6 +299,130 @@ async def test_dispatches_error_event():
     mock_handle.assert_awaited_once_with(*item)
 
 
+@pytest.mark.asyncio
+async def test_background_tasks_set_holds_then_releases_task():
+    """Task is in _background_tasks immediately after creation, gone after it completes."""
+    item = ("FINISHED", "77", "Chapter 77", "Test Manga", "TestSource")
+
+    call_count = 0
+
+    async def _subscribe_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield item
+        else:
+            raise asyncio.CancelledError()
+
+    with (
+        patch(
+            "app.workers.download_listener.suwayomi.subscribe_download_changed",
+            side_effect=_subscribe_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ),
+        patch("app.workers.download_listener.settings") as mock_settings,
+    ):
+        mock_settings.MAX_RECONNECT_ATTEMPTS = 5
+        mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
+
+        assert len(download_listener._background_tasks) == 0, "leaked tasks from a previous test"
+
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
+
+        # This assertion relies on the fact that the path from
+        # `_background_tasks.add(task)` to the CancelledError propagating out of
+        # run() is entirely synchronous — there is no `await` between the add and
+        # the raise, so the event loop never gets a chance to run the task's
+        # coroutine or its done callback before we reach this line.
+        assert len(download_listener._background_tasks) == 1
+
+        # Yield to the event loop twice: once for the task body to run, once more
+        # for the done callback to fire (AsyncMock needs two cycles to fully settle).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert len(download_listener._background_tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_polling_path_tracks_background_tasks():
+    """Tasks dispatched via the polling fallback are tracked in _background_tasks.
+
+    Drives the listener into polling mode by exhausting MAX_RECONNECT_ATTEMPTS with
+    subscription failures, then has poll_downloads return one item. The subsequent
+    subscription attempt raises CancelledError to exit the loop. After run() raises,
+    the task created by the polling dispatch must be held in _background_tasks.
+    """
+    assert len(download_listener._background_tasks) == 0, "leaked tasks from a previous test"
+
+    poll_item = ("FINISHED", "88", "Chapter 88", "Poll Manga", "PollSource")
+    max_attempts = 2
+
+    async def _always_fail_subscription():
+        raise ConnectionError("refused")
+        yield  # make it an async generator
+
+    poll_call_count = 0
+
+    async def _poll_one_item():
+        nonlocal poll_call_count
+        poll_call_count += 1
+        return [poll_item]
+
+    # After the poll succeeds the listener switches back to subscription mode.
+    # Raise CancelledError on the next subscription attempt to exit cleanly.
+    sub_call_index = 0
+
+    def _subscription_side_effect():
+        nonlocal sub_call_index
+        sub_call_index += 1
+        if sub_call_index <= max_attempts:
+            return _always_fail_subscription()
+        # Post-poll subscription attempt — exit the loop.
+        async def _cancel():
+            raise asyncio.CancelledError()
+            yield  # make it an async generator
+
+        return _cancel()
+
+    with (
+        patch(
+            "app.workers.download_listener.suwayomi.subscribe_download_changed",
+            side_effect=_subscription_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            side_effect=_poll_one_item,
+        ),
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ),
+        patch("app.workers.download_listener.asyncio.sleep", new_callable=AsyncMock),
+        patch("app.workers.download_listener.settings") as mock_settings,
+    ):
+        mock_settings.MAX_RECONNECT_ATTEMPTS = max_attempts
+        mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
+
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
+
+        # The polling path added a task synchronously before CancelledError propagated.
+        assert len(download_listener._background_tasks) >= 1
+
+        # Await the pending tasks directly so their done callbacks fire and they
+        # remove themselves from _background_tasks. Simple sleep(0) loops are
+        # insufficient here because the AsyncMock coroutine internals require the
+        # event loop to fully schedule and complete the underlying awaitable.
+        pending = list(download_listener._background_tasks)
+        await asyncio.gather(*pending, return_exceptions=True)
+        assert len(download_listener._background_tasks) == 0
+
+
 # ---------------------------------------------------------------------------
 # Integration tests
 # ---------------------------------------------------------------------------

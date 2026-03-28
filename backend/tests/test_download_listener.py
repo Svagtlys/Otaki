@@ -299,6 +299,52 @@ async def test_dispatches_error_event():
     mock_handle.assert_awaited_once_with(*item)
 
 
+@pytest.mark.asyncio
+async def test_background_tasks_set_holds_then_releases_task():
+    """Task is in _background_tasks immediately after creation, gone after it completes."""
+    item = ("FINISHED", "77", "Chapter 77", "Test Manga", "TestSource")
+
+    call_count = 0
+
+    async def _subscribe_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield item
+        else:
+            raise asyncio.CancelledError()
+
+    with (
+        patch(
+            "app.workers.download_listener.suwayomi.subscribe_download_changed",
+            side_effect=_subscribe_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ),
+        patch("app.workers.download_listener.settings") as mock_settings,
+    ):
+        mock_settings.MAX_RECONNECT_ATTEMPTS = 5
+        mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
+
+        # Clear any residual tasks from previous tests.
+        download_listener._background_tasks.clear()
+
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
+
+        # Immediately after run() exits (before the task coroutine has a chance to
+        # complete), the task should still be held in _background_tasks.
+        assert len(download_listener._background_tasks) == 1
+
+        # Yield to the event loop twice: once for the task body to run, once more
+        # for the done callback to fire (AsyncMock needs two cycles to fully settle).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert len(download_listener._background_tasks) == 0
+
+
 # ---------------------------------------------------------------------------
 # Integration tests
 # ---------------------------------------------------------------------------

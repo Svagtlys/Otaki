@@ -2,6 +2,8 @@
 
 Unit tests (no Suwayomi required):
     - effective_priority returns source.priority
+    - build_chapter_source_map uses second result when first title does not match comic
+    - build_chapter_source_map returns {} when no result title matches comic
 
 Integration tests (require a live Suwayomi instance — skipped automatically if
 SUWAYOMI_URL is not configured in .env.test):

@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
@@ -37,13 +38,34 @@ interface ComicDetail {
 export default function Comic() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const comicId = parseInt(id ?? '0', 10)
+
+  const [discovering, setDiscovering] = useState(false)
+  const [discoverError, setDiscoverError] = useState<string | null>(null)
+  const [discoverResult, setDiscoverResult] = useState<string | null>(null)
 
   const { data: comic, isLoading, error } = useQuery({
     queryKey: ['comic', comicId],
     queryFn: () => apiFetch<ComicDetail>(`/api/requests/${comicId}`),
     enabled: comicId > 0,
   })
+
+  async function handleDiscover() {
+    setDiscovering(true)
+    setDiscoverError(null)
+    setDiscoverResult(null)
+    try {
+      const res = await apiFetch<{ new_chapters: number }>(`/api/requests/${comicId}/discover`, { method: 'POST' })
+      setDiscoverResult(res.new_chapters > 0 ? `Found ${res.new_chapters} new chapter(s) — downloads queued.` : 'No new chapters found.')
+      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
+      await queryClient.invalidateQueries({ queryKey: ['comics'] })
+    } catch (err) {
+      setDiscoverError(extractDetail(err))
+    } finally {
+      setDiscovering(false)
+    }
+  }
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
@@ -74,6 +96,21 @@ export default function Comic() {
               <p style={metaRowStyle}><span style={metaLabelStyle}>Last upgrade check</span>{formatRelative(comic.last_upgrade_check_at)}</p>
             </div>
           </div>
+
+          {/* Re-discover */}
+          {comic.chapters.length === 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <button
+                onClick={handleDiscover}
+                disabled={discovering}
+                style={{ ...primaryButtonStyle, opacity: discovering ? 0.6 : 1 }}
+              >
+                {discovering ? 'Searching sources…' : 'Re-discover chapters'}
+              </button>
+              {discoverResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{discoverResult}</p>}
+              {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
+            </div>
+          )}
 
           {/* Chapter table */}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -126,6 +163,16 @@ const metaLabelStyle: React.CSSProperties = {
   fontWeight: 600,
   marginRight: 8,
   color: '#444',
+}
+
+const primaryButtonStyle: React.CSSProperties = {
+  padding: '8px 16px',
+  fontSize: 14,
+  background: '#0070f3',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 4,
+  cursor: 'pointer',
 }
 
 const thStyle: React.CSSProperties = {

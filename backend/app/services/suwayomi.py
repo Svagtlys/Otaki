@@ -222,33 +222,42 @@ async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, st
                     yield (update["type"], str(chapter["id"]), chapter["name"], manga["title"], source_name)
 
 
-async def poll_downloads() -> list[tuple[str, str, str, str, str]]:
-    """Poll Suwayomi's REST endpoint for FINISHED and ERROR downloads.
+async def poll_downloads() -> list[dict]:
+    """Poll Suwayomi's downloadStatus GraphQL query for the current download queue.
 
-    Returns a list of (event_type, chapter_id, chapter_name, manga_title,
-    source_display_name) tuples.
+    Returns a list of dicts with keys: state, chapter_id, chapter_name,
+    manga_title, source_name for every item currently in the queue (any state).
+    Callers are responsible for interpreting state changes.
     """
-    url = f"{settings.SUWAYOMI_URL}/api/v1/downloads"
-    auth = None
-    if settings.SUWAYOMI_USERNAME and settings.SUWAYOMI_PASSWORD:
-        auth = (settings.SUWAYOMI_USERNAME, settings.SUWAYOMI_PASSWORD)
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.get(url, auth=auth)
-        response.raise_for_status()
-        data = response.json()
+    async with _make_client(
+        settings.SUWAYOMI_URL,
+        settings.SUWAYOMI_USERNAME,
+        settings.SUWAYOMI_PASSWORD,
+    ) as session:
+        result = await session.execute(
+            gql("""
+                {
+                    downloadStatus {
+                        queue {
+                            state
+                            chapter { id name }
+                            manga { title source { displayName } }
+                        }
+                    }
+                }
+            """)
+        )
 
-    results = []
-    for item in data:
-        state = item.get("state")
-        if state in ("FINISHED", "ERROR"):
-            chapter = item.get("chapter") or {}
-            manga = item.get("manga") or {}
-            source_name = (manga.get("source") or {}).get("displayName", "")
-            results.append((
-                state,
-                str(chapter.get("id", "")),
-                chapter.get("name", ""),
-                manga.get("title", ""),
-                source_name,
-            ))
-    return results
+    queue = []
+    for item in result["downloadStatus"]["queue"]:
+        chapter = item.get("chapter") or {}
+        manga = item.get("manga") or {}
+        source_name = (manga.get("source") or {}).get("displayName", "")
+        queue.append({
+            "state": item.get("state", ""),
+            "chapter_id": str(chapter.get("id", "")),
+            "chapter_name": chapter.get("name", ""),
+            "manga_title": manga.get("title", ""),
+            "source_name": source_name,
+        })
+    return queue

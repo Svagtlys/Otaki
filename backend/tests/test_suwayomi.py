@@ -71,6 +71,102 @@ async def test_ping_returns_false_on_connection_error():
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — poll_downloads()
+# ---------------------------------------------------------------------------
+
+
+async def test_poll_downloads_returns_all_queue_items():
+    """poll_downloads() returns all queue items regardless of state."""
+    mock_result = {
+        "downloadStatus": {
+            "queue": [
+                {
+                    "state": "FINISHED",
+                    "chapter": {"id": 1, "name": "Chapter 1"},
+                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                },
+                {
+                    "state": "ERROR",
+                    "chapter": {"id": 2, "name": "Chapter 2"},
+                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                },
+                {
+                    "state": "DOWNLOADING",
+                    "chapter": {"id": 3, "name": "Chapter 3"},
+                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                },
+                {
+                    "state": "QUEUED",
+                    "chapter": {"id": 4, "name": "Chapter 4"},
+                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                },
+            ]
+        }
+    }
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.services.suwayomi._make_client", return_value=mock_client):
+        results = await suwayomi.poll_downloads()
+
+    assert len(results) == 4
+    states = {r["state"] for r in results}
+    assert states == {"FINISHED", "ERROR", "DOWNLOADING", "QUEUED"}
+
+
+async def test_poll_downloads_returns_empty_when_queue_empty():
+    """poll_downloads() returns an empty list when the download queue is empty."""
+    mock_result = {"downloadStatus": {"queue": []}}
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.services.suwayomi._make_client", return_value=mock_client):
+        results = await suwayomi.poll_downloads()
+
+    assert results == []
+
+
+async def test_poll_downloads_maps_fields_correctly():
+    """poll_downloads() maps state, chapter id, name, manga title and source name correctly."""
+    mock_result = {
+        "downloadStatus": {
+            "queue": [
+                {
+                    "state": "DOWNLOADING",
+                    "chapter": {"id": 42, "name": "Episode 7"},
+                    "manga": {"title": "My Manga", "source": {"displayName": "Webtoons EN"}},
+                },
+            ]
+        }
+    }
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.services.suwayomi._make_client", return_value=mock_client):
+        results = await suwayomi.poll_downloads()
+
+    assert len(results) == 1
+    item = results[0]
+    assert item["state"] == "DOWNLOADING"
+    assert item["chapter_id"] == "42"
+    assert item["chapter_name"] == "Episode 7"
+    assert item["manga_title"] == "My Manga"
+    assert item["source_name"] == "Webtoons EN"
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — require live Suwayomi
 # ---------------------------------------------------------------------------
 

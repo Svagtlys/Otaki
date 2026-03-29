@@ -128,6 +128,23 @@ async def test_handle_unknown_chapter_id(handler_db, mock_relocator):
 
 
 @pytest.mark.asyncio
+async def test_handle_duplicate_finished_ignored(handler_db, mock_relocator):
+    """Duplicate FINISHED event for an already-done assignment is silently ignored."""
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a = _make_assignment(comic_id, source_id, chapter_id="ch-dup", is_active=True)
+        a.download_status = DownloadStatus.done
+        db.add(a)
+        await db.commit()
+
+    await chapter_event_handler.handle("FINISHED", "ch-dup", "Chapter 1", "Test Comic", "TestSrc")
+
+    mock_relocator.relocate.assert_not_called()
+    mock_relocator.replace_in_library.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handle_regular_download(handler_db, mock_relocator):
     """Regular first download: relocate() called, assignment marked done and active."""
     comic_id, source_id = await _seed_comic(handler_db)

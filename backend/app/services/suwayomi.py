@@ -27,9 +27,23 @@ def _make_client(url: str, username: str | None, password: str | None) -> Client
 
 
 async def ping(url: str, username: str | None, password: str | None) -> bool:
+    """Return True if Suwayomi is reachable with the given credentials.
+
+    Uses a raw httpx POST so we can inspect the HTTP status code directly.
+    Suwayomi allows introspection queries unauthenticated, so we must check for
+    a 401 response explicitly rather than relying on gql to raise.
+    """
     try:
-        async with _make_client(url, username, password) as session:
-            await session.execute(gql("{ __typename }"))
+        auth = (username, password) if username else None
+        async with httpx.AsyncClient(verify=False) as client:
+            r = await client.post(
+                f"{url}/api/graphql",
+                json={"query": "{ __typename }"},
+                auth=auth,
+            )
+        if r.status_code == 401:
+            return False
+        r.raise_for_status()
         return True
     except Exception as e:
         print(f"[ping] failed: {e!r}")

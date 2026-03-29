@@ -11,6 +11,7 @@ Optional — defaults to pytest tmp_path if omitted:
     SUWAYOMI_DOWNLOAD_PATH=/path/to/downloads
     LIBRARY_PATH=/path/to/library
 """
+import pytest
 
 
 async def test_non_setup_route_blocked_before_setup(client):
@@ -59,6 +60,17 @@ async def test_setup_flow(client, suwayomi_credentials, path_config):
 
 
 async def test_connect_bad_credentials(client, suwayomi_credentials):
+    import httpx
+
+    # Skip if this Suwayomi instance does not enforce Basic auth — when auth is
+    # disabled in Suwayomi's settings, all requests return 200 regardless of
+    # credentials, so there is nothing for Otaki to reject.
+    url = suwayomi_credentials["url"]
+    async with httpx.AsyncClient(verify=False) as probe:
+        r = await probe.post(f"{url}/api/graphql", json={"query": "{ __typename }"})
+    if r.status_code != 401:
+        pytest.skip("Suwayomi instance does not enforce Basic auth — skipping bad-credential test")
+
     bad = {**suwayomi_credentials, "password": "definitely-wrong-password-xxxxx"}
     r = await client.post("/api/setup/connect", json=bad)
     assert r.status_code == 400

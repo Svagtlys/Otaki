@@ -255,39 +255,56 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 **Response `200`**
 
 ```json
-[
-  {
-    "title": "One Piece",
-    "cover_url": "https://...",
-    "synopsis": "...",
-    "source_id": 1,
-    "source_name": "MangaDex",
-    "url": "https://source-url/manga/one-piece"
-  },
-  {
-    "title": "ワンピース",
-    "cover_url": "https://...",
-    "synopsis": "...",
-    "source_id": 2,
-    "source_name": "MangaPlus",
-    "url": "https://source2-url/manga/wan-piisu"
-  }
-]
+{
+  "results": [
+    {
+      "title": "One Piece",
+      "cover_url": "https://...",
+      "cover_display_url": "/api/search/thumbnail?url=...",
+      "synopsis": "...",
+      "source_id": 1,
+      "source_name": "MangaDex",
+      "url": "https://source-url/manga/one-piece"
+    },
+    {
+      "title": "ワンピース",
+      "cover_url": "https://...",
+      "cover_display_url": "/api/search/thumbnail?url=...",
+      "synopsis": "...",
+      "source_id": 2,
+      "source_name": "MangaPlus",
+      "url": "https://source2-url/manga/wan-piisu"
+    }
+  ],
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
+}
 ```
+
+`results` fields:
 
 | Field | Type | Notes |
 |---|---|---|
 | `title` | string | Title as returned by this source |
-| `cover_url` | string \| null | Cover image URL served by Suwayomi |
+| `cover_url` | string \| null | Absolute Suwayomi cover URL — submitted to `POST /api/requests` |
+| `cover_display_url` | string \| null | Proxied `/api/search/thumbnail?url=…` — used by `<img>` tags |
 | `synopsis` | string \| null | Short description, may be empty |
 | `source_id` | int | Otaki source ID |
 | `source_name` | string | Human-readable source label |
 | `url` | string | Source-specific manga URL, passed back when submitting a request |
 
+`source_errors` fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `source_name` | string | Name of the source that failed |
+| `reason` | string | Human-readable failure reason: `"connection timed out"`, `"connection refused or DNS failure"`, `"authentication failed (401)"`, `"unexpected HTTP <N>"`, or `"unexpected error"` |
+
 **Notes**
 - Fans out to all enabled sources in parallel; slow sources are waited on up to a timeout.
 - No deduplication — the frontend shows all results and lets the user select which ones represent the same series.
-- Returns an empty array `[]` if no results are found — never 404.
+- `results` is empty and `source_errors` is populated when all sources fail.
 - Does not require a `Comic` row to exist; this is purely a live Suwayomi query.
 
 ---
@@ -332,9 +349,14 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": null,
-  "created_at": "2025-03-15T09:00:00Z"
+  "created_at": "2025-03-15T09:00:00Z",
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
 }
 ```
+
+`source_errors` is an empty array on full success. A non-empty array means one or more sources could not be reached during chapter discovery — the comic was still created and chapters from reachable sources were enqueued. Call `POST /api/requests/{id}/discover` to retry failed sources.
 
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
@@ -435,6 +457,37 @@ Full detail for one comic: all chapter assignments with download and relocation 
 **Notes**
 - `chapters` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
 - `library_path` is `null` until relocation completes.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `POST /api/requests/{id}/discover`
+
+Re-run source discovery for a comic and queue any chapters not yet assigned. Safe to call at any time — only creates assignments for chapter numbers not already tracked with `is_active=True`. Intended for comics that ended up with 0 (or partial) assignments due to a connectivity failure at request time.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+{
+  "new_chapters": 3,
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `new_chapters` | int | Number of new `ChapterAssignment` rows created |
+| `source_errors` | array | Sources that could not be reached during this discovery run |
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.

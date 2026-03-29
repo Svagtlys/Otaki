@@ -306,6 +306,88 @@ async def test_requires_auth(auth_client):
 # ---------------------------------------------------------------------------
 
 
+async def test_discover_creates_missing_assignments(logged_in_client, monkeypatch):
+    """POST /{id}/discover creates assignments for chapters not yet tracked."""
+    from datetime import timezone
+    from app import database
+    from app.models.chapter_assignment import ChapterAssignment
+    from app.services import source_selector, suwayomi
+    from app.workers import scheduler
+
+    # Set up a source and a comic with no assignments
+    source = await _add_source(name="Src", suwayomi_source_id="src-disc", priority=1)
+    comic = await _add_comic(title="Disc Comic")
+
+    ch_data = {
+        "chapter_number": 1.0,
+        "volume_number": None,
+        "suwayomi_chapter_id": "disc-ch-1",
+        "chapter_published_at": datetime.now(timezone.utc),
+    }
+    monkeypatch.setattr(
+        source_selector,
+        "build_chapter_source_map",
+        AsyncMock(return_value={1.0: (source, "manga-disc", ch_data)}),
+    )
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
+    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: None)
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/discover")
+    assert r.status_code == 200
+    assert r.json()["new_chapters"] == 1
+
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChapterAssignment).where(ChapterAssignment.comic_id == comic.id)
+        )
+        assignments = result.scalars().all()
+    assert len(assignments) == 1
+    assert assignments[0].suwayomi_chapter_id == "disc-ch-1"
+
+
+async def test_discover_skips_existing_active_assignments(logged_in_client, monkeypatch):
+    """POST /{id}/discover does not duplicate chapters already tracked with is_active=True."""
+    from datetime import timezone
+    from app import database
+    from app.models.chapter_assignment import ChapterAssignment
+    from app.services import source_selector, suwayomi
+    from app.workers import scheduler
+
+    source = await _add_source(name="Src2", suwayomi_source_id="src-disc2", priority=1)
+    comic = await _add_comic(title="Disc Comic 2")
+    await _add_assignment(comic.id, source.id, chapter_number=1.0)
+
+    ch_data = {
+        "chapter_number": 1.0,
+        "volume_number": None,
+        "suwayomi_chapter_id": "disc-ch-new",
+        "chapter_published_at": datetime.now(timezone.utc),
+    }
+    monkeypatch.setattr(
+        source_selector,
+        "build_chapter_source_map",
+        AsyncMock(return_value={1.0: (source, "manga-disc2", ch_data)}),
+    )
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
+    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: None)
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/discover")
+    assert r.status_code == 200
+    assert r.json()["new_chapters"] == 0
+
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChapterAssignment).where(ChapterAssignment.comic_id == comic.id)
+        )
+        assignments = result.scalars().all()
+    assert len(assignments) == 1  # original only, no duplicate
+
+
+async def test_discover_returns_404_for_unknown_comic(logged_in_client):
+    r = await logged_in_client.post("/api/requests/99999/discover")
+    assert r.status_code == 404
+
+
 @pytest.mark.integration
 async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_title, monkeypatch):
     """POST with a real manga title; verify 201 and assignments have chapter IDs."""

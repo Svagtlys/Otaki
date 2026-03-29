@@ -53,6 +53,13 @@ async def handle(
             )
             return
 
+        if assignment.download_status == DownloadStatus.done:
+            logger.info(
+                "handle: chapter_id=%s already processed — ignoring duplicate FINISHED event",
+                suwayomi_chapter_id,
+            )
+            return
+
         assignment.download_status = DownloadStatus.done
         assignment.downloaded_at = datetime.now(UTC)
 

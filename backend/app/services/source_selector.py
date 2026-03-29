@@ -13,6 +13,15 @@ from . import suwayomi
 logger = logging.getLogger(__name__)
 
 
+def _find_matching_result(results: list[dict], titles: list[str]) -> dict | None:
+    """Return the first result whose title case-insensitively matches any entry in titles."""
+    lower_titles = {t.lower() for t in titles}
+    for result in results:
+        if result.get("title", "").lower() in lower_titles:
+            return result
+    return None
+
+
 async def effective_priority(source: Source, comic: Comic, db: AsyncSession) -> int:
     """Return the effective priority of a source for a given comic.
 
@@ -49,7 +58,13 @@ async def build_chapter_source_map(
             )
             if not search_results:
                 return []
-            manga_id = search_results[0]["manga_id"]
+            match = _find_matching_result(search_results, [comic.title])
+            if match is None:
+                logger.warning(
+                    "source %s: no title match for %r — skipping", source.name, comic.title
+                )
+                return []
+            manga_id = match["manga_id"]
             chapters = await suwayomi.fetch_chapters(manga_id)
             return [(source, manga_id, ch) for ch in chapters]
         except Exception as e:

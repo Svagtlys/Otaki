@@ -271,6 +271,73 @@ async def get_request(
     )
 
 
+class DiscoverResponse(BaseModel):
+    new_chapters: int
+
+
+@router.post("/{comic_id}/discover", response_model=DiscoverResponse)
+async def discover_chapters(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> DiscoverResponse:
+    """Re-run source discovery for a comic and queue any chapters not yet assigned.
+
+    Intended for comics that ended up with 0 assignments due to a connectivity
+    failure at request time. Safe to call at any time — only creates assignments
+    for chapter numbers not already tracked with is_active=True.
+    """
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    chapter_map = await source_selector.build_chapter_source_map(comic, db)
+
+    existing_result = await db.execute(
+        select(ChapterAssignment.chapter_number).where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(True),
+        )
+    )
+    existing_numbers = {row[0] for row in existing_result.all()}
+
+    new_entries = {
+        ch_num: (source, manga_id, ch_data)
+        for ch_num, (source, manga_id, ch_data) in chapter_map.items()
+        if ch_num not in existing_numbers
+    }
+
+    enqueue_by_manga: dict[str, list[str]] = {}
+    for ch_num, (source, manga_id, ch_data) in new_entries.items():
+        assignment = ChapterAssignment(
+            comic_id=comic_id,
+            chapter_number=ch_num,
+            volume_number=ch_data.get("volume_number"),
+            source_id=source.id,
+            suwayomi_manga_id=manga_id,
+            suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+            chapter_published_at=ch_data["chapter_published_at"],
+            download_status=DownloadStatus.queued,
+            is_active=True,
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(assignment)
+        enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+
+    for manga_id, chapter_ids in enqueue_by_manga.items():
+        try:
+            await suwayomi.enqueue_downloads(chapter_ids)
+        except Exception as exc:
+            log.warning(
+                "discover_chapters: enqueue_downloads failed for manga_id=%s: %r",
+                manga_id,
+                exc,
+            )
+
+    await db.commit()
+    return DiscoverResponse(new_chapters=len(new_entries))
+
+
 @router.get("/{comic_id}/cover")
 async def get_cover(
     comic_id: int,

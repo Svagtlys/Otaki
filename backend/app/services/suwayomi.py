@@ -10,6 +10,19 @@ from gql.transport.websockets import WebsocketsTransport
 from ..config import settings
 
 
+def classify_error(exc: Exception) -> str:
+    """Return a user-friendly reason string for a Suwayomi connectivity failure."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "connection timed out"
+    if isinstance(exc, httpx.ConnectError):
+        return "connection refused or DNS failure"
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 401:
+        return "authentication failed (401)"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"unexpected HTTP {exc.response.status_code}"
+    return "unexpected error"
+
+
 def _auth_headers() -> dict[str, str]:
     """Return HTTP Basic auth header if credentials are configured."""
     if settings.SUWAYOMI_USERNAME and settings.SUWAYOMI_PASSWORD:

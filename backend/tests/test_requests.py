@@ -84,7 +84,7 @@ async def _add_assignment(
 async def test_post_creates_comic(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post("/api/requests", json={"primary_title": "My Manga"})
@@ -104,7 +104,7 @@ async def test_post_creates_comic(logged_in_client, monkeypatch):
 async def test_post_default_library_title(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post("/api/requests", json={"primary_title": "Another Manga"})
@@ -115,7 +115,7 @@ async def test_post_default_library_title(logged_in_client, monkeypatch):
 async def test_post_duplicate_title_returns_409(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     await logged_in_client.post("/api/requests", json={"primary_title": "Dupe Comic"})
@@ -139,7 +139,7 @@ async def test_post_creates_assignments(logged_in_client, monkeypatch):
             "volume_number": None,
             "suwayomi_chapter_id": "ch-1",
             "chapter_published_at": published,
-        })}
+        })}, []
 
     monkeypatch.setattr(source_selector, "build_chapter_source_map", _fake_build_map)
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
@@ -165,7 +165,7 @@ async def test_post_registers_jobs(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
     from app.workers import scheduler
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     registered = []
@@ -180,7 +180,7 @@ async def test_post_registers_jobs(logged_in_client, monkeypatch):
 async def test_post_sets_next_poll_at(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     before = datetime.now(timezone.utc)
@@ -327,7 +327,7 @@ async def test_discover_creates_missing_assignments(logged_in_client, monkeypatc
     monkeypatch.setattr(
         source_selector,
         "build_chapter_source_map",
-        AsyncMock(return_value={1.0: (source, "manga-disc", ch_data)}),
+        AsyncMock(return_value=({1.0: (source, "manga-disc", ch_data)}, [])),
     )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
     monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: None)
@@ -366,7 +366,7 @@ async def test_discover_skips_existing_active_assignments(logged_in_client, monk
     monkeypatch.setattr(
         source_selector,
         "build_chapter_source_map",
-        AsyncMock(return_value={1.0: (source, "manga-disc2", ch_data)}),
+        AsyncMock(return_value=({1.0: (source, "manga-disc2", ch_data)}, [])),
     )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
     monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: None)

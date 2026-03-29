@@ -20,10 +20,18 @@ def _find_staging_path(
     exact = base / f"{chapter_name}.cbz"
     if exact.exists():
         return exact
-    # Fallback: OS may have sanitised the filename
+    # Fallback 1: only one CBZ in the directory
     matches = list(base.glob("*.cbz"))
     if len(matches) == 1:
         return matches[0]
+    # Fallback 2: source prefixes the chapter name (e.g. "Official_Episode 148.cbz"
+    # when Suwayomi reports the chapter as "Episode 148"). The pattern anchors to
+    # end-of-stem so "Episode 148" does not match "Episode 148.1" or "Episode 1480".
+    name_lower = chapter_name.lower()
+    pattern = re.compile(re.escape(name_lower) + r"(?:\.\d+)?\s*$")
+    containing = [m for m in matches if pattern.search(m.stem.lower())]
+    if len(containing) == 1:
+        return containing[0]
     log.warning(
         "file_relocator: ambiguous or missing staging file for chapter %r in %s",
         chapter_name,

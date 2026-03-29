@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import AsyncSessionLocal
@@ -41,9 +42,9 @@ async def handle(
     # FINISHED path
     async with AsyncSessionLocal() as db:
         assignment = await db.scalar(
-            select(ChapterAssignment).where(
-                ChapterAssignment.suwayomi_chapter_id == suwayomi_chapter_id
-            )
+            select(ChapterAssignment)
+            .where(ChapterAssignment.suwayomi_chapter_id == suwayomi_chapter_id)
+            .options(selectinload(ChapterAssignment.source))
         )
         if assignment is None:
             logger.warning(

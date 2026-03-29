@@ -39,10 +39,25 @@ async def test_dispatches_on_finished_event():
     """A single FINISHED tuple from the subscription is dispatched to handle()."""
     item = ("FINISHED", "42", "Chapter 1", "Test Manga", "TestSource")
 
+    call_count = 0
+
+    async def _subscribe_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield item
+        else:
+            raise asyncio.CancelledError()
+
     with (
         patch(
             "app.workers.download_listener.suwayomi.subscribe_download_changed",
-            return_value=_async_gen(item),
+            side_effect=_subscribe_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            return_value=[],
         ),
         patch(
             "app.workers.download_listener.chapter_event_handler.handle",
@@ -53,24 +68,8 @@ async def test_dispatches_on_finished_event():
         mock_settings.MAX_RECONNECT_ATTEMPTS = 5
         mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
 
-        # After the first generator drains, the listener loops and calls subscribe again.
-        # We let the second call raise CancelledError to exit the loop cleanly in tests.
-        call_count = 0
-
-        async def _subscribe_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                yield item
-            else:
-                raise asyncio.CancelledError()
-
-        with patch(
-            "app.workers.download_listener.suwayomi.subscribe_download_changed",
-            side_effect=_subscribe_side_effect,
-        ):
-            with pytest.raises(asyncio.CancelledError):
-                await download_listener.run()
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
 
         # Allow the created task to run.
         await asyncio.sleep(0)
@@ -84,7 +83,28 @@ async def test_ignores_non_finished_states():
     # so this test confirms the listener forwards everything it receives and
     # that the subscription itself filters (no items yielded = no handle calls).
 
+    call_count = 0
+
+    async def _empty_then_cancel():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Yield nothing — simulate subscription with no FINISHED events
+            return
+            yield  # noqa: unreachable — makes this an async generator
+        else:
+            raise asyncio.CancelledError()
+
     with (
+        patch(
+            "app.workers.download_listener.suwayomi.subscribe_download_changed",
+            side_effect=_empty_then_cancel,
+        ),
+        patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
         patch(
             "app.workers.download_listener.chapter_event_handler.handle",
             new_callable=AsyncMock,
@@ -94,24 +114,8 @@ async def test_ignores_non_finished_states():
         mock_settings.MAX_RECONNECT_ATTEMPTS = 5
         mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
 
-        call_count = 0
-
-        async def _empty_then_cancel():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                # Yield nothing — simulate subscription with no FINISHED events
-                return
-                yield  # noqa: unreachable — makes this an async generator
-            else:
-                raise asyncio.CancelledError()
-
-        with patch(
-            "app.workers.download_listener.suwayomi.subscribe_download_changed",
-            side_effect=_empty_then_cancel,
-        ):
-            with pytest.raises(asyncio.CancelledError):
-                await download_listener.run()
+        with pytest.raises(asyncio.CancelledError):
+            await download_listener.run()
 
         mock_handle.assert_not_called()
 
@@ -139,6 +143,11 @@ async def test_retries_with_backoff():
             side_effect=_fail_then_yield,
         ),
         patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
             "app.workers.download_listener.chapter_event_handler.handle",
             new_callable=AsyncMock,
         ),
@@ -157,18 +166,21 @@ async def test_retries_with_backoff():
 
 @pytest.mark.asyncio
 async def test_switches_to_polling_after_max_retries():
-    """After MAX_RECONNECT_ATTEMPTS consecutive failures, poll_downloads is called."""
+    """After MAX_RECONNECT_ATTEMPTS consecutive failures, poll_downloads is called in polling mode."""
     max_attempts = 3
+    poll_call_count = 0
 
     async def _always_fail():
         raise ConnectionError("refused")
         yield  # make it an async generator
 
-    poll_called = asyncio.Event()
-
     async def _mock_poll():
-        poll_called.set()
-        # Raise to prevent infinite polling loop in test
+        nonlocal poll_call_count
+        poll_call_count += 1
+        if poll_call_count == 1:
+            # Seed call at startup — return empty list
+            return []
+        # Polling fallback call — raise to exit cleanly
         raise asyncio.CancelledError()
 
     with (
@@ -180,7 +192,7 @@ async def test_switches_to_polling_after_max_retries():
             "app.workers.download_listener.suwayomi.poll_downloads",
             new_callable=AsyncMock,
             side_effect=_mock_poll,
-        ) as mock_poll,
+        ),
         patch("app.workers.download_listener.asyncio.sleep", new_callable=AsyncMock),
         patch("app.workers.download_listener.settings") as mock_settings,
     ):
@@ -190,13 +202,25 @@ async def test_switches_to_polling_after_max_retries():
         with pytest.raises(asyncio.CancelledError):
             await download_listener.run()
 
-    mock_poll.assert_called_once()
+    # poll_downloads called once for seed + once when polling fallback is reached
+    assert poll_call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_resumes_subscription_after_poll_success():
-    """After a successful poll, the listener switches back to subscription mode."""
-    poll_item = ("FINISHED", "99", "Chapter 99", "Some Manga", "SomeSrc")
+    """After a successful poll, the listener switches back to subscription mode.
+
+    The poll detects a chapter that disappeared (was in the seed snapshot but
+    absent from the polling-mode poll) and dispatches FINISHED for it.
+    """
+    # Item present in the seed snapshot — represents an in-progress download
+    seed_item = {
+        "state": "DOWNLOADING",
+        "chapter_id": "99",
+        "chapter_name": "Chapter 99",
+        "manga_title": "Some Manga",
+        "source_name": "SomeSrc",
+    }
     max_attempts = 2
 
     fail_count = 0
@@ -209,10 +233,14 @@ async def test_resumes_subscription_after_poll_success():
 
     poll_call_count = 0
 
-    async def _poll_then_raise():
+    async def _poll_side_effect():
         nonlocal poll_call_count
         poll_call_count += 1
-        return [poll_item]
+        if poll_call_count == 1:
+            # Seed call — item is still in queue (downloading)
+            return [seed_item]
+        # Polling fallback call — item has disappeared (completed)
+        return []
 
     sub_call_count_after_poll = 0
 
@@ -241,7 +269,7 @@ async def test_resumes_subscription_after_poll_success():
         patch(
             "app.workers.download_listener.suwayomi.poll_downloads",
             new_callable=AsyncMock,
-            side_effect=_poll_then_raise,
+            side_effect=_poll_side_effect,
         ),
         patch(
             "app.workers.download_listener.chapter_event_handler.handle",
@@ -256,9 +284,9 @@ async def test_resumes_subscription_after_poll_success():
         with pytest.raises(asyncio.CancelledError):
             await download_listener.run()
 
-    # Poll ran once and dispatched the poll item.
+    # Item disappeared between seed and polling → FINISHED dispatched
     await asyncio.sleep(0)
-    mock_handle.assert_any_call(*poll_item)
+    mock_handle.assert_any_call("FINISHED", "99", "Chapter 99", "Some Manga", "SomeSrc")
     # Subscription was re-attempted after the poll succeeded.
     assert sub_call_count_after_poll >= 1
 
@@ -282,6 +310,11 @@ async def test_dispatches_error_event():
         patch(
             "app.workers.download_listener.suwayomi.subscribe_download_changed",
             side_effect=_subscribe_side_effect,
+        ),
+        patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            return_value=[],
         ),
         patch(
             "app.workers.download_listener.chapter_event_handler.handle",
@@ -320,6 +353,11 @@ async def test_background_tasks_set_holds_then_releases_task():
             side_effect=_subscribe_side_effect,
         ),
         patch(
+            "app.workers.download_listener.suwayomi.poll_downloads",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
             "app.workers.download_listener.chapter_event_handler.handle",
             new_callable=AsyncMock,
         ),
@@ -352,13 +390,20 @@ async def test_polling_path_tracks_background_tasks():
     """Tasks dispatched via the polling fallback are tracked in _background_tasks.
 
     Drives the listener into polling mode by exhausting MAX_RECONNECT_ATTEMPTS with
-    subscription failures, then has poll_downloads return one item. The subsequent
-    subscription attempt raises CancelledError to exit the loop. After run() raises,
-    the task created by the polling dispatch must be held in _background_tasks.
+    subscription failures. The seed poll returns one item; the polling-mode poll
+    returns an empty list — the item's disappearance triggers a FINISHED dispatch.
+    The subsequent subscription attempt raises CancelledError to exit the loop.
+    After run() raises, the task created by the polling dispatch must be in _background_tasks.
     """
     assert len(download_listener._background_tasks) == 0, "leaked tasks from a previous test"
 
-    poll_item = ("FINISHED", "88", "Chapter 88", "Poll Manga", "PollSource")
+    seed_item = {
+        "state": "DOWNLOADING",
+        "chapter_id": "88",
+        "chapter_name": "Chapter 88",
+        "manga_title": "Poll Manga",
+        "source_name": "PollSource",
+    }
     max_attempts = 2
 
     async def _always_fail_subscription():
@@ -367,10 +412,14 @@ async def test_polling_path_tracks_background_tasks():
 
     poll_call_count = 0
 
-    async def _poll_one_item():
+    async def _poll_side_effect():
         nonlocal poll_call_count
         poll_call_count += 1
-        return [poll_item]
+        if poll_call_count == 1:
+            # Seed call — item is in queue
+            return [seed_item]
+        # Polling fallback call — item has disappeared → triggers FINISHED dispatch
+        return []
 
     # After the poll succeeds the listener switches back to subscription mode.
     # Raise CancelledError on the next subscription attempt to exit cleanly.
@@ -396,7 +445,7 @@ async def test_polling_path_tracks_background_tasks():
         patch(
             "app.workers.download_listener.suwayomi.poll_downloads",
             new_callable=AsyncMock,
-            side_effect=_poll_one_item,
+            side_effect=_poll_side_effect,
         ),
         patch(
             "app.workers.download_listener.chapter_event_handler.handle",
@@ -421,6 +470,115 @@ async def test_polling_path_tracks_background_tasks():
         pending = list(download_listener._background_tasks)
         await asyncio.gather(*pending, return_exceptions=True)
         assert len(download_listener._background_tasks) == 0
+
+
+# ---------------------------------------------------------------------------
+# _seed_poll and _process_poll_result unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_seed_poll_populates_polled_items():
+    """_seed_poll() seeds _polled_items from the current download queue."""
+    item = {
+        "state": "DOWNLOADING",
+        "chapter_id": "11",
+        "chapter_name": "Ch 11",
+        "manga_title": "Manga",
+        "source_name": "Src",
+    }
+    download_listener._polled_items = {}
+    download_listener._emitted_error_ids = set()
+
+    with patch(
+        "app.workers.download_listener.suwayomi.poll_downloads",
+        new_callable=AsyncMock,
+        return_value=[item],
+    ):
+        await download_listener._seed_poll()
+
+    assert "11" in download_listener._polled_items
+    assert download_listener._polled_items["11"]["chapter_name"] == "Ch 11"
+
+
+@pytest.mark.asyncio
+async def test_process_poll_dispatches_finished_on_disappearance():
+    """FINISHED is dispatched when an item disappears from the queue."""
+    item = {
+        "state": "DOWNLOADING",
+        "chapter_id": "33",
+        "chapter_name": "Chapter 33",
+        "manga_title": "My Manga",
+        "source_name": "Src",
+    }
+    download_listener._polled_items = {"33": item}
+    download_listener._emitted_error_ids = set()
+
+    with patch(
+        "app.workers.download_listener.chapter_event_handler.handle",
+        new_callable=AsyncMock,
+    ) as mock_handle:
+        download_listener._process_poll_result([])  # item disappeared
+        await asyncio.sleep(0)
+        mock_handle.assert_awaited_once_with("FINISHED", "33", "Chapter 33", "My Manga", "Src")
+
+
+@pytest.mark.asyncio
+async def test_process_poll_dispatches_error_state_once():
+    """ERROR is dispatched when an item has ERROR state, and only once (deduped)."""
+    item = {
+        "state": "ERROR",
+        "chapter_id": "44",
+        "chapter_name": "Chapter 44",
+        "manga_title": "Manga",
+        "source_name": "Src",
+    }
+    download_listener._polled_items = {}
+    download_listener._emitted_error_ids = set()
+
+    with patch(
+        "app.workers.download_listener.chapter_event_handler.handle",
+        new_callable=AsyncMock,
+    ) as mock_handle:
+        download_listener._process_poll_result([item])
+        await asyncio.sleep(0)
+        mock_handle.assert_awaited_once_with("ERROR", "44", "Chapter 44", "Manga", "Src")
+
+        # Second poll — same item still in ERROR state — no new dispatch
+        mock_handle.reset_mock()
+        download_listener._process_poll_result([item])
+        await asyncio.sleep(0)
+        mock_handle.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_poll_no_finished_for_error_items():
+    """When an ERROR item disappears, FINISHED is not dispatched for it."""
+    item = {
+        "state": "ERROR",
+        "chapter_id": "55",
+        "chapter_name": "Chapter 55",
+        "manga_title": "Manga",
+        "source_name": "Src",
+    }
+    download_listener._polled_items = {}
+    download_listener._emitted_error_ids = set()
+
+    with patch(
+        "app.workers.download_listener.chapter_event_handler.handle",
+        new_callable=AsyncMock,
+    ) as mock_handle:
+        # First: ERROR item appears → dispatch ERROR
+        download_listener._process_poll_result([item])
+        await asyncio.sleep(0)
+        assert mock_handle.call_count == 1
+        assert mock_handle.call_args.args[0] == "ERROR"
+
+        # Item disappears → should NOT dispatch FINISHED
+        mock_handle.reset_mock()
+        download_listener._process_poll_result([])
+        await asyncio.sleep(0)
+        mock_handle.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

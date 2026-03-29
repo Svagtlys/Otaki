@@ -75,8 +75,8 @@ async def test_ping_returns_false_on_connection_error():
 # ---------------------------------------------------------------------------
 
 
-async def test_poll_downloads_returns_finished_and_error():
-    """poll_downloads() returns only FINISHED and ERROR queue items."""
+async def test_poll_downloads_returns_all_queue_items():
+    """poll_downloads() returns all queue items regardless of state."""
     mock_result = {
         "downloadStatus": {
             "queue": [
@@ -113,12 +113,9 @@ async def test_poll_downloads_returns_finished_and_error():
     with patch("app.services.suwayomi._make_client", return_value=mock_client):
         results = await suwayomi.poll_downloads()
 
-    assert len(results) == 2
-    states = [r[0] for r in results]
-    assert "FINISHED" in states
-    assert "ERROR" in states
-    assert "DOWNLOADING" not in states
-    assert "QUEUED" not in states
+    assert len(results) == 4
+    states = {r["state"] for r in results}
+    assert states == {"FINISHED", "ERROR", "DOWNLOADING", "QUEUED"}
 
 
 async def test_poll_downloads_returns_empty_when_queue_empty():
@@ -138,12 +135,12 @@ async def test_poll_downloads_returns_empty_when_queue_empty():
 
 
 async def test_poll_downloads_maps_fields_correctly():
-    """poll_downloads() maps chapter id, name, manga title and source name correctly."""
+    """poll_downloads() maps state, chapter id, name, manga title and source name correctly."""
     mock_result = {
         "downloadStatus": {
             "queue": [
                 {
-                    "state": "FINISHED",
+                    "state": "DOWNLOADING",
                     "chapter": {"id": 42, "name": "Episode 7"},
                     "manga": {"title": "My Manga", "source": {"displayName": "Webtoons EN"}},
                 },
@@ -161,12 +158,12 @@ async def test_poll_downloads_maps_fields_correctly():
         results = await suwayomi.poll_downloads()
 
     assert len(results) == 1
-    event_type, chapter_id, chapter_name, manga_title, source_name = results[0]
-    assert event_type == "FINISHED"
-    assert chapter_id == "42"
-    assert chapter_name == "Episode 7"
-    assert manga_title == "My Manga"
-    assert source_name == "Webtoons EN"
+    item = results[0]
+    assert item["state"] == "DOWNLOADING"
+    assert item["chapter_id"] == "42"
+    assert item["chapter_name"] == "Episode 7"
+    assert item["manga_title"] == "My Manga"
+    assert item["source_name"] == "Webtoons EN"
 
 
 # ---------------------------------------------------------------------------

@@ -306,7 +306,7 @@ Implemented:
 - `fetch_chapters(manga_id)` → `list[{chapter_number, volume_number, suwayomi_chapter_id, chapter_published_at}]` — fetches all chapters for a manga from Suwayomi. `uploadDate` is a ms-epoch string; converted to `datetime` (UTC). `volume_number` is always `None` (not exposed by Suwayomi's chapter API).
 - `enqueue_downloads(chapter_ids)` → void — enqueues a list of chapter IDs for download via `enqueueChapterDownloads` mutation.
 - `subscribe_download_changed()` → async generator of `(event_type, chapter_id, chapter_name, manga_title, source_display_name)` tuples — maintains a `graphql-transport-ws` WebSocket subscription to Suwayomi's `downloadStatusChanged(input: DownloadChangedInput!)` subscription. Yields one tuple per `FINISHED` or `ERROR` event (checked via `DownloadUpdate.type`). On the first event, also yields any entries in the `initial` field with `state` of `FINISHED` or `ERROR`.
-- `poll_downloads()` → `list[tuple]` — REST fallback used when the WebSocket subscription is unavailable. Polls `GET /api/v1/downloads` and returns the same 5-tuple format as `subscribe_download_changed`.
+- `poll_downloads()` → `list[dict]` — GraphQL fallback used when the WebSocket subscription is unavailable. Queries `downloadStatus { queue { state chapter { id name } manga { title source { displayName } } } }` and returns all queue items as `{state, chapter_id, chapter_name, manga_title, source_name}` dicts. Callers infer FINISHED/ERROR events by diffing snapshots — items that disappear from the queue are assumed complete.
 
 Not yet implemented:
 - `add_to_library(source_id, manga_url)` → Suwayomi manga ID (deferred — not required for download flow)
@@ -397,8 +397,9 @@ Internal:
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` or `ERROR` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.
 
 State machine:
+- **Startup**: calls `_seed_poll()` once to snapshot the current Suwayomi download queue into `_polled_items`. This ensures polling mode can detect completions even for chapters that were in-flight before the first WebSocket connection.
 - **SUBSCRIPTION mode** (default): connect via `subscribe_download_changed()`; on error, retry with exponential backoff (2s, 4s, 8s… capped at 30s). After `MAX_RECONNECT_ATTEMPTS` consecutive failures, switch to POLLING mode.
-- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. On first success, switch back to SUBSCRIPTION mode.
+- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. Compares the current queue snapshot against `_polled_items`: items that disappeared are dispatched as FINISHED; items with state ERROR are dispatched as ERROR (once, deduplicated). On first successful poll, switch back to SUBSCRIPTION mode.
 
 Started by `main.py` lifespan as `asyncio.create_task(download_listener.run())` and cancelled on shutdown. Runs for the lifetime of the process regardless of whether Otaki has active downloads — unrecognised chapter IDs (downloads not initiated by Otaki) are silently ignored in `chapter_event_handler`.
 

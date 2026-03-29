@@ -1,16 +1,81 @@
-"""Integration tests for services/suwayomi.py against a live Suwayomi instance.
+"""Tests for services/suwayomi.py.
 
-All tests are marked `integration` and skipped unless SUWAYOMI_URL is set in
-.env.test. They verify that the service functions return well-formed responses —
-scheduler and other callers rely on this contract.
+Unit tests (no Suwayomi required):
+    - ping() returns False when server responds with HTTP 401
+    - ping() returns True when server responds with HTTP 200
+    - ping() returns False when connection fails
+
+Integration tests (require a live Suwayomi instance — skipped unless
+SUWAYOMI_URL is set in .env.test):
+    - ping() returns True for a reachable instance
+    - list_sources(), search_source(), fetch_chapters(), enqueue_downloads()
 """
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
 import pytest
 
 from app.services import suwayomi
 
-pytestmark = pytest.mark.integration
+
+# ---------------------------------------------------------------------------
+# Unit tests — ping()
+# ---------------------------------------------------------------------------
 
 
+async def test_ping_returns_false_on_401():
+    """ping() must return False when Suwayomi responds with HTTP 401."""
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch("app.services.suwayomi.httpx.AsyncClient", return_value=mock_client):
+        result = await suwayomi.ping("http://suwayomi", "user", "wrong-password")
+
+    assert result is False
+
+
+async def test_ping_returns_true_on_200():
+    """ping() must return True when Suwayomi responds with HTTP 200."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch("app.services.suwayomi.httpx.AsyncClient", return_value=mock_client):
+        result = await suwayomi.ping("http://suwayomi", "user", "correct-password")
+
+    assert result is True
+
+
+async def test_ping_returns_false_on_connection_error():
+    """ping() must return False when the server is unreachable."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    with patch("app.services.suwayomi.httpx.AsyncClient", return_value=mock_client):
+        result = await suwayomi.ping("http://unreachable", "user", "pass")
+
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — require live Suwayomi
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_ping(suwayomi_settings):
     """ping() returns True for a reachable instance."""
@@ -24,6 +89,7 @@ async def test_ping(suwayomi_settings):
     assert result is True
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_sources_returns_sources(suwayomi_settings):
     """list_sources() returns at least one source with expected fields."""
@@ -43,6 +109,7 @@ def _first_online_source(sources: list[dict]) -> dict:
     return online[0]
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_search_source_returns_results(suwayomi_settings, test_manga_title):
     """search_source() returns manga results with expected fields.
@@ -64,6 +131,7 @@ async def test_search_source_returns_results(suwayomi_settings, test_manga_title
     assert "title" in first
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_fetch_chapters_returns_chapters(suwayomi_settings, test_manga_title):
     """fetch_chapters() returns chapters with expected fields.
@@ -91,6 +159,7 @@ async def test_fetch_chapters_returns_chapters(suwayomi_settings, test_manga_tit
     assert isinstance(first["suwayomi_chapter_id"], str)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_enqueue_downloads_does_not_raise(suwayomi_settings, test_manga_title):
     """enqueue_downloads() accepts a valid chapter ID without raising.

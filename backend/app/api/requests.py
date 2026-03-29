@@ -106,6 +106,47 @@ def _chapter_summary(a: ChapterAssignment) -> ChapterSummary:
     )
 
 
+async def _create_assignments_and_enqueue(
+    comic_id: int,
+    chapter_map: dict,
+    db: AsyncSession,
+    caller: str,
+) -> int:
+    """Create ChapterAssignment rows for every entry in *chapter_map* and enqueue downloads.
+
+    Returns the number of assignments created.
+    """
+    enqueue_by_manga: dict[str, list[str]] = {}
+    for ch_num, (source, manga_id, ch_data) in chapter_map.items():
+        assignment = ChapterAssignment(
+            comic_id=comic_id,
+            chapter_number=ch_num,
+            volume_number=ch_data.get("volume_number"),
+            source_id=source.id,
+            suwayomi_manga_id=manga_id,
+            suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+            chapter_published_at=ch_data["chapter_published_at"],
+            download_status=DownloadStatus.queued,
+            is_active=True,
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(assignment)
+        enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+
+    for manga_id, chapter_ids in enqueue_by_manga.items():
+        try:
+            await suwayomi.enqueue_downloads(chapter_ids)
+        except Exception as exc:
+            log.warning(
+                "%s: enqueue_downloads failed for manga_id=%s: %r",
+                caller,
+                manga_id,
+                exc,
+            )
+
+    return len(chapter_map)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -137,39 +178,11 @@ async def create_request(
     db.add(comic)
     await db.flush()
 
-    # 3. Build per-chapter source map
+    # 3. Build per-chapter source map and create assignments
     chapter_map = await source_selector.build_chapter_source_map(comic, db)
+    await _create_assignments_and_enqueue(comic.id, chapter_map, db, "create_request")
 
-    # 4. Create assignments and enqueue downloads directly from the source map
-    enqueue_by_manga: dict[str, list[str]] = {}
-    for ch_num, (source, manga_id, ch_data) in chapter_map.items():
-        assignment = ChapterAssignment(
-            comic_id=comic.id,
-            chapter_number=ch_num,
-            volume_number=ch_data.get("volume_number"),
-            source_id=source.id,
-            suwayomi_manga_id=manga_id,
-            suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
-            chapter_published_at=ch_data["chapter_published_at"],
-            download_status=DownloadStatus.queued,
-            is_active=True,
-            relocation_status=RelocationStatus.pending,
-        )
-        db.add(assignment)
-        enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
-
-    # 5. Enqueue downloads batched by manga_id
-    for manga_id, chapter_ids in enqueue_by_manga.items():
-        try:
-            await suwayomi.enqueue_downloads(chapter_ids)
-        except Exception as exc:
-            log.warning(
-                "create_request: enqueue_downloads failed for manga_id=%s: %r",
-                manga_id,
-                exc,
-            )
-
-    # 6. Set next poll/upgrade times
+    # 4. Set next poll/upgrade times
     now = datetime.now(timezone.utc)
     comic.next_poll_at = now + timedelta(days=poll_days)
     comic.next_upgrade_check_at = now + timedelta(days=upgrade_days or poll_days)
@@ -269,6 +282,49 @@ async def get_request(
         **ComicResponse.model_validate(comic).model_dump(),
         chapters=[_chapter_summary(a) for a in assignments],
     )
+
+
+class DiscoverResponse(BaseModel):
+    new_chapters: int
+
+
+@router.post("/{comic_id}/discover", response_model=DiscoverResponse)
+async def discover_chapters(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> DiscoverResponse:
+    """Re-run source discovery for a comic and queue any chapters not yet assigned.
+
+    Intended for comics that ended up with 0 assignments due to a connectivity
+    failure at request time. Safe to call at any time — only creates assignments
+    for chapter numbers not already tracked with is_active=True.
+    """
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    chapter_map = await source_selector.build_chapter_source_map(comic, db)
+
+    existing_result = await db.execute(
+        select(ChapterAssignment.chapter_number).where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(True),
+        )
+    )
+    existing_numbers = {row[0] for row in existing_result.all()}
+
+    new_entries = {
+        ch_num: entry
+        for ch_num, entry in chapter_map.items()
+        if ch_num not in existing_numbers
+    }
+
+    new_count = await _create_assignments_and_enqueue(
+        comic_id, new_entries, db, "discover_chapters"
+    )
+    await db.commit()
+    return DiscoverResponse(new_chapters=new_count)
 
 
 @router.get("/{comic_id}/cover")

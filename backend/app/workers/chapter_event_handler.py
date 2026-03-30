@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import AsyncSessionLocal
-from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
+from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from ..models.comic import Comic
 from ..services import file_relocator, suwayomi
 from . import scheduler as scheduler_module
@@ -75,32 +75,51 @@ async def handle(
             )
         )
 
-        if existing_active is None:
-            # Regular first download — relocate and mark active.
-            await file_relocator.relocate(
-                assignment,
-                comic,
-                db,
-                chapter_name=chapter_name,
-                manga_title=manga_title,
-                source_display_name=source_display_name,
+        try:
+            if existing_active is None:
+                # Regular first download — relocate and mark active.
+                await file_relocator.relocate(
+                    assignment,
+                    comic,
+                    db,
+                    chapter_name=chapter_name,
+                    manga_title=manga_title,
+                    source_display_name=source_display_name,
+                )
+                assignment.is_active = True
+            else:
+                # Upgrade download — always swap for 1.0 (no quality condition until
+                # quality_scanner is added in 1.4; a higher-priority source is
+                # unconditionally better).
+                await file_relocator.replace_in_library(
+                    existing_active,
+                    assignment,
+                    comic,
+                    db,
+                    chapter_name=chapter_name,
+                    manga_title=manga_title,
+                    source_display_name=source_display_name,
+                )
+                existing_active.is_active = False
+                assignment.is_active = True
+        except Exception:
+            logger.exception(
+                "handle: relocation raised for chapter_id=%s comic=%r chapter=%s — "
+                "assignment left in download_status=done, relocation_status=%s",
+                suwayomi_chapter_id,
+                comic.title if comic else "unknown",
+                chapter_name,
+                assignment.relocation_status,
             )
-            assignment.is_active = True
-        else:
-            # Upgrade download — always swap for 1.0 (no quality condition until
-            # quality_scanner is added in 1.4; a higher-priority source is
-            # unconditionally better).
-            await file_relocator.replace_in_library(
-                existing_active,
-                assignment,
-                comic,
-                db,
-                chapter_name=chapter_name,
-                manga_title=manga_title,
-                source_display_name=source_display_name,
+
+        if assignment.relocation_status == RelocationStatus.failed:
+            logger.warning(
+                "handle: relocation failed for chapter_id=%s comic=%r chapter=%s "
+                "(staging file not found or path error)",
+                suwayomi_chapter_id,
+                comic.title if comic else "unknown",
+                chapter_name,
             )
-            existing_active.is_active = False
-            assignment.is_active = True
 
         await db.commit()
 

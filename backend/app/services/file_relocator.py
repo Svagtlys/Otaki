@@ -184,11 +184,20 @@ async def relocate(
     manga_title: str,
     source_display_name: str,
 ) -> None:
+    log.info(
+        "relocate: starting for comic=%r chapter=%r source=%r",
+        manga_title, chapter_name, source_display_name,
+    )
     staging = _find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
+        log.warning(
+            "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
+            manga_title, chapter_name, source_display_name,
+        )
         assignment.relocation_status = RelocationStatus.failed
         return
 
+    log.info("relocate: staging path resolved to %s", staging)
     staging = _normalize_to_folder(staging)
     comicinfo_writer.write(staging, comic, assignment)
     cover_handler.inject(staging, comic)
@@ -197,10 +206,12 @@ async def relocate(
     dest = resolve_path(assignment, comic)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    log.info("relocate: placing %s -> %s", staging, dest)
     _place_file(staging, dest)
 
     assignment.library_path = str(dest)
     assignment.relocation_status = RelocationStatus.done
+    log.info("relocate: done for comic=%r chapter=%r -> %s", manga_title, chapter_name, dest)
 
 
 async def replace_in_library(
@@ -212,11 +223,20 @@ async def replace_in_library(
     manga_title: str,
     source_display_name: str,
 ) -> None:
+    log.info(
+        "replace_in_library: starting upgrade for comic=%r chapter=%r source=%r",
+        manga_title, chapter_name, source_display_name,
+    )
     staging = _find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
+        log.warning(
+            "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",
+            manga_title, chapter_name, source_display_name,
+        )
         new.relocation_status = RelocationStatus.failed
         return
 
+    log.info("replace_in_library: staging path resolved to %s", staging)
     staging = _normalize_to_folder(staging)
     comicinfo_writer.write(staging, comic, new)
     cover_handler.inject(staging, comic)

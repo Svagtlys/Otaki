@@ -1,9 +1,23 @@
 import asyncio
 import contextlib
+import logging
 import jwt
 from contextlib import asynccontextmanager
 
+# Configure app logging before any module-level loggers are created.
+# Uses force=True so this wins even if uvicorn's dictConfig runs first.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s",
+    force=True,
+)
+# Keep SQLAlchemy and gql quiet — they're very verbose at INFO.
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+logging.getLogger("gql").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from fastapi import FastAPI
+
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 

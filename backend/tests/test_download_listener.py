@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import os
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -579,6 +580,108 @@ async def test_process_poll_no_finished_for_error_items():
         download_listener._process_poll_result([])
         await asyncio.sleep(0)
         mock_handle.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# reconcile_on_startup unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_assignment(chapter_id: str, status: str, chapter_name: str = "Ch 1", manga_title: str = "Manga") -> MagicMock:
+    a = MagicMock()
+    a.suwayomi_chapter_id = chapter_id
+    a.download_status = status
+    a.source_chapter_name = chapter_name
+    a.source_manga_title = manga_title
+    a.source = MagicMock()
+    a.source.name = "TestSource"
+    return a
+
+
+@pytest.mark.asyncio
+async def test_reconcile_dispatches_finished_for_absent_chapters():
+    """FINISHED is dispatched for DB in-flight chapters not in the current Suwayomi queue."""
+    assignment = _make_assignment("ch-99", "queued", "Chapter 99", "Some Manga")
+
+    download_listener._polled_items = {}  # chapter-99 not in current queue
+
+    with (
+        patch("app.database.AsyncSessionLocal") as mock_session_cls,
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+    ):
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [assignment]
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_session_cls.return_value = mock_db
+
+        await download_listener.reconcile_on_startup()
+        await asyncio.sleep(0)
+
+    mock_handle.assert_awaited_once_with(
+        "FINISHED", "ch-99", "Chapter 99", "Some Manga", "TestSource"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_chapters_still_in_queue():
+    """Chapters still present in the Suwayomi queue are not dispatched."""
+    assignment = _make_assignment("ch-77", "downloading")
+
+    download_listener._polled_items = {
+        "ch-77": {"chapter_id": "ch-77", "state": "DOWNLOADING"}
+    }
+
+    with (
+        patch("app.database.AsyncSessionLocal") as mock_session_cls,
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+    ):
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [assignment]
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_session_cls.return_value = mock_db
+
+        await download_listener.reconcile_on_startup()
+        await asyncio.sleep(0)
+
+    mock_handle.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_no_op_when_no_in_flight_chapters():
+    """reconcile_on_startup does nothing when no in-flight chapters exist in the DB."""
+    download_listener._polled_items = {}
+
+    with (
+        patch("app.database.AsyncSessionLocal") as mock_session_cls,
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+    ):
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_session_cls.return_value = mock_db
+
+        await download_listener.reconcile_on_startup()
+        await asyncio.sleep(0)
+
+    mock_handle.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -87,6 +87,63 @@ async def _seed_poll() -> None:
         _polled_items = {}
 
 
+async def reconcile_on_startup() -> None:
+    """Dispatch FINISHED events for chapters that completed while the backend was down.
+
+    Queries the DB for assignments still in 'queued' or 'downloading' status and
+    cross-references them against the current Suwayomi queue snapshot in
+    ``_polled_items`` (populated by ``_seed_poll()``). Any assignment absent from
+    the current queue is assumed to have finished and gets a FINISHED event
+    dispatched. The idempotency guard in chapter_event_handler.handle() silently
+    no-ops for chapters that were already processed before the restart.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from ..database import AsyncSessionLocal
+    from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChapterAssignment)
+            .where(
+                ChapterAssignment.download_status.in_(
+                    [DownloadStatus.queued, DownloadStatus.downloading]
+                )
+            )
+            .options(selectinload(ChapterAssignment.source))
+        )
+        in_flight = result.scalars().all()
+
+    if not in_flight:
+        logger.info("download_listener: reconcile_on_startup: no in-flight chapters")
+        return
+
+    current_ids = set(_polled_items.keys())
+    missed = [a for a in in_flight if a.suwayomi_chapter_id not in current_ids]
+
+    if not missed:
+        logger.info(
+            "download_listener: reconcile_on_startup: all %d in-flight chapter(s) still in queue",
+            len(in_flight),
+        )
+        return
+
+    logger.info(
+        "download_listener: reconcile_on_startup: dispatching FINISHED for %d chapter(s) "
+        "absent from Suwayomi queue",
+        len(missed),
+    )
+    for assignment in missed:
+        _dispatch(
+            "FINISHED",
+            assignment.suwayomi_chapter_id,
+            assignment.source_chapter_name or "",
+            assignment.source_manga_title or "",
+            assignment.source.name,
+        )
+
+
 async def run() -> None:
     """Maintain a persistent connection to Suwayomi's downloadChanged subscription.
 
@@ -109,6 +166,7 @@ async def run() -> None:
     _emitted_error_ids = set()
 
     await _seed_poll()
+    await reconcile_on_startup()
 
     use_polling = False
 

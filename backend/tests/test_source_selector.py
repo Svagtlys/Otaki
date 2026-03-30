@@ -3,7 +3,8 @@
 Unit tests (no Suwayomi required):
     - effective_priority returns source.priority
     - build_chapter_source_map uses second result when first title does not match comic
-    - build_chapter_source_map returns {} when no result title matches comic
+    - build_chapter_source_map returns ({}, []) when no result title matches comic
+    - build_chapter_source_map returns source_errors when a source raises
 
 Integration tests (require a live Suwayomi instance — skipped automatically if
 SUWAYOMI_URL is not configured in .env.test):
@@ -132,16 +133,17 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        result = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
 
-    assert len(result) == 1
-    _src, manga_id, _ch = result[1.0]
+    assert len(chapter_map) == 1
+    _src, manga_id, _ch = chapter_map[1.0]
     assert manga_id == "correct-id"
+    assert source_errors == []
 
 
 async def test_build_chapter_source_map_returns_empty_when_no_title_match(db_session):
     """If no search result matches comic.title, the source must be skipped and
-    build_chapter_source_map must return an empty dict."""
+    build_chapter_source_map must return an empty chapter map with no error."""
     source = await _make_source(db_session, name="Source A", priority=1)
     comic = await _make_comic(db_session, title="Missing Title")
 
@@ -153,9 +155,66 @@ async def test_build_chapter_source_map_returns_empty_when_no_title_match(db_ses
         "app.services.source_selector.suwayomi.search_source",
         new=AsyncMock(return_value=fake_results),
     ):
-        result = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
 
-    assert result == {}
+    assert chapter_map == {}
+    assert source_errors == []
+
+
+async def test_build_chapter_source_map_returns_error_when_source_raises(db_session):
+    """A source that raises populates source_errors; chapter_map is still returned
+    for any sources that succeeded."""
+    import httpx
+    await _make_source(db_session, name="Failing Source", priority=1)
+    comic = await _make_comic(db_session, title="Any Title")
+
+    with patch(
+        "app.services.source_selector.suwayomi.search_source",
+        new=AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+    ):
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert chapter_map == {}
+    assert len(source_errors) == 1
+    assert source_errors[0]["source_name"] == "Failing Source"
+    assert source_errors[0]["reason"] == "connection timed out"
+
+
+async def test_build_chapter_source_map_error_does_not_block_other_sources(db_session):
+    """If one source fails, successful sources still contribute to the chapter map."""
+    await _make_source(db_session, name="Good Source", priority=1, suwayomi_source_id="src-good")
+    await _make_source(db_session, name="Bad Source", priority=2, suwayomi_source_id="src-bad")
+    comic = await _make_comic(db_session, title="My Comic")
+
+    fake_chapters = [
+        {
+            "chapter_number": 1.0,
+            "suwayomi_chapter_id": "ch-1",
+            "chapter_published_at": datetime.now(timezone.utc),
+            "volume_number": None,
+        }
+    ]
+
+    async def _selective_search(source_id, query):
+        if source_id == "src-bad":
+            raise ConnectionError("refused")
+        return [{"manga_id": "m-1", "title": "My Comic"}]
+
+    with (
+        patch(
+            "app.services.source_selector.suwayomi.search_source",
+            new=AsyncMock(side_effect=_selective_search),
+        ),
+        patch(
+            "app.services.source_selector.suwayomi.fetch_chapters",
+            new=AsyncMock(return_value=fake_chapters),
+        ),
+    ):
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert len(chapter_map) == 1
+    assert len(source_errors) == 1
+    assert source_errors[0]["source_name"] == "Bad Source"
 
 
 # ---------------------------------------------------------------------------
@@ -222,16 +281,17 @@ async def test_build_chapter_source_map_returns_dict(db_session, suwayomi_settin
     )
     comic = await _make_comic(db_session, title=await _first_manga_title(source_id, test_manga_title))
 
-    result = await source_selector.build_chapter_source_map(comic, db_session)
+    chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
 
-    assert isinstance(result, dict)
-    assert len(result) > 0
-    for ch_num, (src, manga_id, ch_data) in result.items():
+    assert isinstance(chapter_map, dict)
+    assert len(chapter_map) > 0
+    for ch_num, (src, manga_id, ch_data) in chapter_map.items():
         assert isinstance(ch_num, float)
         assert isinstance(src, Source)
         assert isinstance(manga_id, str)
         assert "suwayomi_chapter_id" in ch_data
         assert "chapter_published_at" in ch_data
+    assert isinstance(source_errors, list)
 
 
 async def test_find_upgrade_candidates_no_upgrades_when_single_source(
@@ -243,7 +303,7 @@ async def test_find_upgrade_candidates_no_upgrades_when_single_source(
     )
     comic = await _make_comic(db_session, title=await _first_manga_title(source_id, test_manga_title))
 
-    chapter_map = await source_selector.build_chapter_source_map(comic, db_session)
+    chapter_map, _ = await source_selector.build_chapter_source_map(comic, db_session)
     if not chapter_map:
         pytest.skip("No chapters returned from live Suwayomi instance")
 
@@ -331,13 +391,14 @@ async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayom
     )
     comic = await _make_comic(db_session, title=comic_title)
 
-    result = await source_selector.build_chapter_source_map(comic, db_session)
+    chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
 
-    assert isinstance(result, dict)
-    assert len(result) > 0
-    for ch_num, (src, manga_id, ch_data) in result.items():
+    assert isinstance(chapter_map, dict)
+    assert len(chapter_map) > 0
+    for ch_num, (src, manga_id, ch_data) in chapter_map.items():
         assert isinstance(ch_num, float)
         assert isinstance(src, Source)
         assert isinstance(manga_id, str)
         assert "suwayomi_chapter_id" in ch_data
         assert "chapter_published_at" in ch_data
+    assert isinstance(source_errors, list)

@@ -17,6 +17,16 @@ interface SearchResult {
   url: string
 }
 
+interface SourceError {
+  source_name: string
+  reason: string
+}
+
+interface SearchResponse {
+  results: SearchResult[]
+  source_errors: SourceError[]
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -47,11 +57,14 @@ export default function Search() {
     return () => clearTimeout(id)
   }, [query])
 
-  const { data: results, isLoading, error } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['search', debouncedQuery],
-    queryFn: () => apiFetch<SearchResult[]>(`/api/search?q=${encodeURIComponent(debouncedQuery)}`),
+    queryFn: () => apiFetch<SearchResponse>(`/api/search?q=${encodeURIComponent(debouncedQuery)}`),
     enabled: debouncedQuery.length > 0,
   })
+
+  const results = data?.results ?? []
+  const sourceErrors = data?.source_errors ?? []
 
   function toggleSelect(url: string) {
     setSelected(prev => {
@@ -63,7 +76,7 @@ export default function Search() {
   }
 
   function handleReview() {
-    const firstSelected = results?.find(r => selected.has(r.url))
+    const firstSelected = results.find(r => selected.has(r.url))
     setDisplayName(firstSelected?.title ?? '')
     setLibraryTitle(firstSelected?.title ?? '')
     setLibraryTitleTouched(false)
@@ -102,7 +115,7 @@ export default function Search() {
     }
   }
 
-  const selectedResults = results?.filter(r => selected.has(r.url)) ?? []
+  const selectedResults = results.filter(r => selected.has(r.url))
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
@@ -129,12 +142,21 @@ export default function Search() {
           {debouncedQuery && error && (
             <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>
           )}
-          {debouncedQuery && !isLoading && !error && results?.length === 0 && (
+          {debouncedQuery && !isLoading && !error && results.length === 0 && sourceErrors.length === 0 && (
             <p style={{ color: '#666' }}>No results.</p>
           )}
 
+          {/* Source error banner */}
+          {sourceErrors.length > 0 && (
+            <div style={sourceErrorBannerStyle}>
+              <strong>Some sources could not be reached:</strong>{' '}
+              {sourceErrors.map(e => `${e.source_name} (${e.reason})`).join(', ')}.
+              Results may be incomplete.
+            </div>
+          )}
+
           {/* Result cards */}
-          {results && results.length > 0 && (
+          {results.length > 0 && (
             <div style={gridStyle}>
               {results.map(r => (
                 <div
@@ -337,4 +359,15 @@ const labelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: '#444',
+}
+
+const sourceErrorBannerStyle: React.CSSProperties = {
+  marginTop: 8,
+  marginBottom: 8,
+  padding: '8px 12px',
+  background: '#fff8e1',
+  border: '1px solid #ffe082',
+  borderRadius: 4,
+  fontSize: 13,
+  color: '#5d4037',
 }

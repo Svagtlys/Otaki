@@ -36,6 +36,11 @@ class RequestBody(BaseModel):
     upgrade_override_days: float | None = None
 
 
+class SourceError(BaseModel):
+    source_name: str
+    reason: str
+
+
 class ComicResponse(BaseModel):
     id: int
     title: str
@@ -50,6 +55,10 @@ class ComicResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class CreateRequestResponse(ComicResponse):
+    source_errors: list[SourceError] = []
 
 
 class ChapterSummary(BaseModel):
@@ -152,12 +161,12 @@ async def _create_assignments_and_enqueue(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=201, response_model=ComicResponse)
+@router.post("", status_code=201, response_model=CreateRequestResponse)
 async def create_request(
     body: RequestBody,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
-) -> ComicResponse:
+) -> CreateRequestResponse:
     # 1. Duplicate check
     existing = await db.execute(select(Comic).where(Comic.title == body.primary_title))
     if existing.scalar_one_or_none() is not None:
@@ -179,7 +188,7 @@ async def create_request(
     await db.flush()
 
     # 3. Build per-chapter source map and create assignments
-    chapter_map = await source_selector.build_chapter_source_map(comic, db)
+    chapter_map, src_errors = await source_selector.build_chapter_source_map(comic, db)
     await _create_assignments_and_enqueue(comic.id, chapter_map, db, "create_request")
 
     # 4. Set next poll/upgrade times
@@ -200,7 +209,10 @@ async def create_request(
             await db.commit()
             await db.refresh(comic)
 
-    return ComicResponse.model_validate(comic)
+    return CreateRequestResponse(
+        **ComicResponse.model_validate(comic).model_dump(),
+        source_errors=[SourceError(**e) for e in src_errors],
+    )
 
 
 @router.get("", response_model=list[ComicListItem])
@@ -286,6 +298,7 @@ async def get_request(
 
 class DiscoverResponse(BaseModel):
     new_chapters: int
+    source_errors: list[SourceError] = []
 
 
 @router.post("/{comic_id}/discover", response_model=DiscoverResponse)
@@ -304,7 +317,7 @@ async def discover_chapters(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    chapter_map = await source_selector.build_chapter_source_map(comic, db)
+    chapter_map, src_errors = await source_selector.build_chapter_source_map(comic, db)
 
     existing_result = await db.execute(
         select(ChapterAssignment.chapter_number).where(
@@ -324,7 +337,10 @@ async def discover_chapters(
         comic_id, new_entries, db, "discover_chapters"
     )
     await db.commit()
-    return DiscoverResponse(new_chapters=new_count)
+    return DiscoverResponse(
+        new_chapters=new_count,
+        source_errors=[SourceError(**e) for e in src_errors],
+    )
 
 
 @router.get("/{comic_id}/cover")

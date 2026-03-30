@@ -4,6 +4,12 @@ from typing import AsyncGenerator
 
 import httpx
 from gql import Client, gql
+from gql.transport.exceptions import (
+    TransportConnectionFailed,
+    TransportError,
+    TransportQueryError,
+    TransportServerError,
+)
 from gql.transport.httpx import HTTPXAsyncTransport
 from gql.transport.websockets import WebsocketsTransport
 
@@ -20,6 +26,18 @@ def classify_error(exc: Exception) -> str:
         return "authentication failed (401)"
     if isinstance(exc, httpx.HTTPStatusError):
         return f"unexpected HTTP {exc.response.status_code}"
+    if isinstance(exc, TransportServerError):
+        if exc.code == 401:
+            return "authentication failed (401)"
+        if exc.code is not None:
+            return f"unexpected HTTP {exc.code}"
+        return "server error"
+    if isinstance(exc, TransportQueryError):
+        return "source returned an error"
+    if isinstance(exc, TransportConnectionFailed):
+        return "connection refused or DNS failure"
+    if isinstance(exc, TransportError):
+        return "connection error"
     return "unexpected error"
 
 

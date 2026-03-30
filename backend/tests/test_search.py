@@ -266,7 +266,10 @@ async def test_search_live_result_has_required_fields(suwayomi_credentials, logg
 
     chosen = None
     for s in sources:
-        results = await _search_source(s["id"], test_manga_title)
+        try:
+            results = await _search_source(s["id"], test_manga_title)
+        except Exception:
+            continue
         if results:
             chosen = s
             break

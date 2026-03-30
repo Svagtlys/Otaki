@@ -131,6 +131,7 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
                     fetchChapters(input: $input) {
                         chapters {
                             id
+                            name
                             chapterNumber
                             uploadDate
                         }
@@ -150,6 +151,7 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
                 "volume_number": None,  # not available from Suwayomi chapter data
                 "suwayomi_chapter_id": str(node["id"]),
                 "chapter_published_at": published_at,
+                "source_chapter_name": node["name"],
             }
         )
     return chapters

@@ -135,6 +135,8 @@ async def _create_assignments_and_enqueue(
             suwayomi_manga_id=manga_id,
             suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
             chapter_published_at=ch_data["chapter_published_at"],
+            source_chapter_name=ch_data.get("source_chapter_name"),
+            source_manga_title=ch_data.get("source_manga_title"),
             download_status=DownloadStatus.queued,
             is_active=True,
             relocation_status=RelocationStatus.pending,

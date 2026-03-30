@@ -84,7 +84,7 @@ Otaki/
 #### `backend/app/main.py`
 FastAPI app entry point. Responsibilities:
 - Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`, `/api/settings`)
-- Call `database.init()` on startup (creates tables if not present)
+- Call `database.init()` on startup (runs `alembic upgrade head` to apply any pending migrations)
 - Start APScheduler via `scheduler.start(db)` then start `download_listener` as a long-lived background task
 - Cancel `download_listener` task and shut down APScheduler on shutdown
 
@@ -397,7 +397,7 @@ Internal:
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` or `ERROR` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.
 
 State machine:
-- **Startup**: calls `_seed_poll()` once to snapshot the current Suwayomi download queue into `_polled_items`. This ensures polling mode can detect completions even for chapters that were in-flight before the first WebSocket connection.
+- **Startup**: calls `_seed_poll()` once to snapshot the current Suwayomi download queue into `_polled_items`, then calls `reconcile_on_startup()` to dispatch FINISHED events for any chapters the DB shows as `queued`/`downloading` that are no longer in the Suwayomi queue (i.e. completed while the backend was down). The idempotency guard in `chapter_event_handler.handle()` silently no-ops for chapters already processed.
 - **SUBSCRIPTION mode** (default): connect via `subscribe_download_changed()`; on error, retry with exponential backoff (2s, 4s, 8s… capped at 30s). After `MAX_RECONNECT_ATTEMPTS` consecutive failures, switch to POLLING mode.
 - **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. Compares the current queue snapshot against `_polled_items`: items that disappeared are dispatched as FINISHED; items with state ERROR are dispatched as ERROR (once, deduplicated). On first successful poll, switch back to SUBSCRIPTION mode.
 

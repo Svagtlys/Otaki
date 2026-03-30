@@ -70,6 +70,8 @@ class ChapterAssignment(Base):
     retry_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    source_chapter_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_manga_title: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
         Index(

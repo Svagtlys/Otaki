@@ -69,8 +69,9 @@ async def build_chapter_source_map(
                 )
                 return [], None
             manga_id = match["manga_id"]
+            manga_title = match["title"]
             chapters = await suwayomi.fetch_chapters(manga_id)
-            return [(source, manga_id, ch) for ch in chapters], None
+            return [(source, manga_id, {**ch, "source_manga_title": manga_title}) for ch in chapters], None
         except Exception as e:
             reason = suwayomi.classify_error(e)
             logger.warning(

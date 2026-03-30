@@ -120,6 +120,7 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
             "suwayomi_chapter_id": "ch-1",
             "chapter_published_at": datetime.now(timezone.utc),
             "volume_number": None,
+            "source_chapter_name": "Chapter 1",
         }
     ]
 
@@ -291,6 +292,8 @@ async def test_build_chapter_source_map_returns_dict(db_session, suwayomi_settin
         assert isinstance(manga_id, str)
         assert "suwayomi_chapter_id" in ch_data
         assert "chapter_published_at" in ch_data
+        assert "source_chapter_name" in ch_data
+        assert "source_manga_title" in ch_data
     assert isinstance(source_errors, list)
 
 
@@ -401,4 +404,6 @@ async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayom
         assert isinstance(manga_id, str)
         assert "suwayomi_chapter_id" in ch_data
         assert "chapter_published_at" in ch_data
+        assert "source_chapter_name" in ch_data
+        assert "source_manga_title" in ch_data
     assert isinstance(source_errors, list)

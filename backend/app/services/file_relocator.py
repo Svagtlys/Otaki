@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shutil
+import zipfile
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.chapter_assignment import ChapterAssignment, RelocationStatus
 from ..models.comic import Comic
+from . import comicinfo_writer
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +19,8 @@ def _find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
     base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
+
+    # --- CBZ checks ---
     exact = base / f"{chapter_name}.cbz"
     if exact.exists():
         return exact
@@ -32,12 +36,69 @@ def _find_staging_path(
     containing = [m for m in matches if pattern.search(m.stem.lower())]
     if len(containing) == 1:
         return containing[0]
+
+    # --- Folder checks ---
+    # Exact folder name match
+    exact_folder = base / chapter_name
+    if exact_folder.is_dir():
+        return exact_folder
+    # Fallback: exactly one subdirectory present
+    subdirs = [p for p in base.iterdir() if p.is_dir()] if base.is_dir() else []
+    if len(subdirs) == 1:
+        return subdirs[0]
+    # Prefix match for folders
+    folder_containing = [d for d in subdirs if pattern.search(d.name.lower())]
+    if len(folder_containing) == 1:
+        return folder_containing[0]
+
     log.warning(
         "file_relocator: ambiguous or missing staging file for chapter %r in %s",
         chapter_name,
         base,
     )
     return None
+
+
+def _normalize_to_folder(staging: Path) -> Path:
+    """Return *staging* as a folder, extracting a CBZ if necessary.
+
+    - If *staging* is already a directory, return it unchanged.
+    - If *staging* is a ``.cbz`` file, extract its contents to a sibling
+      directory named after the stem, delete the original CBZ, and return
+      the extracted folder path.
+    """
+    if staging.is_dir():
+        return staging
+
+    # staging is a CBZ file — extract to a folder with the same stem
+    dest_folder = staging.parent / staging.stem
+    if dest_folder.exists():
+        shutil.rmtree(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(staging, "r") as zf:
+        zf.extractall(dest_folder)
+    staging.unlink()
+    return dest_folder
+
+
+def _pack_to_cbz(folder: Path) -> Path:
+    """Pack *folder* into a ``.cbz`` file and delete the source folder.
+
+    Files are added in alphabetical order of their relative paths, which
+    matches Suwayomi's zero-padded page-number naming convention.
+
+    Returns the path of the newly created CBZ.
+    """
+    cbz_path = folder.parent / (folder.name + ".cbz")
+    all_files = sorted(
+        (p for p in folder.rglob("*") if p.is_file()),
+        key=lambda p: str(p.relative_to(folder)),
+    )
+    with zipfile.ZipFile(cbz_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for file_path in all_files:
+            zf.write(file_path, file_path.relative_to(folder))
+    shutil.rmtree(folder)
+    return cbz_path
 
 
 def _render_format(assignment: ChapterAssignment, comic: Comic) -> str:
@@ -128,6 +189,10 @@ async def relocate(
         assignment.relocation_status = RelocationStatus.failed
         return
 
+    staging = _normalize_to_folder(staging)
+    comicinfo_writer.write(staging, comic, assignment)
+    staging = _pack_to_cbz(staging)
+
     dest = resolve_path(assignment, comic)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -148,6 +213,18 @@ async def replace_in_library(
 ) -> None:
     staging = _find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
+        new.relocation_status = RelocationStatus.failed
+        return
+
+    staging = _normalize_to_folder(staging)
+    comicinfo_writer.write(staging, comic, new)
+    staging = _pack_to_cbz(staging)
+
+    if old.library_path is None:
+        log.warning(
+            "replace_in_library: old assignment id=%s has no library_path — skipping upgrade swap",
+            old.id,
+        )
         new.relocation_status = RelocationStatus.failed
         return
 

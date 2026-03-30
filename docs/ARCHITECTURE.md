@@ -339,17 +339,17 @@ Manages per-comic cover images.
 - `inject(cbz_path, comic)` — [deferred 1.1] if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
 
 #### `backend/app/services/comicinfo_writer.py`
-Writes or updates `ComicInfo.xml` inside a CBZ archive, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
+Writes or updates `ComicInfo.xml` inside a chapter folder before it is packed to CBZ, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
 
-- `write(cbz_path, comic, assignment)` — opens the CBZ, reads existing `ComicInfo.xml` if present, sets `<Series>` to `comic.library_title`, `<Number>` to `assignment.chapter_number`, and `<Volume>` to `assignment.volume_number` (if set). Repacks the CBZ in-place. Called after quality scan / auto-fix and before relocation.
+- `write(folder, comic, assignment)` — looks for `ComicInfo.xml` in *folder*; if present, parses it with `xml.etree.ElementTree`; if absent, creates a new `<ComicInfo/>` element. Sets the target fields, preserves all other existing tags, then writes the result back to `folder / "ComicInfo.xml"`. Called by `file_relocator` after `_normalize_to_folder` and before `_pack_to_cbz`.
 
 Fields written to `ComicInfo.xml`:
 
 | Field | Value |
 |---|---|
 | `<Series>` | `comic.library_title` |
-| `<Number>` | `assignment.chapter_number` |
-| `<Volume>` | `assignment.volume_number` (omitted if null) |
+| `<Number>` | `str(assignment.chapter_number)` |
+| `<Volume>` | `str(assignment.volume_number)` (element omitted entirely if null) |
 
 Any other existing fields are preserved unchanged.
 
@@ -366,12 +366,24 @@ Modifies CBZ files to remove banners. **Mutates files** — always backs up firs
 #### `backend/app/services/file_relocator.py`
 Moves settled chapters from Suwayomi's staging folder to the final library. Radarr/Sonarr-style.
 
+**Pipeline (called by `relocate` and `replace_in_library`):**
+1. `_find_staging_path` — locate the chapter in the download area (CBZ or folder)
+2. `_normalize_to_folder` — extract CBZ to a sibling folder if needed; no-op if already a folder
+3. `comicinfo_writer.write` — inject/update `ComicInfo.xml` in the folder
+4. `_pack_to_cbz` — zip the folder to a CBZ, delete the folder
+5. Place the CBZ at the destination (hardlink or copy) and update the assignment
+
+Public API:
+
 - `resolve_path(assignment, comic) → Path` — renders `CHAPTER_NAMING_FORMAT` with tokens `{title}` (uses `comic.library_title`), `{chapter}` (zero-padded float), `{volume}` (optional), `{year}`, `{source}`. Returns absolute path under `LIBRARY_PATH`.
-- `relocate(assignment, comic, db)` — resolves destination, creates parent dirs, then:
-  - **Same filesystem**: `os.link()` (hardlink — instant, no extra disk space)
-  - **Different filesystem**: `shutil.copy2()` to temp path, verify size, then `os.replace()`, delete staging copy
-  - Updates `assignment.library_path` and `assignment.relocation_status=done`
-- `replace_in_library(old_assignment, new_assignment, comic, db)` — used during upgrades when `old_assignment.library_path` is set. Writes new file to a temp path alongside the existing library file, then `os.replace()` for atomic swap. No window where the file is missing.
+- `relocate(assignment, comic, db, ...)` — runs the pipeline; resolves destination, creates parent dirs, places the CBZ. Updates `assignment.library_path` and `assignment.relocation_status=done`.
+- `replace_in_library(old_assignment, new_assignment, comic, db, ...)` — used during upgrades when `old_assignment.library_path` is set. Runs the pipeline then `os.replace()` for atomic swap. No window where the file is missing.
+
+Internal helpers:
+
+- `_find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Detection order: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
+- `_normalize_to_folder(staging) → Path` — if *staging* is a directory, returns it unchanged. If it is a `.cbz` file, extracts all contents to `staging.parent / staging.stem /`, deletes the original CBZ, and returns the new folder.
+- `_pack_to_cbz(folder) → Path` — collects all files in *folder* recursively, sorts them by relative path (alphabetical — matches Suwayomi's zero-padded page-number naming), writes a new CBZ at `folder.parent / (folder.name + ".cbz")`, deletes the folder, and returns the CBZ path.
 
 ---
 
@@ -412,17 +424,25 @@ handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_displa
   ERROR   → _handle_error()
   FINISHED →
     1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
-    2. Set download_status=done, downloaded_at=now(UTC)
-    3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
-    4. [deferred 1.4] write    → QualityScan row
-    5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
-    6. [deferred 1.1] comicinfo → comicinfo_writer.write()
-    7. [deferred 1.1] cover    → cover_handler.inject()
-    8. Check for upgrade: query for existing active ChapterAssignment with same
+    2. Idempotency check: if download_status already done → return
+    3. Set download_status=done, downloaded_at=now(UTC)
+    4. [deferred 1.4] scan  → quality_scanner.scan_chapter()
+    5. [deferred 1.4] write → QualityScan row
+    6. [deferred 1.4] fix   → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
+    7. Check for upgrade: query for existing active ChapterAssignment with same
        comic_id + chapter_number but different id
-       - None found → regular download: file_relocator.relocate(), set is_active=True
-       - Found      → upgrade download: file_relocator.replace_in_library(old, new),
-                      set old.is_active=False, new.is_active=True
+       - None found → file_relocator.relocate()      → set is_active=True
+       - Found      → file_relocator.replace_in_library(old, new)
+                      → set old.is_active=False, new.is_active=True
+    8. db.commit()
+
+file_relocator.relocate() and replace_in_library() both run this internal pipeline:
+    a. _find_staging_path()          find CBZ or folder in Suwayomi download dir
+    b. _normalize_to_folder()        extract CBZ → folder, or noop if already a folder
+    c. comicinfo_writer.write()      create/update ComicInfo.xml in the folder
+    d. [deferred 1.1] cover_handler.inject()   copy cover.png into the folder
+    e. _pack_to_cbz()                zip folder → CBZ, delete folder
+    f. _place_file()                 hardlink or copy CBZ to library path
 
 on upgrade download (1.0): always swap — no quality condition until scanner added in 1.4
 on upgrade download (1.4+): swap only if new severity ≤ old severity
@@ -438,6 +458,54 @@ _handle_error(suwayomi_chapter_id, ...)
 _retry_download(assignment_id, suwayomi_chapter_id)
   Scheduled by _handle_error. Sets download_status=queued, calls
   suwayomi.enqueue_downloads(). If enqueue raises, reverts status to failed.
+```
+
+**Post-download pipeline flow:**
+
+```mermaid
+flowchart TD
+    A["Suwayomi FINISHED / ERROR event"] --> B["download_listener"]
+    B --> C["chapter_event_handler.handle()"]
+
+    C --> D{event type?}
+    D -->|ERROR| ERR["_handle_error()"]
+    D -->|FINISHED| F["load ChapterAssignment"]
+
+    ERR --> ER1{retry_count ><br>MAX_RETRIES?}
+    ER1 -->|yes| ER2["mark permanently failed"]
+    ER1 -->|no| ER3["schedule _retry_download<br>with exponential backoff"]
+    ER3 --> ER4["_retry_download:<br>enqueue_downloads()"]
+    ER4 --> B
+
+    F --> G{found?}
+    G -->|no| WARN["warn + return"]
+    G -->|yes| IDEM{already<br>done?}
+    IDEM -->|yes| NOP["no-op"]
+    IDEM -->|no| K["set download_status=done<br>downloaded_at=now()"]
+
+    K --> L{"existing active assignment<br>same comic + chapter?"}
+    L -->|"no — first download"| REL["file_relocator.relocate()"]
+    L -->|"yes — upgrade"| UPG["file_relocator.replace_in_library()"]
+
+    REL --> PIPE
+    UPG --> PIPE
+
+    subgraph PIPE ["file_relocator internal pipeline"]
+        direction TB
+        S1["_find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
+        S2["_normalize_to_folder()<br>extract CBZ → folder, or noop if already folder"]
+        S3["comicinfo_writer.write()<br>create / update ComicInfo.xml in folder"]
+        S4["[deferred 1.1] cover_handler.inject()<br>copy cover.png into folder"]
+        S5["_pack_to_cbz()<br>zip folder → CBZ, delete folder"]
+        S6["_place_file()<br>hardlink or copy CBZ to library path"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
+
+    PIPE --> ACT{"regular or<br>upgrade?"}
+    ACT -->|regular| ACT1["set is_active=True"]
+    ACT -->|upgrade| ACT2["old.is_active=False<br>new.is_active=True"]
+    ACT1 --> CMT["db.commit()"]
+    ACT2 --> CMT
 ```
 
 ---

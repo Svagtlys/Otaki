@@ -302,6 +302,98 @@ async def test_requires_auth(auth_client):
 
 
 # ---------------------------------------------------------------------------
+# Cover endpoint tests
+# ---------------------------------------------------------------------------
+
+
+async def test_cover_post_url_saves_cover(logged_in_client, monkeypatch, tmp_path):
+    from pathlib import Path as _Path
+    from app.services import cover_handler
+
+    fake_cover = tmp_path / "1.jpg"
+    fake_cover.write_bytes(b"img")
+    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=fake_cover))
+
+    comic = await _add_comic(title="Cover URL Comic")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/cover",
+        json={"url": "https://example.com/cover.jpg"},
+    )
+    assert r.status_code == 200
+    assert r.json()["cover_url"] == f"/api/requests/{comic.id}/cover"
+
+
+async def test_cover_post_url_502_on_failure(logged_in_client, monkeypatch):
+    from app.services import cover_handler
+    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=None))
+
+    comic = await _add_comic(title="Cover Fail Comic")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/cover",
+        json={"url": "https://example.com/cover.jpg"},
+    )
+    assert r.status_code == 502
+
+
+async def test_cover_post_file_saves_cover(logged_in_client, monkeypatch, tmp_path):
+    from app.services import cover_handler
+
+    fake_cover = tmp_path / "1.jpg"
+    fake_cover.write_bytes(b"img")
+    monkeypatch.setattr(cover_handler, "save_from_file", MagicMock(return_value=fake_cover))
+
+    comic = await _add_comic(title="Cover File Comic")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/cover",
+        files={"file": ("cover.jpg", b"img-data", "image/jpeg")},
+    )
+    assert r.status_code == 200
+    assert "cover_url" in r.json()
+
+
+async def test_cover_post_file_non_image_returns_415(logged_in_client, monkeypatch, tmp_path):
+    from app.services import cover_handler
+    monkeypatch.setattr(cover_handler, "save_from_file", MagicMock(return_value=None))
+
+    comic = await _add_comic(title="Cover Non-Image Comic")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/cover",
+        files={"file": ("data.txt", b"not-an-image", "text/plain")},
+    )
+    assert r.status_code == 415
+
+
+async def test_cover_post_404_for_unknown_comic(logged_in_client):
+    r = await logged_in_client.post(
+        "/api/requests/99999/cover",
+        json={"url": "https://example.com/cover.jpg"},
+    )
+    assert r.status_code == 404
+
+
+async def test_cover_delete_clears_cover_path(logged_in_client, tmp_path):
+    from app import database
+
+    fake_cover = tmp_path / "1.jpg"
+    fake_cover.write_bytes(b"img")
+
+    comic = await _add_comic(title="Cover Delete Comic")
+    # Manually set cover_path
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(__import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id)
+        c.cover_path = str(fake_cover)
+        await db.commit()
+
+    r = await logged_in_client.delete(f"/api/requests/{comic.id}/cover")
+    assert r.status_code == 204
+    assert not fake_cover.exists()
+
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(__import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id)
+        assert c.cover_path is None
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — require live Suwayomi
 # ---------------------------------------------------------------------------
 

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.chapter_assignment import ChapterAssignment, RelocationStatus
 from ..models.comic import Comic
-from . import comicinfo_writer
+from . import comicinfo_writer, cover_handler
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def _pack_to_cbz(folder: Path) -> Path:
     cbz_path = folder.parent / (folder.name + ".cbz")
     all_files = sorted(
         (p for p in folder.rglob("*") if p.is_file()),
-        key=lambda p: str(p.relative_to(folder)),
+        key=lambda p: (0 if p.name.lower().startswith("cover.") else 1, str(p.relative_to(folder))),
     )
     with zipfile.ZipFile(cbz_path, "w", compression=zipfile.ZIP_STORED) as zf:
         for file_path in all_files:
@@ -191,6 +191,7 @@ async def relocate(
 
     staging = _normalize_to_folder(staging)
     comicinfo_writer.write(staging, comic, assignment)
+    cover_handler.inject(staging, comic)
     staging = _pack_to_cbz(staging)
 
     dest = resolve_path(assignment, comic)
@@ -218,6 +219,7 @@ async def replace_in_library(
 
     staging = _normalize_to_folder(staging)
     comicinfo_writer.write(staging, comic, new)
+    cover_handler.inject(staging, comic)
     staging = _pack_to_cbz(staging)
 
     if old.library_path is None:

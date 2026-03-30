@@ -335,8 +335,8 @@ Watermark templates are loaded once at startup and cached in memory.
 Manages per-comic cover images.
 
 - `save_from_url(comic_id, url) → Path | None` — downloads the image at `url` and saves it to `COVERS_PATH/{comic_id}.{ext}`. Returns the saved path on success, `None` on failure. Called by `create_request` when a `cover_url` is provided.
-- `save_from_upload(comic_id, image_bytes, content_type) → Path` — [deferred 1.1] saves a user-uploaded image to `COVERS_PATH/{comic_id}.{ext}`. Existing cover is replaced.
-- `inject(cbz_path, comic)` — [deferred 1.1] if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
+- `save_from_file(comic_id, content, content_type) → Path | None` — saves uploaded image bytes to `COVERS_PATH/{comic_id}.{ext}`, deriving extension from `content_type`. Returns `None` if `content_type` is not `image/*`.
+- `inject(folder, comic)` — if `comic.cover_path` is set and the file exists, copies it into *folder* as `cover.{ext}` (preserving original extension, e.g. `cover.jpg`). No-op if `comic.cover_path` is null or file missing. Called by `file_relocator` after `comicinfo_writer.write` and before `_pack_to_cbz`.
 
 #### `backend/app/services/comicinfo_writer.py`
 Writes or updates `ComicInfo.xml` inside a chapter folder before it is packed to CBZ, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
@@ -440,7 +440,7 @@ file_relocator.relocate() and replace_in_library() both run this internal pipeli
     a. _find_staging_path()          find CBZ or folder in Suwayomi download dir
     b. _normalize_to_folder()        extract CBZ → folder, or noop if already a folder
     c. comicinfo_writer.write()      create/update ComicInfo.xml in the folder
-    d. [deferred 1.1] cover_handler.inject()   copy cover.png into the folder
+    d. cover_handler.inject()                  copy cover.{ext} into the folder (noop if no cover)
     e. _pack_to_cbz()                zip folder → CBZ, delete folder
     f. _place_file()                 hardlink or copy CBZ to library path
 
@@ -495,7 +495,7 @@ flowchart TD
         S1["_find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
         S2["_normalize_to_folder()<br>extract CBZ → folder, or noop if already folder"]
         S3["comicinfo_writer.write()<br>create / update ComicInfo.xml in folder"]
-        S4["[deferred 1.1] cover_handler.inject()<br>copy cover.png into folder"]
+        S4["cover_handler.inject()<br>copy cover.{ext} into folder (noop if no cover)"]
         S5["_pack_to_cbz()<br>zip folder → CBZ, delete folder"]
         S6["_place_file()<br>hardlink or copy CBZ to library path"]
         S1 --> S2 --> S3 --> S4 --> S5 --> S6

@@ -424,17 +424,25 @@ handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_displa
   ERROR   → _handle_error()
   FINISHED →
     1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
-    2. Set download_status=done, downloaded_at=now(UTC)
-    3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
-    4. [deferred 1.4] write    → QualityScan row
-    5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
-    6. comicinfo + pack        → file_relocator handles: _normalize_to_folder → comicinfo_writer.write → _pack_to_cbz
-    7. [deferred 1.1] cover    → cover_handler.inject()
-    8. Check for upgrade: query for existing active ChapterAssignment with same
+    2. Idempotency check: if download_status already done → return
+    3. Set download_status=done, downloaded_at=now(UTC)
+    4. [deferred 1.4] scan  → quality_scanner.scan_chapter()
+    5. [deferred 1.4] write → QualityScan row
+    6. [deferred 1.4] fix   → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
+    7. Check for upgrade: query for existing active ChapterAssignment with same
        comic_id + chapter_number but different id
-       - None found → regular download: file_relocator.relocate(), set is_active=True
-       - Found      → upgrade download: file_relocator.replace_in_library(old, new),
-                      set old.is_active=False, new.is_active=True
+       - None found → file_relocator.relocate()      → set is_active=True
+       - Found      → file_relocator.replace_in_library(old, new)
+                      → set old.is_active=False, new.is_active=True
+    8. db.commit()
+
+file_relocator.relocate() and replace_in_library() both run this internal pipeline:
+    a. _find_staging_path()          find CBZ or folder in Suwayomi download dir
+    b. _normalize_to_folder()        extract CBZ → folder, or noop if already a folder
+    c. comicinfo_writer.write()      create/update ComicInfo.xml in the folder
+    d. [deferred 1.1] cover_handler.inject()   copy cover.png into the folder
+    e. _pack_to_cbz()                zip folder → CBZ, delete folder
+    f. _place_file()                 hardlink or copy CBZ to library path
 
 on upgrade download (1.0): always swap — no quality condition until scanner added in 1.4
 on upgrade download (1.4+): swap only if new severity ≤ old severity
@@ -450,6 +458,54 @@ _handle_error(suwayomi_chapter_id, ...)
 _retry_download(assignment_id, suwayomi_chapter_id)
   Scheduled by _handle_error. Sets download_status=queued, calls
   suwayomi.enqueue_downloads(). If enqueue raises, reverts status to failed.
+```
+
+**Post-download pipeline flow:**
+
+```mermaid
+flowchart TD
+    A["Suwayomi FINISHED / ERROR event"] --> B["download_listener"]
+    B --> C["chapter_event_handler.handle()"]
+
+    C --> D{event type?}
+    D -->|ERROR| ERR["_handle_error()"]
+    D -->|FINISHED| F["load ChapterAssignment"]
+
+    ERR --> ER1{retry_count ><br>MAX_RETRIES?}
+    ER1 -->|yes| ER2["mark permanently failed"]
+    ER1 -->|no| ER3["schedule _retry_download<br>with exponential backoff"]
+    ER3 --> ER4["_retry_download:<br>enqueue_downloads()"]
+    ER4 --> B
+
+    F --> G{found?}
+    G -->|no| WARN["warn + return"]
+    G -->|yes| IDEM{already<br>done?}
+    IDEM -->|yes| NOP["no-op"]
+    IDEM -->|no| K["set download_status=done<br>downloaded_at=now()"]
+
+    K --> L{"existing active assignment<br>same comic + chapter?"}
+    L -->|"no — first download"| REL["file_relocator.relocate()"]
+    L -->|"yes — upgrade"| UPG["file_relocator.replace_in_library()"]
+
+    REL --> PIPE
+    UPG --> PIPE
+
+    subgraph PIPE ["file_relocator internal pipeline"]
+        direction TB
+        S1["_find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
+        S2["_normalize_to_folder()<br>extract CBZ → folder, or noop if already folder"]
+        S3["comicinfo_writer.write()<br>create / update ComicInfo.xml in folder"]
+        S4["[deferred 1.1] cover_handler.inject()<br>copy cover.png into folder"]
+        S5["_pack_to_cbz()<br>zip folder → CBZ, delete folder"]
+        S6["_place_file()<br>hardlink or copy CBZ to library path"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
+
+    PIPE --> ACT{"regular or<br>upgrade?"}
+    ACT -->|regular| ACT1["set is_active=True"]
+    ACT -->|upgrade| ACT2["old.is_active=False<br>new.is_active=True"]
+    ACT1 --> CMT["db.commit()"]
+    ACT2 --> CMT
 ```
 
 ---

@@ -1,6 +1,7 @@
 import base64
 import logging
 import mimetypes
+import shutil
 from pathlib import Path
 
 import httpx
@@ -47,3 +48,38 @@ async def save_from_url(comic_id: int, url: str) -> Path | None:
     except Exception:
         log.exception("cover download error for comic %s url=%s", comic_id, url)
         return None
+
+
+def save_from_file(comic_id: int, content: bytes, content_type: str) -> Path | None:
+    """Save uploaded image bytes to COVERS_PATH/{comic_id}.{ext}.
+
+    Returns the saved Path, or None if content_type is not an image.
+    """
+    if not content_type.startswith("image/"):
+        return None
+
+    covers_dir = Path(settings.COVERS_PATH)
+    covers_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = mimetypes.guess_extension(content_type.split(";")[0].strip()) or ".jpg"
+    if ext == ".jpe":
+        ext = ".jpg"
+
+    dest = covers_dir / f"{comic_id}{ext}"
+    dest.write_bytes(content)
+    return dest
+
+
+def inject(folder: Path, comic) -> None:
+    """Copy the comic's cover image into *folder* as cover.{ext}.
+
+    No-op if comic.cover_path is None or the file does not exist.
+    Preserves the original file extension (e.g. cover.jpg, cover.png).
+    """
+    if not comic.cover_path:
+        return
+    src = Path(comic.cover_path)
+    if not src.exists():
+        log.warning("cover_handler.inject: cover file missing at %s", src)
+        return
+    shutil.copy2(src, folder / f"cover{src.suffix}")

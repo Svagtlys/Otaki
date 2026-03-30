@@ -87,6 +87,27 @@ def test_write_preserves_existing_tags(tmp_path):
     assert root.findtext("Series") == "One Piece"
 
 
+def test_write_removes_volume_when_previously_set(tmp_path):
+    """Existing ComicInfo.xml has <Volume>: write() removes it when volume_number is None."""
+    existing_xml = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        "<ComicInfo>"
+        "<Volume>3</Volume>"
+        "<Series>Old</Series>"
+        "</ComicInfo>"
+    )
+    (tmp_path / "ComicInfo.xml").write_text(existing_xml, encoding="utf-8")
+
+    comic = _make_comic(library_title="New Series")
+    assignment = _make_assignment(chapter_number=2.0, volume_number=None)
+
+    comicinfo_writer.write(tmp_path, comic, assignment)
+
+    root = _parse(tmp_path)
+    assert root.find("Volume") is None
+    assert root.findtext("Series") == "New Series"
+
+
 def test_write_updates_existing_series(tmp_path):
     """Existing ComicInfo.xml has wrong Series: write() corrects it."""
     existing_xml = (

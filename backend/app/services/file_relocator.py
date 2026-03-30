@@ -72,6 +72,8 @@ def _normalize_to_folder(staging: Path) -> Path:
 
     # staging is a CBZ file — extract to a folder with the same stem
     dest_folder = staging.parent / staging.stem
+    if dest_folder.exists():
+        shutil.rmtree(dest_folder)
     dest_folder.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(staging, "r") as zf:
         zf.extractall(dest_folder)
@@ -217,6 +219,14 @@ async def replace_in_library(
     staging = _normalize_to_folder(staging)
     comicinfo_writer.write(staging, comic, new)
     staging = _pack_to_cbz(staging)
+
+    if old.library_path is None:
+        log.warning(
+            "replace_in_library: old assignment id=%s has no library_path — skipping upgrade swap",
+            old.id,
+        )
+        new.relocation_status = RelocationStatus.failed
+        return
 
     dest = Path(old.library_path)
     _place_file(staging, dest)

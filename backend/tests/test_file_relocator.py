@@ -266,6 +266,54 @@ async def test_relocate_creates_parent_dirs(tmp_path, monkeypatch):
     assert dest.parent.exists()
 
 
+@pytest.mark.asyncio
+async def test_relocate_with_folder_staging(tmp_path, monkeypatch):
+    """Staging area is a folder (not a CBZ): relocate() packs it, injects ComicInfo.xml, and places it."""
+    import xml.etree.ElementTree as ET
+
+    downloads = tmp_path / "downloads"
+    library = tmp_path / "library"
+
+    source_display = "Source"
+    manga_title = "My Manga"
+    chapter_name = "Chapter 1"
+
+    chapter_folder = downloads / source_display / manga_title / chapter_name
+    chapter_folder.mkdir(parents=True)
+    (chapter_folder / "001.jpg").write_bytes(b"\xff\xd8\xff" + b"x" * 100)
+    (chapter_folder / "002.jpg").write_bytes(b"\xff\xd8\xff" + b"y" * 100)
+
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    comic = _make_comic(library_title="My Manga")
+    assignment = _make_assignment(chapter_number=1.0, volume_number=None)
+
+    await file_relocator.relocate(
+        assignment, comic, None, chapter_name, manga_title, source_display
+    )
+
+    assert assignment.relocation_status == RelocationStatus.done
+
+    dest = Path(assignment.library_path)
+    assert dest.exists()
+    assert zipfile.is_zipfile(dest)
+
+    with zipfile.ZipFile(dest, "r") as zf:
+        names = zf.namelist()
+        assert "ComicInfo.xml" in names
+        assert "001.jpg" in names
+        assert "002.jpg" in names
+
+        xml_bytes = zf.read("ComicInfo.xml")
+
+    root = ET.fromstring(xml_bytes)
+    assert root.findtext("Series") == "My Manga"
+    assert root.findtext("Number") == "1.0"
+
+
 # ---------------------------------------------------------------------------
 # replace_in_library tests
 # ---------------------------------------------------------------------------
@@ -318,7 +366,7 @@ async def test_replace_in_library_atomic(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_relocate_strategy_copy_keeps_staging(tmp_path, monkeypatch):
-    """RELOCATION_STRATEGY=copy: dest file created, staging file preserved."""
+    """RELOCATION_STRATEGY=copy: destination CBZ is a valid zip and a repacked staging CBZ remains."""
     downloads = tmp_path / "downloads"
     library = tmp_path / "library"
     downloads.mkdir()
@@ -343,8 +391,10 @@ async def test_relocate_strategy_copy_keeps_staging(tmp_path, monkeypatch):
     )
 
     assert assignment.relocation_status == RelocationStatus.done
-    assert Path(assignment.library_path).exists()
-    # copy strategy preserves the repacked staging CBZ
+    dest_cbz = Path(assignment.library_path)
+    assert dest_cbz.exists()
+    assert zipfile.is_zipfile(dest_cbz)
+    # copy strategy: a repacked staging CBZ remains alongside the destination
     assert (source_dir / f"{chapter_name}.cbz").exists()
 
 
@@ -499,7 +549,9 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
     assert assignment.relocation_status == RelocationStatus.done
     dest = Path(assignment.library_path)
     assert dest.exists(), f"Expected file at {dest}"
-    assert dest.stat().st_size == cbz.stat().st_size
+    assert dest.stat().st_size > 0
+    import zipfile as _zf
+    assert _zf.is_zipfile(dest)
     assert cbz.exists()  # copy strategy — staging preserved
 
     print(f"Relocated to: {dest}")

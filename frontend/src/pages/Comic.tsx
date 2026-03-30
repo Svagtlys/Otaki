@@ -127,8 +127,8 @@ export default function Comic() {
               <img
                 src={`/api/requests/${comic.id}/cover`}
                 alt=""
-                width={48}
-                height={64}
+                width={160}
+                height={220}
                 style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
                 onError={e => { e.currentTarget.style.display = 'none' }}
               />

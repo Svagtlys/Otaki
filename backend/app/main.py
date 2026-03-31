@@ -1,20 +1,9 @@
 import asyncio
 import contextlib
 import logging
+from logging.config import dictConfig
 import jwt
 from contextlib import asynccontextmanager
-
-# Configure app logging before any module-level loggers are created.
-# Uses force=True so this wins even if uvicorn's dictConfig runs first.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s:%(name)s:%(message)s",
-    force=True,
-)
-# Keep SQLAlchemy and gql quiet — they're very verbose at INFO.
-logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-logging.getLogger("gql").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 from fastapi import FastAPI
 
@@ -27,6 +16,63 @@ from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
 from .workers import download_listener, scheduler
+
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s | %(name)-15s | %(levelname)-8s | %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        # The Root Logger: Catch-all for Alembic, libraries, etc.
+        "": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
+        "otaki": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        # SQLALCHEMY: Controls SQL echo.
+        # "INFO" shows queries, "DEBUG" shows queries + results.
+        "sqlalchemy.engine": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        # GQL / GRAPHQL:
+        # Use "gql" for the GQL transport library or "strawberry"/"ariadne"
+        # depending on your specific GraphQL framework.
+        "gql": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        # HTTPX: Very chatty by default.
+        "httpx": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "uvicorn.access": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "alembic": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
+
+# Apply the config immediately!
+dictConfig(LOGGING_CONFIG)
+
+# Create the logger instance for this specific file
+logger = logging.getLogger("otaki")
+
 
 _SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
 # <img> tags cannot send JWT — these paths must be publicly accessible
@@ -45,11 +91,20 @@ def _auth_required(path: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Starting Otaki...")
+
+    logger.info("Initializing database...")
     await database.init()
+
+    logger.info("Starting scheduler...")
     async with AsyncSessionLocal() as db:
         await scheduler.start(db)
+
+    logger.info("Starting download listener...")
     task = asyncio.create_task(download_listener.run())
+
     yield
+
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
@@ -106,4 +161,3 @@ async def require_setup(request: Request, call_next):
     if not setup_complete and not any(path.startswith(p) for p in _SETUP_EXEMPT):
         return JSONResponse({"detail": "Setup required"}, status_code=503)
     return await call_next(request)
-

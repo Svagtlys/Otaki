@@ -8,7 +8,7 @@ import httpx
 
 from ..config import settings
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 
 async def save_from_url(comic_id: int, url: str) -> Path | None:
@@ -29,13 +29,21 @@ async def save_from_url(comic_id: int, url: str) -> Path | None:
 
     try:
         async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(url, headers=headers, follow_redirects=True, timeout=15)
+            response = await client.get(
+                url, headers=headers, follow_redirects=True, timeout=15
+            )
 
         if response.status_code != 200:
-            log.warning("cover download failed for comic %s: HTTP %s", comic_id, response.status_code)
+            logger.warning(
+                "cover download failed for comic %s: HTTP %s",
+                comic_id,
+                response.status_code,
+            )
             return None
 
-        content_type = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        content_type = (
+            response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        )
         ext = mimetypes.guess_extension(content_type) or ".jpg"
         # mimetypes can return .jpe for image/jpeg on some systems
         if ext == ".jpe":
@@ -46,7 +54,7 @@ async def save_from_url(comic_id: int, url: str) -> Path | None:
         return dest
 
     except Exception:
-        log.exception("cover download error for comic %s url=%s", comic_id, url)
+        logger.exception("cover download error for comic %s url=%s", comic_id, url)
         return None
 
 
@@ -80,6 +88,6 @@ def inject(folder: Path, comic) -> None:
         return
     src = Path(comic.cover_path)
     if not src.exists():
-        log.warning("cover_handler.inject: cover file missing at %s", src)
+        logger.warning("cover_handler.inject: cover file missing at %s", src)
         return
     shutil.copy2(src, folder / f"cover{src.suffix}")

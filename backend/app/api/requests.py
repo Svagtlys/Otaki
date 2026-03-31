@@ -2,7 +2,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
@@ -11,14 +20,18 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import get_db
-from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from ..models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from ..models.comic import Comic, ComicStatus
 from ..models.user import User
 from ..services import cover_handler, source_selector, suwayomi
 from ..workers import scheduler
 from .auth import require_auth
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -148,7 +161,7 @@ async def _create_assignments_and_enqueue(
         try:
             await suwayomi.enqueue_downloads(chapter_ids)
         except Exception as exc:
-            log.warning(
+            logger.warning(
                 "%s: enqueue_downloads failed for manga_id=%s: %r",
                 caller,
                 manga_id,
@@ -376,7 +389,9 @@ async def set_cover(
         if not (file.content_type or "").startswith("image/"):
             raise HTTPException(status_code=415, detail="File must be an image")
         content = await file.read()
-        cover_path = cover_handler.save_from_file(comic_id, content, file.content_type or "image/jpeg")
+        cover_path = cover_handler.save_from_file(
+            comic_id, content, file.content_type or "image/jpeg"
+        )
         if cover_path is None:
             raise HTTPException(status_code=415, detail="File must be an image")
     else:

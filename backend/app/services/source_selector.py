@@ -10,7 +10,7 @@ from ..models.comic import Comic
 from ..models.source import Source
 from . import suwayomi
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 
 def _find_matching_result(results: list[dict], titles: list[str]) -> dict | None:
@@ -65,13 +65,18 @@ async def build_chapter_source_map(
             match = _find_matching_result(search_results, [comic.title])
             if match is None:
                 logger.warning(
-                    "source %s: no title match for %r — skipping", source.name, comic.title
+                    "source %s: no title match for %r — skipping",
+                    source.name,
+                    comic.title,
                 )
                 return [], None
             manga_id = match["manga_id"]
             manga_title = match["title"]
             chapters = await suwayomi.fetch_chapters(manga_id)
-            return [(source, manga_id, {**ch, "source_manga_title": manga_title}) for ch in chapters], None
+            return [
+                (source, manga_id, {**ch, "source_manga_title": manga_title})
+                for ch in chapters
+            ], None
         except Exception as e:
             reason = suwayomi.classify_error(e)
             logger.warning(
@@ -86,7 +91,9 @@ async def build_chapter_source_map(
 
     # For each chapter number, keep the entry from the highest-priority source
     # (lowest effective_priority value).
-    best: dict[float, tuple[int, Source, str, dict]] = {}  # chapter_number → (eff_priority, source, manga_id, ch_data)
+    best: dict[
+        float, tuple[int, Source, str, dict]
+    ] = {}  # chapter_number → (eff_priority, source, manga_id, ch_data)
     source_errors: list[dict] = []
     for source, (source_results, error_reason) in zip(sources, gathered):
         if error_reason is not None:
@@ -97,7 +104,10 @@ async def build_chapter_source_map(
             if ch_num not in best or eff < best[ch_num][0]:
                 best[ch_num] = (eff, src, manga_id, chapter)
 
-    chapter_map = {ch_num: (src, manga_id, ch_data) for ch_num, (_, src, manga_id, ch_data) in best.items()}
+    chapter_map = {
+        ch_num: (src, manga_id, ch_data)
+        for ch_num, (_, src, manga_id, ch_data) in best.items()
+    }
     return chapter_map, source_errors
 
 

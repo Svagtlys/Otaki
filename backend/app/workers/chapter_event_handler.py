@@ -6,14 +6,18 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import AsyncSessionLocal
-from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from ..models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from ..models.comic import Comic
 from ..services import file_relocator, suwayomi
 from . import scheduler as scheduler_module
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
-_RETRY_BASE_SECONDS = 300   # 5 minutes
+_RETRY_BASE_SECONDS = 300  # 5 minutes
 _RETRY_CAP_SECONDS = 86400  # 24 hours
 
 
@@ -35,7 +39,9 @@ async def handle(
     Deferred to 1.4: quality_scanner, QualityScan row, image_processor
     """
     if event_type == "ERROR":
-        await _handle_error(suwayomi_chapter_id, chapter_name, manga_title, source_display_name)
+        await _handle_error(
+            suwayomi_chapter_id, chapter_name, manga_title, source_display_name
+        )
         return
 
     # FINISHED path

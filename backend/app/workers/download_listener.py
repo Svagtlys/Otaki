@@ -7,7 +7,7 @@ from ..config import settings
 from ..services import suwayomi
 from . import chapter_event_handler
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 _background_tasks: set[asyncio.Task] = set()
 # chapter_id → poll item dict from the most recent poll snapshot
@@ -25,7 +25,9 @@ def _dispatch(
 ) -> None:
     """Schedule chapter_event_handler.handle() as a background task."""
     task = asyncio.create_task(
-        chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_name)
+        chapter_event_handler.handle(
+            event_type, chapter_id, chapter_name, manga_title, source_name
+        )
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -51,7 +53,13 @@ def _process_poll_result(items: list[dict]) -> None:
     for chapter_id in disappeared:
         if chapter_id not in _emitted_error_ids:
             old = _polled_items[chapter_id]
-            _dispatch("FINISHED", old["chapter_id"], old["chapter_name"], old["manga_title"], old["source_name"])
+            _dispatch(
+                "FINISHED",
+                old["chapter_id"],
+                old["chapter_name"],
+                old["manga_title"],
+                old["source_name"],
+            )
     # Clean up error tracking for items that have left the queue
     _emitted_error_ids -= disappeared
 
@@ -59,7 +67,13 @@ def _process_poll_result(items: list[dict]) -> None:
     for chapter_id, item in current.items():
         if item["state"] == "ERROR" and chapter_id not in _emitted_error_ids:
             _emitted_error_ids.add(chapter_id)
-            _dispatch("ERROR", item["chapter_id"], item["chapter_name"], item["manga_title"], item["source_name"])
+            _dispatch(
+                "ERROR",
+                item["chapter_id"],
+                item["chapter_name"],
+                item["manga_title"],
+                item["source_name"],
+            )
 
     _polled_items = current
 
@@ -175,11 +189,21 @@ async def run() -> None:
             attempt = 0
             while True:
                 try:
-                    async for (event_type, chapter_id, chapter_name, manga_title, source_name) in (
-                        suwayomi.subscribe_download_changed()
-                    ):
+                    async for (
+                        event_type,
+                        chapter_id,
+                        chapter_name,
+                        manga_title,
+                        source_name,
+                    ) in suwayomi.subscribe_download_changed():
                         attempt = 0
-                        _dispatch(event_type, chapter_id, chapter_name, manga_title, source_name)
+                        _dispatch(
+                            event_type,
+                            chapter_id,
+                            chapter_name,
+                            manga_title,
+                            source_name,
+                        )
                     # Generator exhausted cleanly — reconnect immediately.
                     attempt = 0
                 except (TransportError, ConnectionError, Exception) as exc:
@@ -197,7 +221,7 @@ async def run() -> None:
                         )
                         use_polling = True
                         break
-                    backoff = min(2 ** attempt, 30)
+                    backoff = min(2**attempt, 30)
                     await asyncio.sleep(backoff)
         else:
             # POLLING mode

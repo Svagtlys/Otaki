@@ -1,3 +1,4 @@
+import logging
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -6,7 +7,7 @@ from alembic import context
 
 config = context.config
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and not logging.getLogger().hasHandlers():
     fileConfig(config.config_file_name)
 
 # Import Base so autogenerate can detect model changes.

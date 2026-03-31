@@ -4,6 +4,10 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings
 
+import logging
+
+logger = logging.getLogger(f"otaki.{__name__}")
+
 _here = Path(__file__).parent.parent  # backend/
 _env_file = os.environ.get("ENV_FILE", ".env")
 

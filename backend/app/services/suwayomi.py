@@ -53,7 +53,9 @@ def _auth_headers() -> dict[str, str]:
 
 def _make_client(url: str, username: str | None, password: str | None) -> Client:
     auth = (username, password) if username else None
-    transport = HTTPXAsyncTransport(url=f"{url}/api/graphql", auth=auth, verify=False)
+    transport = HTTPXAsyncTransport(
+        url=f"{url}/api/graphql", auth=auth, verify=settings.SUWAYOMI_VERIFY_SSL
+    )
     return Client(transport=transport, fetch_schema_from_transport=False)
 
 
@@ -66,7 +68,7 @@ async def ping(url: str, username: str | None, password: str | None) -> bool:
     """
     try:
         auth = (username, password) if username else None
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=settings.SUWAYOMI_VERIFY_SSL) as client:
             r = await client.post(
                 f"{url}/api/graphql",
                 json={"query": "{ __typename }"},
@@ -221,13 +223,17 @@ async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, st
     WebSocket subscription."""
     ws_url = settings.SUWAYOMI_URL.replace("https://", "wss://").replace("http://", "ws://")
     ws_url += "/api/graphql"
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    if settings.SUWAYOMI_VERIFY_SSL:
+        ssl_arg: ssl.SSLContext | bool = True
+    else:
+        _ssl_ctx = ssl.create_default_context()
+        _ssl_ctx.check_hostname = False
+        _ssl_ctx.verify_mode = ssl.CERT_NONE
+        ssl_arg = _ssl_ctx
     transport = WebsocketsTransport(
         url=ws_url,
         headers=_auth_headers(),
-        ssl=_ssl_ctx,
+        ssl=ssl_arg,
         subprotocols=["graphql-transport-ws"],
     )
     async with Client(transport=transport) as session:

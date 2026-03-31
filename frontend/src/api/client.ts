@@ -34,6 +34,10 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   const response = await fetch(path, { ...options, headers })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+      window.location.href = '/login'
+    }
     const text = await response.text().catch(() => response.statusText)
     throw new ApiError(response.status, text)
   }

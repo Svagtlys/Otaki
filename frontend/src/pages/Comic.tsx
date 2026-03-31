@@ -72,7 +72,8 @@ export default function Comic() {
   const [editError, setEditError] = useState<string | null>(null)
 
   const [newAlias, setNewAlias] = useState('')
-  const [aliasSubmitting, setAliasSubmitting] = useState(false)
+  const [pendingAliasAdds, setPendingAliasAdds] = useState<string[]>([])
+  const [pendingAliasDeletes, setPendingAliasDeletes] = useState<Set<number>>(new Set())
   const [aliasError, setAliasError] = useState<string | null>(null)
 
   const { data: comic, isLoading, error } = useQuery({
@@ -136,6 +137,10 @@ export default function Comic() {
     setEditUpgradeDays(comic.upgrade_override_days != null ? String(comic.upgrade_override_days) : '')
     setEditUpgradeClear(comic.upgrade_override_days == null)
     setEditError(null)
+    setAliasError(null)
+    setPendingAliasAdds([])
+    setPendingAliasDeletes(new Set())
+    setNewAlias('')
     setEditOpen(true)
   }
 
@@ -158,6 +163,18 @@ export default function Comic() {
         method: 'PATCH',
         body: JSON.stringify(patch),
       })
+      await Promise.all([
+        ...Array.from(pendingAliasDeletes).map(id =>
+          apiFetch(`/api/requests/${comicId}/aliases/${id}`, { method: 'DELETE' })
+        ),
+        ...(newAlias.trim()
+          ? [apiFetch(`/api/requests/${comicId}/aliases`, { method: 'POST', body: JSON.stringify({ title: newAlias.trim() }) })]
+          : []
+        ),
+        ...pendingAliasAdds.map(title =>
+          apiFetch(`/api/requests/${comicId}/aliases`, { method: 'POST', body: JSON.stringify({ title }) })
+        ),
+      ])
       setEditOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
     } catch (err) {
@@ -181,31 +198,19 @@ export default function Comic() {
     }
   }
 
-  async function handleAddAlias() {
-    if (!newAlias.trim()) return
-    setAliasSubmitting(true)
-    setAliasError(null)
-    try {
-      await apiFetch(`/api/requests/${comicId}/aliases`, {
-        method: 'POST',
-        body: JSON.stringify({ title: newAlias.trim() }),
-      })
-      setNewAlias('')
-      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
-    } catch (err) {
-      setAliasError(extractDetail(err))
-    } finally {
-      setAliasSubmitting(false)
-    }
+  function handleStagedAddAlias() {
+    const title = newAlias.trim()
+    if (!title) return
+    setPendingAliasAdds(prev => [...prev, title])
+    setNewAlias('')
   }
 
-  async function handleDeleteAlias(aliasId: number) {
-    try {
-      await apiFetch(`/api/requests/${comicId}/aliases/${aliasId}`, { method: 'DELETE' })
-      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
-    } catch (err) {
-      setAliasError(extractDetail(err))
-    }
+  function handleStagedDeleteAlias(aliasId: number) {
+    setPendingAliasDeletes(prev => new Set([...prev, aliasId]))
+  }
+
+  function handleRemoveStagedAdd(title: string) {
+    setPendingAliasAdds(prev => prev.filter(t => t !== title))
   }
 
   return (
@@ -354,17 +359,32 @@ export default function Comic() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#444', marginBottom: 6 }}>Aliases</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                  {(comic.aliases ?? []).map(a => (
-                    <span key={a.id} style={aliasChipStyle}>
-                      {a.title}
+                  {(comic.aliases ?? [])
+                    .filter(a => !pendingAliasDeletes.has(a.id))
+                    .map(a => (
+                      <span key={a.id} style={aliasChipStyle}>
+                        {a.title}
+                        <button
+                          onClick={() => handleStagedDeleteAlias(a.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
+                          aria-label={`Remove alias ${a.title}`}
+                        >×</button>
+                      </span>
+                    ))}
+                  {pendingAliasAdds.map(title => (
+                    <span key={title} style={{ ...aliasChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>
+                      {title}
                       <button
-                        onClick={() => handleDeleteAlias(a.id)}
+                        onClick={() => handleRemoveStagedAdd(title)}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
-                        aria-label={`Remove alias ${a.title}`}
+                        aria-label={`Remove pending alias ${title}`}
                       >×</button>
                     </span>
                   ))}
-                  {(comic.aliases ?? []).length === 0 && <span style={{ fontSize: 12, color: '#888' }}>None</span>}
+                  {(comic.aliases ?? []).filter(a => !pendingAliasDeletes.has(a.id)).length === 0 &&
+                    pendingAliasAdds.length === 0 && (
+                      <span style={{ fontSize: 12, color: '#888' }}>None</span>
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input
@@ -372,13 +392,13 @@ export default function Comic() {
                     placeholder="Add alias…"
                     value={newAlias}
                     onChange={e => setNewAlias(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleAddAlias()}
+                    onKeyDown={e => e.key === 'Enter' && handleStagedAddAlias()}
                     style={{ ...editInputStyle, marginTop: 0, flex: 1 }}
                   />
                   <button
-                    onClick={handleAddAlias}
-                    disabled={aliasSubmitting || !newAlias.trim()}
-                    style={{ ...secondaryButtonStyle, opacity: (aliasSubmitting || !newAlias.trim()) ? 0.6 : 1 }}
+                    onClick={handleStagedAddAlias}
+                    disabled={!newAlias.trim()}
+                    style={{ ...secondaryButtonStyle, opacity: !newAlias.trim() ? 0.6 : 1 }}
                   >
                     Add
                   </button>

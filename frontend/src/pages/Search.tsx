@@ -105,6 +105,7 @@ export default function Search() {
           primary_title: displayName,
           library_title: libraryTitle,
           cover_url: chosenCoverUrl,
+          aliases: aliasTitles,
         }),
       })
       navigate('/library')
@@ -116,6 +117,9 @@ export default function Search() {
   }
 
   const selectedResults = results.filter(r => selected.has(r.url))
+  const aliasTitles = [...new Set(
+    selectedResults.map(r => r.title).filter(t => t !== displayName)
+  )]
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
@@ -261,6 +265,18 @@ export default function Search() {
             </label>
           </div>
 
+          {/* Aliases (read-only) */}
+          {aliasTitles.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Other titles (aliases)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {aliasTitles.map(t => (
+                  <span key={t} style={aliasChipStyle}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Cover picker */}
           {selectedResults.some(r => r.cover_display_url) && (
             <div style={{ marginBottom: 16 }}>
@@ -359,6 +375,16 @@ const labelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: '#444',
+}
+
+const aliasChipStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '2px 8px',
+  fontSize: 12,
+  background: '#f0f0f0',
+  border: '1px solid #ddd',
+  borderRadius: 12,
+  color: '#555',
 }
 
 const sourceErrorBannerStyle: React.CSSProperties = {

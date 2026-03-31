@@ -730,6 +730,118 @@ async def test_delete_alias_wrong_comic_returns_404(logged_in_client):
     assert r.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# PATCH tests (#97)
+# ---------------------------------------------------------------------------
+
+
+async def test_patch_updates_library_title(logged_in_client):
+    comic = await _add_comic(title="Patch Library Title Comic")
+    r = await logged_in_client.patch(
+        f"/api/requests/{comic.id}",
+        json={"library_title": "New Library Name"},
+    )
+    assert r.status_code == 200
+    assert r.json()["library_title"] == "New Library Name"
+
+    from app import database
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+    assert c.library_title == "New Library Name"
+
+
+async def test_patch_updates_poll_override_days_and_reschedules(logged_in_client, monkeypatch):
+    from app.workers import scheduler
+
+    registered = []
+    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: registered.append(c))
+
+    comic = await _add_comic(title="Patch Poll Days Comic")
+    r = await logged_in_client.patch(
+        f"/api/requests/{comic.id}",
+        json={"poll_override_days": 3.0},
+    )
+    assert r.status_code == 200
+    assert r.json()["poll_override_days"] == 3.0
+    assert len(registered) == 1
+    assert registered[0].poll_override_days == 3.0
+
+
+async def test_patch_clears_upgrade_override_days(logged_in_client, monkeypatch):
+    from app import database
+    from app.workers import scheduler
+
+    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: None)
+
+    comic = await _add_comic(title="Patch Upgrade Clear Comic")
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+        c.upgrade_override_days = 14.0
+        await db.commit()
+
+    r = await logged_in_client.patch(
+        f"/api/requests/{comic.id}",
+        json={"upgrade_override_days": None},
+    )
+    assert r.status_code == 200
+    assert r.json()["upgrade_override_days"] is None
+
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+    assert c.upgrade_override_days is None
+
+
+async def test_patch_status_complete_removes_jobs(logged_in_client, monkeypatch):
+    from app.workers import scheduler
+
+    removed = []
+    monkeypatch.setattr(scheduler, "remove_comic_jobs", lambda cid: removed.append(cid))
+
+    comic = await _add_comic(title="Patch Status Complete Comic")
+    r = await logged_in_client.patch(
+        f"/api/requests/{comic.id}",
+        json={"status": "complete"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "complete"
+    assert comic.id in removed
+
+
+async def test_patch_status_tracking_registers_jobs(logged_in_client, monkeypatch):
+    from app import database
+    from app.models.comic import ComicStatus
+    from app.workers import scheduler
+
+    registered = []
+    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: registered.append(c))
+
+    comic = await _add_comic(title="Patch Status Tracking Comic")
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+        c.status = ComicStatus.complete
+        await db.commit()
+
+    r = await logged_in_client.patch(
+        f"/api/requests/{comic.id}",
+        json={"status": "tracking"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "tracking"
+    assert len(registered) == 1
+
+
+async def test_patch_empty_body_is_noop(logged_in_client):
+    comic = await _add_comic(title="Patch Noop Comic")
+    r = await logged_in_client.patch(f"/api/requests/{comic.id}", json={})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Patch Noop Comic"
+
+
+async def test_patch_not_found(logged_in_client):
+    r = await logged_in_client.patch("/api/requests/99999", json={"library_title": "Ghost"})
+    assert r.status_code == 404
+
+
 @pytest.mark.integration
 async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_title, monkeypatch):
     """POST with a real manga title; verify 201 and assignments have chapter IDs."""

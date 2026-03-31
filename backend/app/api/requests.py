@@ -62,6 +62,15 @@ class AddAliasBody(BaseModel):
     title: str
 
 
+class PatchComicBody(BaseModel):
+    library_title: str | None = None
+    poll_override_days: float | None = None
+    upgrade_override_days: float | None = None  # None means "clear"; absent means "unchanged"
+    status: ComicStatus | None = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class SourceError(BaseModel):
     source_name: str
     reason: str
@@ -340,6 +349,64 @@ async def get_request(
         **ComicResponse.model_validate(comic).model_dump(),
         chapters=[_chapter_summary(a) for a in assignments],
     )
+
+
+@router.patch("/{comic_id}", response_model=ComicResponse)
+async def patch_request(
+    comic_id: int,
+    body: PatchComicBody,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> ComicResponse:
+    comic_result = await db.execute(
+        select(Comic).where(Comic.id == comic_id).options(selectinload(Comic.aliases))
+    )
+    comic = comic_result.scalar_one_or_none()
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    now = datetime.now(timezone.utc)
+    fields = body.model_fields_set
+
+    if "library_title" in fields and body.library_title is not None:
+        comic.library_title = body.library_title
+
+    if "poll_override_days" in fields and body.poll_override_days is not None:
+        comic.poll_override_days = body.poll_override_days
+        comic.next_poll_at = now + timedelta(days=body.poll_override_days)
+
+    if "upgrade_override_days" in fields:
+        comic.upgrade_override_days = body.upgrade_override_days
+        if body.upgrade_override_days is not None:
+            comic.next_upgrade_check_at = now + timedelta(days=body.upgrade_override_days)
+        else:
+            comic.next_upgrade_check_at = now + timedelta(days=comic.poll_override_days)
+
+    if "status" in fields and body.status is not None:
+        old_status = comic.status
+        comic.status = body.status
+        await db.commit()
+        await db.refresh(comic)
+        if body.status == ComicStatus.complete:
+            scheduler.remove_comic_jobs(comic_id)
+        elif body.status == ComicStatus.tracking and old_status != ComicStatus.tracking:
+            scheduler.register_comic_jobs(comic)
+        result = await db.execute(
+            select(Comic).where(Comic.id == comic_id).options(selectinload(Comic.aliases))
+        )
+        comic = result.scalar_one()
+        return ComicResponse.model_validate(comic)
+
+    await db.commit()
+    result = await db.execute(
+        select(Comic).where(Comic.id == comic_id).options(selectinload(Comic.aliases))
+    )
+    comic = result.scalar_one()
+
+    if fields & {"poll_override_days", "upgrade_override_days"}:
+        scheduler.register_comic_jobs(comic)
+
+    return ComicResponse.model_validate(comic)
 
 
 class DiscoverResponse(BaseModel):

@@ -472,6 +472,41 @@ Full detail for one comic: all chapter assignments with download and relocation 
 
 ---
 
+### `PATCH /api/requests/{id}`
+
+Update one or more settings for a tracked comic. All fields are optional — only fields present in the request body are applied; omitted fields are left unchanged.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body** (any subset)
+
+```json
+{
+  "library_title": "One Piece Vol. 1+",
+  "poll_override_days": 3.0,
+  "upgrade_override_days": null,
+  "status": "complete"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `library_title` | string | Folder name and `ComicInfo.xml` `<Series>` tag for future relocations. Does **not** rename existing library files. |
+| `poll_override_days` | float | New poll interval. Reschedules the APScheduler poll job immediately. |
+| `upgrade_override_days` | float \| null | New upgrade interval. `null` = clear override (reverts to using `poll_override_days`). Reschedules the upgrade job. |
+| `status` | `"tracking"` \| `"complete"` | `"complete"` stops all scheduled jobs; `"tracking"` re-registers them. |
+
+**Response `200`** — `ComicResponse` (same shape as `POST /api/requests`).
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
 ### `POST /api/requests/{id}/discover`
 
 Re-run source discovery for a comic and queue any chapters not yet assigned. Safe to call at any time — only creates assignments for chapter numbers not already tracked with `is_active=True`. Intended for comics that ended up with 0 (or partial) assignments due to a connectivity failure at request time.

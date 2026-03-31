@@ -175,15 +175,15 @@ export default function Search() {
                     <img
                       src={r.cover_display_url}
                       alt=""
-                      width={48}
-                      height={64}
-                      style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                      width={160}
+                      height={220}
+                      style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
                       onError={e => { e.currentTarget.style.display = 'none' }}
                     />
                   ) : (
-                    <div style={{ width: 48, height: 64, background: '#eee', borderRadius: 4, flexShrink: 0 }} />
+                    <div style={{ width: 160, height: 220, background: '#eee', borderRadius: 4 }} />
                   )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ marginTop: 8 }}>
                     <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{r.title}</div>
                     <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{r.source_name}</div>
                     {r.synopsis && (
@@ -191,7 +191,7 @@ export default function Search() {
                         fontSize: 12,
                         color: '#444',
                         display: '-webkit-box',
-                        WebkitLineClamp: 2,
+                        WebkitLineClamp: 3,
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden',
                       }}>
@@ -273,8 +273,8 @@ export default function Search() {
                       key={r.url}
                       src={r.cover_display_url!}
                       alt={r.source_name}
-                      width={48}
-                      height={64}
+                      width={160}
+                      height={220}
                       onClick={() => setChosenCoverUrl(r.cover_url)}
                       style={{
                         objectFit: 'cover',
@@ -340,14 +340,14 @@ const primaryButtonStyle: React.CSSProperties = {
 
 const gridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(184px, 1fr))',
   gap: 12,
   marginTop: 16,
 }
 
 const cardStyle: React.CSSProperties = {
   display: 'flex',
-  gap: 12,
+  flexDirection: 'column',
   padding: 12,
   borderRadius: 6,
   cursor: 'pointer',

@@ -194,6 +194,7 @@ async def create_request(
         title=body.primary_title,
         library_title=body.library_title or body.primary_title,
         cover_path=None,
+        requested_cover_url=body.cover_url or None,
         status=ComicStatus.tracking,
         poll_override_days=poll_days,
         upgrade_override_days=upgrade_days,
@@ -216,11 +217,13 @@ async def create_request(
     await db.refresh(comic)
     scheduler.register_comic_jobs(comic)
 
-    # 8. Download cover if provided
+    # 8. Download cover if provided; clear requested_cover_url on success so
+    # discover_chapters does not retry a URL that already worked.
     if body.cover_url:
         cover_path = await cover_handler.save_from_url(comic.id, body.cover_url)
         if cover_path:
             comic.cover_path = str(cover_path)
+            comic.requested_cover_url = None
             await db.commit()
             await db.refresh(comic)
 
@@ -351,6 +354,14 @@ async def discover_chapters(
     new_count = await _create_assignments_and_enqueue(
         comic_id, new_entries, db, "discover_chapters"
     )
+
+    # Retry cover download if it was never saved (e.g. sources failed at request time).
+    if comic.cover_path is None and comic.requested_cover_url:
+        cover_path = await cover_handler.save_from_url(comic.id, comic.requested_cover_url)
+        if cover_path:
+            comic.cover_path = str(cover_path)
+            comic.requested_cover_url = None
+
     await db.commit()
     return DiscoverResponse(
         new_chapters=new_count,

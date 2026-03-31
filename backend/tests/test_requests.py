@@ -394,6 +394,114 @@ async def test_cover_delete_clears_cover_path(logged_in_client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# requested_cover_url tests (#92)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_request_stores_requested_cover_url(logged_in_client, monkeypatch):
+    """cover_url submitted at request time is persisted as requested_cover_url."""
+    from app import database
+    from app.services import source_selector, cover_handler
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    # Cover download fails so requested_cover_url should remain set
+    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=None))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={"primary_title": "Cover URL Stored", "cover_url": "https://example.com/cover.jpg"},
+    )
+    assert r.status_code == 201
+    comic_id = r.json()["id"]
+
+    async with database.AsyncSessionLocal() as db:
+        comic = await db.get(Comic, comic_id)
+    assert comic.requested_cover_url == "https://example.com/cover.jpg"
+    assert comic.cover_path is None
+
+
+async def test_create_request_clears_requested_cover_url_on_success(logged_in_client, monkeypatch, tmp_path):
+    """requested_cover_url is nulled after a successful cover download at request time."""
+    from app import database
+    from app.services import source_selector, cover_handler
+
+    fake_cover = tmp_path / "1.jpg"
+    fake_cover.write_bytes(b"img")
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=fake_cover))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={"primary_title": "Cover URL Cleared", "cover_url": "https://example.com/cover.jpg"},
+    )
+    assert r.status_code == 201
+    comic_id = r.json()["id"]
+
+    async with database.AsyncSessionLocal() as db:
+        comic = await db.get(Comic, comic_id)
+    assert comic.requested_cover_url is None
+    assert comic.cover_path == str(fake_cover)
+
+
+async def test_discover_retries_cover_when_missing(logged_in_client, monkeypatch, tmp_path):
+    """discover_chapters downloads the cover if cover_path is None and requested_cover_url is set."""
+    from app import database
+    from app.services import source_selector, cover_handler
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+
+    fake_cover = tmp_path / "1.jpg"
+    fake_cover.write_bytes(b"img")
+    save_mock = AsyncMock(return_value=fake_cover)
+    monkeypatch.setattr(cover_handler, "save_from_url", save_mock)
+
+    comic = await _add_comic(title="Discover Cover Comic")
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+        c.requested_cover_url = "https://example.com/cover.jpg"
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/discover")
+    assert r.status_code == 200
+
+    save_mock.assert_awaited_once_with(comic.id, "https://example.com/cover.jpg")
+
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+    assert c.cover_path == str(fake_cover)
+    assert c.requested_cover_url is None
+
+
+async def test_discover_does_not_overwrite_existing_cover(logged_in_client, monkeypatch, tmp_path):
+    """discover_chapters skips the cover retry if cover_path is already set."""
+    from app import database
+    from app.services import source_selector, cover_handler
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    save_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(cover_handler, "save_from_url", save_mock)
+
+    existing_cover = tmp_path / "existing.jpg"
+    existing_cover.write_bytes(b"img")
+
+    comic = await _add_comic(title="Discover No Overwrite Comic")
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+        c.cover_path = str(existing_cover)
+        c.requested_cover_url = "https://example.com/new.jpg"
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/discover")
+    assert r.status_code == 200
+
+    save_mock.assert_not_awaited()
+
+    async with database.AsyncSessionLocal() as db:
+        c = await db.get(Comic, comic.id)
+    assert c.cover_path == str(existing_cover)
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — require live Suwayomi
 # ---------------------------------------------------------------------------
 

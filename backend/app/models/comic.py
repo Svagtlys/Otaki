@@ -10,6 +10,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .chapter_assignment import ChapterAssignment
+    from .comic_alias import ComicAlias
 
 
 class ComicStatus(str, enum.Enum):
@@ -47,4 +48,7 @@ class Comic(Base):
 
     chapter_assignments: Mapped[list["ChapterAssignment"]] = relationship(
         "ChapterAssignment", back_populates="comic"
+    )
+    aliases: Mapped[list["ComicAlias"]] = relationship(
+        "ComicAlias", back_populates="comic", cascade="all, delete-orphan"
     )

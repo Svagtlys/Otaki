@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from app.models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from app.models.comic import Comic, ComicStatus
+from app.models.comic_alias import ComicAlias
 from app.models.source import Source
 from app.services import source_selector, suwayomi
 
@@ -179,6 +180,96 @@ async def test_build_chapter_source_map_returns_error_when_source_raises(db_sess
     assert len(source_errors) == 1
     assert source_errors[0]["source_name"] == "Failing Source"
     assert source_errors[0]["reason"] == "connection timed out"
+
+
+async def test_build_chapter_source_map_matches_alias_title_in_results(db_session):
+    """If comic.title doesn't match any result, but an alias title does, that result is used."""
+    source = await _make_source(db_session, name="Source A", priority=1)
+    comic = await _make_comic(db_session, title="Primary Title")
+
+    # Add an alias whose title matches the search result
+    alias = ComicAlias(comic_id=comic.id, title="Alias Title")
+    db_session.add(alias)
+    await db_session.commit()
+
+    fake_results = [
+        {"manga_id": "alias-match-id", "title": "Alias Title"},
+    ]
+    fake_chapters = [
+        {
+            "chapter_number": 1.0,
+            "suwayomi_chapter_id": "ch-1",
+            "chapter_published_at": datetime.now(timezone.utc),
+            "volume_number": None,
+            "source_chapter_name": "Chapter 1",
+        }
+    ]
+
+    with (
+        patch(
+            "app.services.source_selector.suwayomi.search_source",
+            new=AsyncMock(return_value=fake_results),
+        ),
+        patch(
+            "app.services.source_selector.suwayomi.fetch_chapters",
+            new=AsyncMock(return_value=fake_chapters),
+        ),
+    ):
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert len(chapter_map) == 1
+    _src, manga_id, _ch = chapter_map[1.0]
+    assert manga_id == "alias-match-id"
+    assert source_errors == []
+
+
+async def test_build_chapter_source_map_retries_search_with_alias_title(db_session):
+    """If primary title search returns no results, alias titles are tried as search queries."""
+    source = await _make_source(db_session, name="Source A", priority=1)
+    comic = await _make_comic(db_session, title="Primary Title")
+
+    alias = ComicAlias(comic_id=comic.id, title="Alias Title")
+    db_session.add(alias)
+    await db_session.commit()
+
+    fake_chapters = [
+        {
+            "chapter_number": 1.0,
+            "suwayomi_chapter_id": "ch-1",
+            "chapter_published_at": datetime.now(timezone.utc),
+            "volume_number": None,
+            "source_chapter_name": "Chapter 1",
+        }
+    ]
+
+    call_count = 0
+
+    async def _search_side_effect(source_id, query):
+        nonlocal call_count
+        call_count += 1
+        if query == "Primary Title":
+            return []  # no results on primary
+        if query == "Alias Title":
+            return [{"manga_id": "alias-search-id", "title": "Alias Title"}]
+        return []
+
+    with (
+        patch(
+            "app.services.source_selector.suwayomi.search_source",
+            new=AsyncMock(side_effect=_search_side_effect),
+        ),
+        patch(
+            "app.services.source_selector.suwayomi.fetch_chapters",
+            new=AsyncMock(return_value=fake_chapters),
+        ),
+    ):
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+
+    assert len(chapter_map) == 1
+    _src, manga_id, _ch = chapter_map[1.0]
+    assert manga_id == "alias-search-id"
+    assert call_count == 2  # once for primary, once for alias
+    assert source_errors == []
 
 
 async def test_build_chapter_source_map_error_does_not_block_other_sources(db_session):

@@ -28,7 +28,7 @@ from ..models.chapter_assignment import (
 from ..models.comic import Comic, ComicStatus
 from ..models.comic_alias import ComicAlias
 from ..models.user import User
-from ..services import cover_handler, source_selector, suwayomi
+from ..services import cadence_inferrer, cover_handler, source_selector, suwayomi
 from ..workers import scheduler
 from .auth import require_auth
 
@@ -87,6 +87,7 @@ class ComicResponse(BaseModel):
     next_poll_at: datetime | None
     next_upgrade_check_at: datetime | None
     last_upgrade_check_at: datetime | None
+    inferred_cadence_days: float | None
     created_at: datetime
     aliases: list[AliasResponse] = []
 
@@ -124,6 +125,7 @@ class ComicListItem(BaseModel):
     chapter_counts: dict[str, int]
     poll_override_days: float
     upgrade_override_days: float | None
+    inferred_cadence_days: float | None
     next_poll_at: datetime | None
     next_upgrade_check_at: datetime | None
     last_upgrade_check_at: datetime | None
@@ -236,10 +238,16 @@ async def create_request(
     chapter_map, src_errors = await source_selector.build_chapter_source_map(comic, db)
     await _create_assignments_and_enqueue(comic.id, chapter_map, db, "create_request")
 
-    # 4. Set next poll/upgrade times
+    # 4. Infer cadence from chapters (if any were found)
+    if chapter_map:
+        await db.flush()
+        comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
+
+    # 5. Set next poll/upgrade times (use inferred cadence if no override set)
+    effective_poll = poll_days if body.poll_override_days else (comic.inferred_cadence_days or poll_days)
     now = datetime.now(timezone.utc)
-    comic.next_poll_at = now + timedelta(days=poll_days)
-    comic.next_upgrade_check_at = now + timedelta(days=upgrade_days or poll_days)
+    comic.next_poll_at = now + timedelta(days=effective_poll)
+    comic.next_upgrade_check_at = now + timedelta(days=upgrade_days or effective_poll)
 
     # 7. Commit and register jobs
     await db.commit()
@@ -316,6 +324,7 @@ async def list_requests(
                 chapter_counts=chapter_counts,
                 poll_override_days=comic.poll_override_days,
                 upgrade_override_days=comic.upgrade_override_days,
+                inferred_cadence_days=comic.inferred_cadence_days,
                 next_poll_at=comic.next_poll_at,
                 next_upgrade_check_at=comic.next_upgrade_check_at,
                 last_upgrade_check_at=comic.last_upgrade_check_at,

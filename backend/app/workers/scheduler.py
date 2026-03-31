@@ -9,8 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import AsyncSessionLocal
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
 from ..models.comic import Comic, ComicStatus
-from ..services import source_selector
-from ..services import suwayomi
+from ..services import cadence_inferrer, source_selector, suwayomi
 
 logger = logging.getLogger(f"otaki.{__name__}")
 
@@ -42,6 +41,31 @@ def remove_comic_jobs(comic_id: int) -> None:
             scheduler.remove_job(job_id)
         except JobLookupError:
             pass
+
+
+def _effective_poll_days(comic: Comic) -> float:
+    """Return the effective poll interval in days for *comic*.
+
+    Priority: poll_override_days (always set, defaults to DEFAULT_POLL_DAYS).
+    If the override equals the system default AND an inferred cadence is available,
+    prefer the inferred value so the schedule adapts to the actual release pace.
+    """
+    from ..config import settings
+
+    if comic.poll_override_days != settings.DEFAULT_POLL_DAYS:
+        # User explicitly set an override — respect it.
+        return comic.poll_override_days
+    return comic.inferred_cadence_days or comic.poll_override_days
+
+
+def _effective_upgrade_days(comic: Comic) -> float:
+    """Return the effective upgrade check interval in days for *comic*.
+
+    Priority: upgrade_override_days > inferred_cadence_days > poll_override_days.
+    """
+    if comic.upgrade_override_days is not None:
+        return comic.upgrade_override_days
+    return comic.inferred_cadence_days or comic.poll_override_days
 
 
 def _register_poll_job(comic: Comic) -> None:
@@ -110,8 +134,12 @@ async def _poll_comic(comic_id: int) -> None:
                         exc,
                     )
 
+        if new_entries:
+            await db.commit()
+            comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
+
         comic.next_poll_at = datetime.now(timezone.utc) + timedelta(
-            days=comic.poll_override_days
+            days=_effective_poll_days(comic)
         )
         _register_poll_job(comic)
 
@@ -173,12 +201,7 @@ async def _upgrade_comic(comic_id: int) -> None:
 
         now = datetime.now(timezone.utc)
         comic.last_upgrade_check_at = now
-        interval = (
-            comic.upgrade_override_days
-            if comic.upgrade_override_days is not None
-            else comic.poll_override_days
-        )
-        comic.next_upgrade_check_at = now + timedelta(days=interval)
+        comic.next_upgrade_check_at = now + timedelta(days=_effective_upgrade_days(comic))
         _register_upgrade_job(comic)
 
         await db.commit()

@@ -35,6 +35,7 @@ interface ComicDetail {
   status: string
   poll_override_days: number
   upgrade_override_days: number | null
+  inferred_cadence_days: number | null
   next_poll_at: string | null
   next_upgrade_check_at: string | null
   last_upgrade_check_at: string | null
@@ -285,7 +286,15 @@ export default function Comic() {
                   {comic.status === 'tracking' ? 'Mark complete' : 'Resume tracking'}
                 </button>
               </p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Poll interval</span>{comic.poll_override_days}d</p>
+              <p style={metaRowStyle}>
+                <span style={metaLabelStyle}>Poll interval</span>
+                {comic.poll_override_days}d
+                {comic.inferred_cadence_days != null && (
+                  <span style={{ marginLeft: 6, fontSize: 12, color: '#888' }}>
+                    (inferred: {comic.inferred_cadence_days.toFixed(1)}d)
+                  </span>
+                )}
+              </p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Upgrade interval</span>{comic.upgrade_override_days != null ? `${comic.upgrade_override_days}d` : '(use poll interval)'}</p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Next poll</span>{formatRelative(comic.next_poll_at)}</p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Last upgrade check</span>{formatRelative(comic.last_upgrade_check_at)}</p>

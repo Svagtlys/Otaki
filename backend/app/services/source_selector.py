@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from ..models.chapter_assignment import ChapterAssignment
 from ..models.comic import Comic
+from ..models.comic_alias import ComicAlias
 from ..models.source import Source
 from . import suwayomi
 
@@ -44,7 +45,6 @@ async def build_chapter_source_map(
     All three values per chapter are included so callers can create ChapterAssignment
     rows and enqueue downloads without any additional Suwayomi calls.
 
-    Uses comic.title only — alias lookup is deferred to 1.1.
     Per-comic source priority overrides are deferred to 1.3.
     """
     result = await db.execute(
@@ -52,23 +52,37 @@ async def build_chapter_source_map(
     )
     sources = result.scalars().all()
 
+    alias_result = await db.execute(
+        select(ComicAlias).where(ComicAlias.comic_id == comic.id)
+    )
+    alias_titles = [a.title for a in alias_result.scalars().all()]
+    all_titles = [comic.title] + alias_titles
+
     async def _chapters_for_source(
         source: Source,
     ) -> tuple[list[tuple[Source, str, dict]], str | None]:
         """Return (chapters, error_reason). error_reason is None on success."""
         try:
             search_results = await suwayomi.search_source(
-                source.suwayomi_source_id, comic.title
+                source.suwayomi_source_id, all_titles[0]
             )
-            if not search_results:
-                return [], None
-            match = _find_matching_result(search_results, [comic.title])
+            match = _find_matching_result(search_results, all_titles)
+            # If no match on primary title, retry with each alias as the search query
+            if match is None and len(all_titles) > 1:
+                for alias_title in all_titles[1:]:
+                    alias_results = await suwayomi.search_source(
+                        source.suwayomi_source_id, alias_title
+                    )
+                    match = _find_matching_result(alias_results, all_titles)
+                    if match is not None:
+                        break
             if match is None:
-                logger.warning(
-                    "source %s: no title match for %r — skipping",
-                    source.name,
-                    comic.title,
-                )
+                if search_results:
+                    logger.warning(
+                        "source %s: no title match for %r — skipping",
+                        source.name,
+                        comic.title,
+                    )
                 return [], None
             manga_id = match["manga_id"]
             manga_title = match["title"]

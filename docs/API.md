@@ -323,7 +323,8 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "library_title": "One Piece",
   "cover_url": "https://source1-url/cover.jpg",
   "poll_override_days": 7.0,
-  "upgrade_override_days": null
+  "upgrade_override_days": null,
+  "aliases": ["ワンピース", "One Piece (Viz)"]
 }
 ```
 
@@ -334,6 +335,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 | `cover_url` | string \| null | no | Cover image URL; downloaded and stored at request time. Injected as `cover.{ext}` into each chapter CBZ during relocation. |
 | `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` = use `DEFAULT_POLL_DAYS` (default 7) |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
+| `aliases` | string[] | no | Alternative titles for this comic. Saved as `ComicAlias` rows and used during source searches to find the comic under its alternative names. |
 
 **Response `201`**
 
@@ -350,6 +352,9 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": null,
   "created_at": "2025-03-15T09:00:00Z",
+  "aliases": [
+    { "id": 1, "title": "ワンピース" }
+  ],
   "source_errors": [
     { "source_name": "BrokenSource", "reason": "connection timed out" }
   ]
@@ -360,11 +365,12 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
-2. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources by `primary_title` and assigns each chapter to the highest-priority source that has it.
-3. Calls `suwayomi.fetch_chapters()` per source group.
-4. Calls `suwayomi.enqueue_downloads()` grouped by source.
-5. Creates one `ChapterAssignment` row per chapter with `download_status=queued`, `is_active=True`.
-6. Registers an APScheduler poll job for this comic.
+2. Creates `ComicAlias` rows for each entry in `aliases`.
+3. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources using `primary_title` and all alias titles, assigning each chapter to the highest-priority source that has it.
+4. Calls `suwayomi.fetch_chapters()` per source group.
+5. Calls `suwayomi.enqueue_downloads()` grouped by source.
+6. Creates one `ChapterAssignment` row per chapter with `download_status=queued`, `is_active=True`.
+7. Registers an APScheduler poll job for this comic.
 
 **Error Cases**
 - `409 Conflict` — a `Comic` with the same title is already being tracked.
@@ -437,6 +443,9 @@ Full detail for one comic: all chapter assignments with download and relocation 
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": "2025-03-15T10:00:00Z",
   "created_at": "2025-03-15T09:00:00Z",
+  "aliases": [
+    { "id": 1, "title": "ワンピース" }
+  ],
   "chapters": [
     {
       "assignment_id": 55,
@@ -565,6 +574,53 @@ Set or replace the cover image for a comic. Accepts either a URL to download fro
 Remove the cover image. Future chapter CBZs will not have `cover.png` injected.
 
 **Response `204 No Content`**
+
+---
+
+### `GET /api/requests/{id}/aliases`
+
+List all aliases for a comic.
+
+**Response `200`**
+
+```json
+[
+  { "id": 1, "title": "ワンピース" },
+  { "id": 2, "title": "One Piece (Viz)" }
+]
+```
+
+---
+
+### `POST /api/requests/{id}/aliases`
+
+Add a new alias to a comic. The alias title is used as a fallback search query when `source_selector` searches for this comic on sources.
+
+**Request Body**
+
+```json
+{ "title": "ワンピース" }
+```
+
+**Response `201`**
+
+```json
+{ "id": 3, "title": "ワンピース" }
+```
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `DELETE /api/requests/{id}/aliases/{alias_id}`
+
+Remove an alias from a comic.
+
+**Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — alias does not exist or does not belong to this comic.
 
 ---
 

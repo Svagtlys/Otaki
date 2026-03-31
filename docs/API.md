@@ -331,7 +331,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 |---|---|---|---|
 | `primary_title` | string | yes | Display name for the comic in the Otaki UI |
 | `library_title` | string | no | Name used for the library folder path and `ComicInfo.xml` `<Series>` tag. Defaults to `primary_title` if omitted. |
-| `cover_url` | string \| null | no | Stored for future use (cover injection deferred to 1.1). |
+| `cover_url` | string \| null | no | Cover image URL; downloaded and stored at request time. Injected as `cover.{ext}` into each chapter CBZ during relocation. |
 | `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` = use `DEFAULT_POLL_DAYS` (default 7) |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
 

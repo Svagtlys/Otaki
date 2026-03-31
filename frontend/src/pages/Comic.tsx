@@ -4,6 +4,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
 
+const TOKEN_KEY = 'otaki_token'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -45,6 +47,13 @@ export default function Comic() {
   const [discoverError, setDiscoverError] = useState<string | null>(null)
   const [discoverResult, setDiscoverResult] = useState<string | null>(null)
 
+  const [coverFormOpen, setCoverFormOpen] = useState(false)
+  const [coverTab, setCoverTab] = useState<'url' | 'file'>('url')
+  const [coverUrl, setCoverUrl] = useState('')
+  const [coverFile, setCoverFile] = useState<File | null>(null)
+  const [coverSubmitting, setCoverSubmitting] = useState(false)
+  const [coverError, setCoverError] = useState<string | null>(null)
+
   const { data: comic, isLoading, error } = useQuery({
     queryKey: ['comic', comicId],
     queryFn: () => apiFetch<ComicDetail>(`/api/requests/${comicId}`),
@@ -67,6 +76,38 @@ export default function Comic() {
     }
   }
 
+  async function handleCoverSubmit() {
+    setCoverSubmitting(true)
+    setCoverError(null)
+    try {
+      if (coverTab === 'url') {
+        await apiFetch(`/api/requests/${comicId}/cover`, {
+          method: 'POST',
+          body: JSON.stringify({ url: coverUrl }),
+        })
+      } else if (coverFile) {
+        const formData = new FormData()
+        formData.append('file', coverFile)
+        const token = localStorage.getItem(TOKEN_KEY)
+        const headers: Record<string, string> = {}
+        if (token) headers['Authorization'] = `Bearer ${token}`
+        const res = await fetch(`/api/requests/${comicId}/cover`, { method: 'POST', headers, body: formData })
+        if (!res.ok) {
+          const text = await res.text().catch(() => res.statusText)
+          throw new Error(text)
+        }
+      }
+      setCoverFormOpen(false)
+      setCoverUrl('')
+      setCoverFile(null)
+      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
+    } catch (err) {
+      setCoverError(extractDetail(err))
+    } finally {
+      setCoverSubmitting(false)
+    }
+  }
+
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -82,14 +123,55 @@ export default function Comic() {
         <>
           {/* Header: cover + metadata */}
           <div style={{ display: 'flex', gap: 24, marginBottom: 32 }}>
-            <img
-              src={`/api/requests/${comic.id}/cover`}
-              alt=""
-              width={48}
-              height={64}
-              style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
-              onError={e => { e.currentTarget.style.display = 'none' }}
-            />
+            <div style={{ flexShrink: 0 }}>
+              <img
+                src={`/api/requests/${comic.id}/cover`}
+                alt=""
+                width={160}
+                height={220}
+                style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
+                onError={e => { e.currentTarget.style.display = 'none' }}
+              />
+              <button onClick={() => { setCoverFormOpen(v => !v); setCoverError(null) }} style={{ ...linkButtonStyle, marginTop: 4, fontSize: 12 }}>
+                {coverFormOpen ? 'Cancel' : 'Change cover'}
+              </button>
+              {coverFormOpen && (
+                <div style={{ marginTop: 8, minWidth: 260 }}>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <button onClick={() => setCoverTab('url')} style={coverTab === 'url' ? primaryButtonStyle : secondaryButtonStyle}>URL</button>
+                    <button onClick={() => setCoverTab('file')} style={coverTab === 'file' ? primaryButtonStyle : secondaryButtonStyle}>Upload</button>
+                  </div>
+                  {coverTab === 'url' && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type="url"
+                        value={coverUrl}
+                        onChange={e => setCoverUrl(e.target.value)}
+                        placeholder="https://..."
+                        style={{ flex: 1, padding: '6px 10px', fontSize: 13, border: '1px solid #ccc', borderRadius: 4 }}
+                      />
+                      <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverUrl} style={{ ...primaryButtonStyle, opacity: (coverSubmitting || !coverUrl) ? 0.6 : 1 }}>
+                        {coverSubmitting ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  )}
+                  {coverTab === 'file' && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={e => setCoverFile(e.target.files?.[0] ?? null)}
+                        style={{ flex: 1, fontSize: 13 }}
+                      />
+                      <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverFile} style={{ ...primaryButtonStyle, opacity: (coverSubmitting || !coverFile) ? 0.6 : 1 }}>
+                        {coverSubmitting ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  )}
+                  {coverError && <p style={{ fontSize: 13, color: 'red', marginTop: 6 }}>{coverError}</p>}
+                </div>
+              )}
+            </div>
             <div>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Status</span>{comic.status}</p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Next poll</span>{formatRelative(comic.next_poll_at)}</p>
@@ -171,6 +253,16 @@ const primaryButtonStyle: React.CSSProperties = {
   background: '#0070f3',
   color: '#fff',
   border: 'none',
+  borderRadius: 4,
+  cursor: 'pointer',
+}
+
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: '8px 16px',
+  fontSize: 14,
+  background: '#f0f0f0',
+  color: '#333',
+  border: '1px solid #ccc',
   borderRadius: 4,
   cursor: 'pointer',
 }

@@ -18,8 +18,8 @@ from app.services import file_relocator
 # ---------------------------------------------------------------------------
 
 
-def _make_comic(title="My Comic", library_title="My Comic Library"):
-    return SimpleNamespace(title=title, library_title=library_title)
+def _make_comic(title="My Comic", library_title="My Comic Library", cover_path=None):
+    return SimpleNamespace(title=title, library_title=library_title, cover_path=cover_path)
 
 
 def _make_cbz(path: Path, files: dict[str, bytes] | None = None) -> None:
@@ -654,3 +654,60 @@ def test_pack_to_cbz_preserves_sort_order(tmp_path):
         names = zf.namelist()
 
     assert names == ["001.jpg", "002.jpg", "010.jpg"]
+
+
+def test_pack_to_cbz_cover_sorts_first(tmp_path):
+    """cover.* is always the first entry in the packed CBZ."""
+    folder = tmp_path / "Chapter 001"
+    folder.mkdir()
+    for name in ("002.jpg", "001.jpg", "cover.jpg"):
+        (folder / name).write_bytes(b"data")
+
+    cbz_path = file_relocator._pack_to_cbz(folder)
+
+    with zipfile.ZipFile(cbz_path, "r") as zf:
+        names = zf.namelist()
+
+    assert names[0] == "cover.jpg"
+    assert set(names) == {"cover.jpg", "001.jpg", "002.jpg"}
+
+
+async def test_relocate_injects_cover(tmp_path, monkeypatch):
+    """relocate() copies comic.cover_path into the staging folder as cover.{ext}."""
+    source_display = "TestSource"
+    manga_title = "My Manga"
+    chapter_name = "Chapter 1"
+
+    # Staging folder with two pages
+    staging_dir = tmp_path / "downloads" / source_display / manga_title / chapter_name
+    staging_dir.mkdir(parents=True)
+    (staging_dir / "001.jpg").write_bytes(b"page1")
+    (staging_dir / "002.jpg").write_bytes(b"page2")
+
+    # Cover file
+    cover_file = tmp_path / "covers" / "1.jpg"
+    cover_file.parent.mkdir(parents=True)
+    cover_file.write_bytes(b"cover-data")
+
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(tmp_path / "library"))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    comic = _make_comic(library_title=manga_title, cover_path=str(cover_file))
+    assignment = _make_assignment(chapter_number=1.0, source_name=source_display)
+
+    await file_relocator.relocate(
+        assignment, comic, None,
+        chapter_name=chapter_name, manga_title=manga_title, source_display_name=source_display,
+    )
+
+    assert assignment.relocation_status == RelocationStatus.done
+    dest = Path(assignment.library_path)
+    assert zipfile.is_zipfile(dest)
+
+    with zipfile.ZipFile(dest, "r") as zf:
+        names = zf.namelist()
+
+    assert "cover.jpg" in names
+    assert names[0] == "cover.jpg"

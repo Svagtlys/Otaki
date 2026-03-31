@@ -2,7 +2,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
@@ -11,14 +20,18 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import get_db
-from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from ..models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from ..models.comic import Comic, ComicStatus
 from ..models.user import User
 from ..services import cover_handler, source_selector, suwayomi
 from ..workers import scheduler
 from .auth import require_auth
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -148,7 +161,7 @@ async def _create_assignments_and_enqueue(
         try:
             await suwayomi.enqueue_downloads(chapter_ids)
         except Exception as exc:
-            log.warning(
+            logger.warning(
                 "%s: enqueue_downloads failed for manga_id=%s: %r",
                 caller,
                 manga_id,
@@ -357,6 +370,63 @@ async def get_cover(
     if not cover.exists():
         raise HTTPException(status_code=404, detail="Cover not found")
     return FileResponse(str(cover))
+
+
+@router.post("/{comic_id}/cover")
+async def set_cover(
+    comic_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+    file: UploadFile | None = File(default=None),
+) -> dict:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    if file is not None:
+        # Multipart upload
+        if not (file.content_type or "").startswith("image/"):
+            raise HTTPException(status_code=415, detail="File must be an image")
+        content = await file.read()
+        cover_path = cover_handler.save_from_file(
+            comic_id, content, file.content_type or "image/jpeg"
+        )
+        if cover_path is None:
+            raise HTTPException(status_code=415, detail="File must be an image")
+    else:
+        # JSON body with URL
+        body = await request.json()
+        url = body.get("url")
+        if not url:
+            raise HTTPException(status_code=422, detail="url is required")
+        cover_path = await cover_handler.save_from_url(comic_id, url)
+        if cover_path is None:
+            raise HTTPException(status_code=502, detail="Cover download failed")
+
+    # Remove previous cover file if it differs from the new one
+    if comic.cover_path and comic.cover_path != str(cover_path):
+        Path(comic.cover_path).unlink(missing_ok=True)
+
+    comic.cover_path = str(cover_path)
+    await db.commit()
+    return {"cover_url": f"/api/requests/{comic_id}/cover"}
+
+
+@router.delete("/{comic_id}/cover", status_code=204)
+async def delete_cover(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> Response:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+    if comic.cover_path:
+        Path(comic.cover_path).unlink(missing_ok=True)
+        comic.cover_path = None
+        await db.commit()
+    return Response(status_code=204)
 
 
 @router.delete("/{comic_id}", status_code=204)

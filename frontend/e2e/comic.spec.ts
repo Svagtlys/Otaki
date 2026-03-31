@@ -159,3 +159,31 @@ test('authenticated: API error shows error message', async ({ page }) => {
   await page.goto('/comics/1')
   await expect(page.getByText('Comic not found')).toBeVisible({ timeout: 5000 })
 })
+
+test('authenticated: change cover via URL closes form on success', async ({ page }) => {
+  await authenticate(page)
+  await page.route('**/api/requests/1', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_COMIC) }),
+  )
+  await page.route('**/api/requests/1/cover', async route => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ cover_url: '/api/requests/1/cover' }),
+      })
+    } else {
+      await route.continue()
+    }
+  })
+
+  await page.goto('/comics/1')
+  await page.getByRole('button', { name: 'Change cover' }).click()
+  await page.getByRole('button', { name: 'URL' }).click()
+  await page.getByPlaceholder('https://...').fill('https://example.com/cover.jpg')
+  await page.getByRole('button', { name: 'Save' }).click()
+
+  // Form closes on success — Cancel button gone, Change cover button visible again
+  await expect(page.getByPlaceholder('https://...')).not.toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('button', { name: 'Change cover' })).toBeVisible()
+})

@@ -19,13 +19,15 @@ from .auth import require_auth
 
 router = APIRouter(prefix="/search", tags=["search"])
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 
 class SearchResult(BaseModel):
     title: str
-    cover_url: str | None       # absolute Suwayomi URL — submitted to POST /api/requests
-    cover_display_url: str | None  # /api/search/thumbnail proxy URL — used by <img> tags
+    cover_url: str | None  # absolute Suwayomi URL — submitted to POST /api/requests
+    cover_display_url: (
+        str | None
+    )  # /api/search/thumbnail proxy URL — used by <img> tags
     synopsis: str | None
     source_id: int
     source_name: str
@@ -110,19 +112,23 @@ async def search(
             items = []
             for r in raw:
                 cover = _absolute_cover_url(r.get("cover_url"))
-                items.append(SearchResult(
-                    title=r["title"],
-                    cover_url=cover,
-                    cover_display_url=_display_url(cover),
-                    synopsis=r.get("synopsis"),
-                    source_id=source.id,
-                    source_name=source.name,
-                    url=r.get("url"),
-                ))
+                items.append(
+                    SearchResult(
+                        title=r["title"],
+                        cover_url=cover,
+                        cover_display_url=_display_url(cover),
+                        synopsis=r.get("synopsis"),
+                        source_id=source.id,
+                        source_name=source.name,
+                        url=r.get("url"),
+                    )
+                )
             return items, None
         except Exception as e:
             reason = suwayomi.classify_error(e)
-            logger.warning("search failed for source %s (%s): %r", source.name, reason, e)
+            logger.warning(
+                "search failed for source %s (%s): %r", source.name, reason, e
+            )
             return [], reason
 
     gathered = await asyncio.gather(*[_search_source(s) for s in sources])
@@ -132,6 +138,8 @@ async def search(
     for source, (items, error_reason) in zip(sources, gathered):
         all_results.extend(items)
         if error_reason is not None:
-            source_errors.append(SourceError(source_name=source.name, reason=error_reason))
+            source_errors.append(
+                SourceError(source_name=source.name, reason=error_reason)
+            )
 
     return SearchResponse(results=all_results, source_errors=source_errors)

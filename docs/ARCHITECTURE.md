@@ -322,7 +322,7 @@ Per-chapter source selection logic. Stateless — takes a DB session as argument
 #### `backend/app/services/cadence_inferrer.py`
 Infers release cadence from chapter history.
 
-- `infer_cadence(comic, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) from the N most recent `ChapterAssignment` rows for the comic and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `next_poll_at`/`next_upgrade_check_at`) and after each poll job when new chapters are found.
+- `infer_cadence(comic_id, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) for all active `ChapterAssignment` rows for the comic, sorted ascending, and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `inferred_cadence_days`) and after each poll job when new chapters are found.
 
 #### `backend/app/services/quality_scanner.py`
 Image quality analysis. Does **not** modify files.

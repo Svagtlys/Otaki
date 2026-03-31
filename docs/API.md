@@ -348,6 +348,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "status": "tracking",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
+  "inferred_cadence_days": 6.5,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": null,
@@ -400,6 +401,7 @@ List all tracked comics with a summary of download progress.
     },
     "poll_override_days": 7.0,
     "upgrade_override_days": null,
+    "inferred_cadence_days": 6.5,
     "next_poll_at": "2025-03-22T09:00:00Z",
     "next_upgrade_check_at": "2025-03-22T09:00:00Z",
     "last_upgrade_check_at": null
@@ -412,6 +414,7 @@ List all tracked comics with a summary of download progress.
 | `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
 | `poll_override_days` | float | Effective poll interval in days |
 | `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
+| `inferred_cadence_days` | float \| null | Median inter-chapter gap in days, inferred from `chapter_published_at`; `null` until ≥ 2 chapters are available |
 | `next_poll_at` | datetime \| null | When the next new-chapter poll will run |
 | `next_upgrade_check_at` | datetime \| null | When the next upgrade check will run |
 | `last_upgrade_check_at` | datetime \| null | When upgrade checks last ran |
@@ -439,6 +442,7 @@ Full detail for one comic: all chapter assignments with download and relocation 
   "status": "tracking",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
+  "inferred_cadence_days": 6.5,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": "2025-03-15T10:00:00Z",

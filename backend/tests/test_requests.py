@@ -588,6 +588,148 @@ async def test_discover_returns_404_for_unknown_comic(logged_in_client):
     assert r.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Alias tests (#96)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_request_saves_aliases(logged_in_client, monkeypatch):
+    """POST /api/requests with aliases saves ComicAlias rows in the DB."""
+    from app import database
+    from app.models.comic_alias import ComicAlias
+    from app.services import source_selector
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={
+            "primary_title": "Alias Save Comic",
+            "aliases": ["Alias One", "Alias Two"],
+        },
+    )
+    assert r.status_code == 201
+    comic_id = r.json()["id"]
+
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ComicAlias).where(ComicAlias.comic_id == comic_id)
+        )
+        aliases = result.scalars().all()
+
+    alias_titles = {a.title for a in aliases}
+    assert alias_titles == {"Alias One", "Alias Two"}
+
+
+async def test_create_request_returns_aliases_in_response(logged_in_client, monkeypatch):
+    """POST /api/requests response includes saved aliases."""
+    from app.services import source_selector
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={
+            "primary_title": "Alias Response Comic",
+            "aliases": ["Alt Title"],
+        },
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert "aliases" in data
+    alias_titles = [a["title"] for a in data["aliases"]]
+    assert "Alt Title" in alias_titles
+
+
+async def test_get_detail_returns_aliases(logged_in_client, monkeypatch):
+    """GET /{id} includes aliases in the response."""
+    from app import database
+    from app.models.comic_alias import ComicAlias
+    from app.services import source_selector
+
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={"primary_title": "Detail Alias Comic", "aliases": ["Alt Name"]},
+    )
+    assert r.status_code == 201
+    comic_id = r.json()["id"]
+
+    r2 = await logged_in_client.get(f"/api/requests/{comic_id}")
+    assert r2.status_code == 200
+    data = r2.json()
+    alias_titles = [a["title"] for a in data["aliases"]]
+    assert "Alt Name" in alias_titles
+
+
+async def test_add_alias_endpoint(logged_in_client):
+    """POST /{id}/aliases creates a new alias."""
+    from app import database
+    from app.models.comic_alias import ComicAlias
+
+    comic = await _add_comic(title="Alias Endpoint Comic")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/aliases",
+        json={"title": "New Alias"},
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert data["title"] == "New Alias"
+    assert "id" in data
+
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ComicAlias).where(ComicAlias.comic_id == comic.id)
+        )
+        aliases = result.scalars().all()
+    assert any(a.title == "New Alias" for a in aliases)
+
+
+async def test_add_alias_404_for_unknown_comic(logged_in_client):
+    r = await logged_in_client.post(
+        "/api/requests/99999/aliases",
+        json={"title": "Ghost Alias"},
+    )
+    assert r.status_code == 404
+
+
+async def test_delete_alias_endpoint(logged_in_client):
+    """DELETE /{id}/aliases/{alias_id} removes the alias."""
+    from app import database
+    from app.models.comic_alias import ComicAlias
+
+    comic = await _add_comic(title="Delete Alias Comic")
+    async with database.AsyncSessionLocal() as db:
+        alias = ComicAlias(comic_id=comic.id, title="To Delete")
+        db.add(alias)
+        await db.commit()
+        await db.refresh(alias)
+
+    r = await logged_in_client.delete(f"/api/requests/{comic.id}/aliases/{alias.id}")
+    assert r.status_code == 204
+
+    async with database.AsyncSessionLocal() as db:
+        assert await db.get(ComicAlias, alias.id) is None
+
+
+async def test_delete_alias_wrong_comic_returns_404(logged_in_client):
+    """DELETE with alias_id belonging to a different comic returns 404."""
+    from app import database
+    from app.models.comic_alias import ComicAlias
+
+    comic_a = await _add_comic(title="Comic A Alias")
+    comic_b = await _add_comic(title="Comic B Alias")
+    async with database.AsyncSessionLocal() as db:
+        alias = ComicAlias(comic_id=comic_a.id, title="A's Alias")
+        db.add(alias)
+        await db.commit()
+        await db.refresh(alias)
+
+    r = await logged_in_client.delete(f"/api/requests/{comic_b.id}/aliases/{alias.id}")
+    assert r.status_code == 404
+
+
 @pytest.mark.integration
 async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_title, monkeypatch):
     """POST with a real manga title; verify 201 and assignments have chapter IDs."""

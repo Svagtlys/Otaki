@@ -26,6 +26,7 @@ from ..models.chapter_assignment import (
     RelocationStatus,
 )
 from ..models.comic import Comic, ComicStatus
+from ..models.comic_alias import ComicAlias
 from ..models.user import User
 from ..services import cover_handler, source_selector, suwayomi
 from ..workers import scheduler
@@ -47,6 +48,18 @@ class RequestBody(BaseModel):
     cover_url: str | None = None
     poll_override_days: float | None = None
     upgrade_override_days: float | None = None
+    aliases: list[str] = []
+
+
+class AliasResponse(BaseModel):
+    id: int
+    title: str
+
+    model_config = {"from_attributes": True}
+
+
+class AddAliasBody(BaseModel):
+    title: str
 
 
 class SourceError(BaseModel):
@@ -66,6 +79,7 @@ class ComicResponse(BaseModel):
     next_upgrade_check_at: datetime | None
     last_upgrade_check_at: datetime | None
     created_at: datetime
+    aliases: list[AliasResponse] = []
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -203,6 +217,12 @@ async def create_request(
     db.add(comic)
     await db.flush()
 
+    # 2b. Save aliases
+    for alias_title in body.aliases:
+        db.add(ComicAlias(comic_id=comic.id, title=alias_title))
+    if body.aliases:
+        await db.flush()
+
     # 3. Build per-chapter source map and create assignments
     chapter_map, src_errors = await source_selector.build_chapter_source_map(comic, db)
     await _create_assignments_and_enqueue(comic.id, chapter_map, db, "create_request")
@@ -225,7 +245,12 @@ async def create_request(
             comic.cover_path = str(cover_path)
             comic.requested_cover_url = None
             await db.commit()
-            await db.refresh(comic)
+
+    # Reload with aliases for response
+    result = await db.execute(
+        select(Comic).where(Comic.id == comic.id).options(selectinload(Comic.aliases))
+    )
+    comic = result.scalar_one()
 
     return CreateRequestResponse(
         **ComicResponse.model_validate(comic).model_dump(),
@@ -296,7 +321,10 @@ async def get_request(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
 ) -> ComicDetail:
-    comic = await db.get(Comic, comic_id)
+    comic_result = await db.execute(
+        select(Comic).where(Comic.id == comic_id).options(selectinload(Comic.aliases))
+    )
+    comic = comic_result.scalar_one_or_none()
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
@@ -437,6 +465,51 @@ async def delete_cover(
         Path(comic.cover_path).unlink(missing_ok=True)
         comic.cover_path = None
         await db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/{comic_id}/aliases", response_model=list[AliasResponse])
+async def list_aliases(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> list[AliasResponse]:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+    result = await db.execute(select(ComicAlias).where(ComicAlias.comic_id == comic_id))
+    return [AliasResponse.model_validate(a) for a in result.scalars().all()]
+
+
+@router.post("/{comic_id}/aliases", status_code=201, response_model=AliasResponse)
+async def add_alias(
+    comic_id: int,
+    body: AddAliasBody,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> AliasResponse:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+    alias = ComicAlias(comic_id=comic_id, title=body.title)
+    db.add(alias)
+    await db.commit()
+    await db.refresh(alias)
+    return AliasResponse.model_validate(alias)
+
+
+@router.delete("/{comic_id}/aliases/{alias_id}", status_code=204)
+async def delete_alias(
+    comic_id: int,
+    alias_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> Response:
+    alias = await db.get(ComicAlias, alias_id)
+    if alias is None or alias.comic_id != comic_id:
+        raise HTTPException(status_code=404, detail="Alias not found")
+    await db.delete(alias)
+    await db.commit()
     return Response(status_code=204)
 
 

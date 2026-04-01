@@ -33,7 +33,7 @@ interface ComicDetail {
   title: string
   library_title: string
   status: string
-  poll_override_days: number
+  poll_override_days: number | null
   upgrade_override_days: number | null
   inferred_cadence_days: number | null
   next_poll_at: string | null
@@ -67,6 +67,7 @@ export default function Comic() {
   const [editOpen, setEditOpen] = useState(false)
   const [editLibraryTitle, setEditLibraryTitle] = useState('')
   const [editPollDays, setEditPollDays] = useState('')
+  const [editPollClear, setEditPollClear] = useState(false)
   const [editUpgradeDays, setEditUpgradeDays] = useState('')
   const [editUpgradeClear, setEditUpgradeClear] = useState(false)
   const [editSubmitting, setEditSubmitting] = useState(false)
@@ -134,7 +135,8 @@ export default function Comic() {
   function openEdit() {
     if (!comic) return
     setEditLibraryTitle(comic.library_title)
-    setEditPollDays(String(comic.poll_override_days))
+    setEditPollDays(comic.poll_override_days != null ? String(comic.poll_override_days) : '')
+    setEditPollClear(comic.poll_override_days == null)
     setEditUpgradeDays(comic.upgrade_override_days != null ? String(comic.upgrade_override_days) : '')
     setEditUpgradeClear(comic.upgrade_override_days == null)
     setEditError(null)
@@ -151,8 +153,12 @@ export default function Comic() {
     setEditError(null)
     const patch: Record<string, unknown> = {}
     if (editLibraryTitle !== comic.library_title) patch.library_title = editLibraryTitle
-    const pollNum = parseFloat(editPollDays)
-    if (!isNaN(pollNum) && pollNum !== comic.poll_override_days) patch.poll_override_days = pollNum
+    if (editPollClear && comic.poll_override_days != null) {
+      patch.poll_override_days = null
+    } else if (!editPollClear) {
+      const pollNum = parseFloat(editPollDays)
+      if (!isNaN(pollNum) && pollNum !== comic.poll_override_days) patch.poll_override_days = pollNum
+    }
     if (editUpgradeClear && comic.upgrade_override_days != null) {
       patch.upgrade_override_days = null
     } else if (!editUpgradeClear) {
@@ -288,12 +294,11 @@ export default function Comic() {
               </p>
               <p style={metaRowStyle}>
                 <span style={metaLabelStyle}>Poll interval</span>
-                {comic.poll_override_days}d
-                {comic.inferred_cadence_days != null && (
-                  <span style={{ marginLeft: 6, fontSize: 12, color: '#888' }}>
-                    (inferred: {comic.inferred_cadence_days.toFixed(1)}d)
-                  </span>
-                )}
+                {comic.poll_override_days != null
+                  ? `${comic.poll_override_days}d`
+                  : comic.inferred_cadence_days != null
+                    ? `${comic.inferred_cadence_days.toFixed(1)}d (inferred)`
+                    : '7d (default)'}
               </p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Upgrade interval</span>{comic.upgrade_override_days != null ? `${comic.upgrade_override_days}d` : '(use poll interval)'}</p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Next poll</span>{formatRelative(comic.next_poll_at)}</p>
@@ -328,14 +333,25 @@ export default function Comic() {
               <div style={{ marginBottom: 10 }}>
                 <label style={editLabelStyle}>
                   Poll interval (days)
-                  <input
-                    type="number"
-                    min="0.1"
-                    step="0.5"
-                    value={editPollDays}
-                    onChange={e => setEditPollDays(e.target.value)}
-                    style={{ ...editInputStyle, width: 100 }}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <input
+                      type="number"
+                      min="0.1"
+                      step="0.5"
+                      value={editPollClear ? '' : editPollDays}
+                      disabled={editPollClear}
+                      onChange={e => setEditPollDays(e.target.value)}
+                      style={{ ...editInputStyle, width: 100, marginTop: 0, opacity: editPollClear ? 0.5 : 1 }}
+                    />
+                    <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={editPollClear}
+                        onChange={e => setEditPollClear(e.target.checked)}
+                      />
+                      Use inferred cadence
+                    </label>
+                  </div>
                 </label>
               </div>
 

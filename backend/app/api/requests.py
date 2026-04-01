@@ -82,12 +82,12 @@ class ComicResponse(BaseModel):
     library_title: str
     cover_url: str | None = Field(None, alias="cover_path")
     status: str
-    poll_override_days: float
+    poll_override_days: float | None
     upgrade_override_days: float | None
+    inferred_cadence_days: float | None
     next_poll_at: datetime | None
     next_upgrade_check_at: datetime | None
     last_upgrade_check_at: datetime | None
-    inferred_cadence_days: float | None
     created_at: datetime
     aliases: list[AliasResponse] = []
 
@@ -123,7 +123,7 @@ class ComicListItem(BaseModel):
     library_title: str
     status: str
     chapter_counts: dict[str, int]
-    poll_override_days: float
+    poll_override_days: float | None
     upgrade_override_days: float | None
     inferred_cadence_days: float | None
     next_poll_at: datetime | None
@@ -213,16 +213,14 @@ async def create_request(
         raise HTTPException(status_code=409, detail="Comic already tracked")
 
     # 2. Create Comic
-    poll_days = body.poll_override_days or settings.DEFAULT_POLL_DAYS
-    upgrade_days = body.upgrade_override_days
     comic = Comic(
         title=body.primary_title,
         library_title=body.library_title or body.primary_title,
         cover_path=None,
         requested_cover_url=body.cover_url or None,
         status=ComicStatus.tracking,
-        poll_override_days=poll_days,
-        upgrade_override_days=upgrade_days,
+        poll_override_days=body.poll_override_days,  # None = use inferred cadence / default
+        upgrade_override_days=body.upgrade_override_days,
         created_at=datetime.now(timezone.utc),
     )
     db.add(comic)
@@ -243,11 +241,12 @@ async def create_request(
         await db.flush()
         comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
 
-    # 5. Set next poll/upgrade times (use inferred cadence if no override set)
-    effective_poll = poll_days if body.poll_override_days else (comic.inferred_cadence_days or poll_days)
+    # 5. Set next poll/upgrade times
+    effective_poll = comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
+    effective_upgrade = comic.upgrade_override_days or comic.inferred_cadence_days or comic.poll_override_days or settings.DEFAULT_POLL_DAYS
     now = datetime.now(timezone.utc)
     comic.next_poll_at = now + timedelta(days=effective_poll)
-    comic.next_upgrade_check_at = now + timedelta(days=upgrade_days or effective_poll)
+    comic.next_upgrade_check_at = now + timedelta(days=effective_upgrade)
 
     # 7. Commit and register jobs
     await db.commit()
@@ -380,16 +379,15 @@ async def patch_request(
     if "library_title" in fields and body.library_title is not None:
         comic.library_title = body.library_title
 
-    if "poll_override_days" in fields and body.poll_override_days is not None:
-        comic.poll_override_days = body.poll_override_days
-        comic.next_poll_at = now + timedelta(days=body.poll_override_days)
+    if "poll_override_days" in fields:
+        comic.poll_override_days = body.poll_override_days  # None clears the override
+        effective_poll = comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
+        comic.next_poll_at = now + timedelta(days=effective_poll)
 
     if "upgrade_override_days" in fields:
         comic.upgrade_override_days = body.upgrade_override_days
-        if body.upgrade_override_days is not None:
-            comic.next_upgrade_check_at = now + timedelta(days=body.upgrade_override_days)
-        else:
-            comic.next_upgrade_check_at = now + timedelta(days=comic.poll_override_days)
+        effective_upgrade = comic.upgrade_override_days or comic.inferred_cadence_days or comic.poll_override_days or settings.DEFAULT_POLL_DAYS
+        comic.next_upgrade_check_at = now + timedelta(days=effective_upgrade)
 
     if "status" in fields and body.status is not None:
         old_status = comic.status

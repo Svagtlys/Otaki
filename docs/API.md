@@ -333,7 +333,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 | `primary_title` | string | yes | Display name for the comic in the Otaki UI |
 | `library_title` | string | no | Name used for the library folder path and `ComicInfo.xml` `<Series>` tag. Defaults to `primary_title` if omitted. |
 | `cover_url` | string \| null | no | Cover image URL; downloaded and stored at request time. Injected as `cover.{ext}` into each chapter CBZ during relocation. |
-| `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` = use `DEFAULT_POLL_DAYS` (default 7) |
+| `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` (default) = use inferred cadence, falling back to `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
 | `aliases` | string[] | no | Alternative titles for this comic. Saved as `ComicAlias` rows and used during source searches to find the comic under its alternative names. |
 
@@ -399,7 +399,7 @@ List all tracked comics with a summary of download progress.
       "queued": 1,
       "failed": 0
     },
-    "poll_override_days": 7.0,
+    "poll_override_days": null,
     "upgrade_override_days": null,
     "inferred_cadence_days": 6.5,
     "next_poll_at": "2025-03-22T09:00:00Z",
@@ -412,7 +412,7 @@ List all tracked comics with a summary of download progress.
 | Field | Type | Notes |
 |---|---|---|
 | `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
-| `poll_override_days` | float | Effective poll interval in days |
+| `poll_override_days` | float \| null | User override for poll interval; `null` = use inferred cadence / `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
 | `inferred_cadence_days` | float \| null | Median inter-chapter gap in days, inferred from `chapter_published_at`; `null` until ≥ 2 chapters are available |
 | `next_poll_at` | datetime \| null | When the next new-chapter poll will run |
@@ -500,8 +500,8 @@ Update one or more settings for a tracked comic. All fields are optional — onl
 | Field | Type | Notes |
 |---|---|---|
 | `library_title` | string | Folder name and `ComicInfo.xml` `<Series>` tag for future relocations. Does **not** rename existing library files. |
-| `poll_override_days` | float | New poll interval. Reschedules the APScheduler poll job immediately. |
-| `upgrade_override_days` | float \| null | New upgrade interval. `null` = clear override (reverts to using `poll_override_days`). Reschedules the upgrade job. |
+| `poll_override_days` | float \| null | New poll interval. `null` = clear override (reverts to inferred cadence / default). Reschedules the APScheduler poll job immediately. |
+| `upgrade_override_days` | float \| null | New upgrade interval. `null` = clear override (reverts to inferred cadence / poll override / default). Reschedules the upgrade job. |
 | `status` | `"tracking"` \| `"complete"` | `"complete"` stops all scheduled jobs; `"tracking"` re-registers them. |
 
 **Response `200`** — `ComicResponse` (same shape as `POST /api/requests`).

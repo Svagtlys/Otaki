@@ -46,26 +46,28 @@ def remove_comic_jobs(comic_id: int) -> None:
 def _effective_poll_days(comic: Comic) -> float:
     """Return the effective poll interval in days for *comic*.
 
-    Priority: poll_override_days (always set, defaults to DEFAULT_POLL_DAYS).
-    If the override equals the system default AND an inferred cadence is available,
-    prefer the inferred value so the schedule adapts to the actual release pace.
+    Priority: poll_override_days > inferred_cadence_days > DEFAULT_POLL_DAYS.
+    A null poll_override_days means the user has not set an override, so the
+    inferred cadence (if available) is used instead of a hardcoded default.
     """
     from ..config import settings
 
-    if comic.poll_override_days != settings.DEFAULT_POLL_DAYS:
-        # User explicitly set an override — respect it.
-        return comic.poll_override_days
-    return comic.inferred_cadence_days or comic.poll_override_days
+    return comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
 
 
 def _effective_upgrade_days(comic: Comic) -> float:
     """Return the effective upgrade check interval in days for *comic*.
 
-    Priority: upgrade_override_days > inferred_cadence_days > poll_override_days.
+    Priority: upgrade_override_days > inferred_cadence_days > poll_override_days > DEFAULT_POLL_DAYS.
     """
-    if comic.upgrade_override_days is not None:
-        return comic.upgrade_override_days
-    return comic.inferred_cadence_days or comic.poll_override_days
+    from ..config import settings
+
+    return (
+        comic.upgrade_override_days
+        or comic.inferred_cadence_days
+        or comic.poll_override_days
+        or settings.DEFAULT_POLL_DAYS
+    )
 
 
 def _register_poll_job(comic: Comic) -> None:

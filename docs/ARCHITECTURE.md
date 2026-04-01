@@ -322,7 +322,7 @@ Per-chapter source selection logic. Stateless — takes a DB session as argument
 #### `backend/app/services/cadence_inferrer.py`
 Infers release cadence from chapter history.
 
-- `infer_cadence(comic, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) from the N most recent `ChapterAssignment` rows for the comic and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `next_poll_at`/`next_upgrade_check_at`) and after each poll job when new chapters are found.
+- `infer_cadence(comic_id, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) for all active `ChapterAssignment` rows for the comic, sorted ascending, and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `inferred_cadence_days`) and after each poll job when new chapters are found.
 
 #### `backend/app/services/quality_scanner.py`
 Image quality analysis. Does **not** modify files.
@@ -391,7 +391,20 @@ Internal helpers:
 ### Workers
 
 #### `backend/app/workers/scheduler.py`
-Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes, advancing `next_poll_at` by the poll interval (hardcoded 7-day MVP fallback; cadence inference deferred to #16).
+Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes.
+
+**Interval priority chain**
+
+Each comic has two scheduled jobs (poll and upgrade). The interval for each is determined by the first non-null value in the following chain:
+
+| Job | Priority order |
+|---|---|
+| Poll | `poll_override_days` → `inferred_cadence_days` → `DEFAULT_POLL_DAYS` |
+| Upgrade | `upgrade_override_days` → `inferred_cadence_days` → `poll_override_days` → `DEFAULT_POLL_DAYS` |
+
+- `poll_override_days` is null unless the user has explicitly set a value. Setting it always takes precedence over inference.
+- `inferred_cadence_days` is computed by `cadence_inferrer` from the median gap between `chapter_published_at` values. Updated at request time (if chapters are found) and after each poll that discovers new chapters.
+- `DEFAULT_POLL_DAYS` is the system-wide fallback (configured in settings).
 
 Public API:
 
@@ -401,10 +414,12 @@ Public API:
 
 Internal:
 
+- `_effective_poll_days(comic)` — returns the effective poll interval using the priority chain above.
+- `_effective_upgrade_days(comic)` — returns the effective upgrade interval using the priority chain above.
 - `_register_poll_job(comic)` — calls `scheduler.add_job` with `trigger="date"`, `run_date=comic.next_poll_at` (or `now(UTC)` if unset), `id=f"poll_{comic.id}"`, `replace_existing=True`.
-- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, creates `ChapterAssignment` rows directly from the chapter data in the map (`download_status=queued`, `is_active=True`), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
+- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, creates `ChapterAssignment` rows directly from the chapter data in the map (`download_status=queued`, `is_active=True`), calls `enqueue_downloads`. If new chapters were found, commits and re-infers cadence (`cadence_inferrer.infer_cadence`). Advances `comic.next_poll_at` by `_effective_poll_days`, re-registers the job, and commits.
 - `_register_upgrade_job(comic)` — same shape as `_register_poll_job`; uses `comic.next_upgrade_check_at`, `id=f"upgrade_{comic.id}"`.
-- `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` (interval = `upgrade_override_days ?? poll_override_days`), re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
+- `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` by `_effective_upgrade_days`, re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
 
 #### `backend/app/workers/download_listener.py`
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` or `ERROR` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.

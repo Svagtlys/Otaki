@@ -29,8 +29,9 @@ class Comic(Base):
         nullable=False,
         default=ComicStatus.tracking,
     )
-    poll_override_days: Mapped[float] = mapped_column(Float, nullable=False, default=settings.DEFAULT_POLL_DAYS)
+    poll_override_days: Mapped[float | None] = mapped_column(Float, nullable=True)
     upgrade_override_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inferred_cadence_days: Mapped[float | None] = mapped_column(Float, nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String, nullable=True)
     requested_cover_url: Mapped[str | None] = mapped_column(String, nullable=True)
     next_poll_at: Mapped[datetime | None] = mapped_column(

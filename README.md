@@ -1,33 +1,31 @@
 # Otaki
 
-> **Work in progress** — currently building towards 1.0 (MVP). See the [roadmap](docs/ROADMAP.md) for what's planned and what's coming.
-
 > **LLM assistance** — this project uses LLM coding assistants during development, following the [contribution guidelines](docs/CONTRIBUTING.md#llm-assistance). All generated code and content is human-reviewed before commit.
 
-A comic/manga request manager built on top of [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server). Search for titles across multiple sources, request downloads, and let Otaki handle source selection, automatic upgrades, and relocation to your final library.
+A comic/manga request manager built on top of [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server). Search for titles across multiple sources, request downloads, and let Otaki handle source selection, automatic upgrades, metadata injection, and relocation to your final library.
 
 ---
 
-## What It Does (1.0 MVP)
+## What It Does
 
 1. **Configure sources** — rank your Suwayomi extensions by priority in the Sources page. Priority 1 is most preferred.
-2. **Search and request** — search for a title across all sources at once. Otaki assigns each chapter to the highest-priority source that has it — chapters in the same series can come from different sources.
-3. **Polling** — Otaki checks for new chapters on a configurable schedule. When a new chapter is found, it downloads from the best available source.
+2. **Search and request** — search for a title across all sources at once. Otaki assigns each chapter to the highest-priority source that has it — chapters in the same series can come from different sources. Supports multi-alias titles (e.g. the same series under different names on different sources).
+3. **Smart polling** — Otaki infers each comic's release cadence from its chapter history and polls on a matching schedule. Per-comic overrides are available. When a new chapter is found, it downloads from the best available source.
 4. **Source upgrades** — on a regular schedule, Otaki checks whether a higher-priority source has picked up chapters currently on a lower-priority one. If so, it re-downloads and replaces automatically.
-5. **Relocation** — once a chapter is settled, Otaki moves it to your final library folder with a configurable naming format — similar to how Radarr/Sonarr manage media.
+5. **Metadata** — each chapter CBZ gets a `ComicInfo.xml` update (`<Series>`, `<Number>`, `<Volume>`) and a `cover.png` injected automatically. Library title is configurable separately from the display title.
+6. **Relocation** — once a chapter is settled, Otaki moves it to your final library folder with a configurable naming format — similar to how Radarr/Sonarr manage media.
 
 ---
 
 ## Roadmap
 
-| Release | Focus |
-|---|---|
-| **1.0** | MVP — download pipeline, source upgrades, basic auth |
-| **1.1** | Metadata — `ComicInfo.xml`, covers, multi-alias support, library title |
-| **1.2** | Intelligence — cadence inference, per-comic schedules, notifications |
-| **1.3** | Scale — local source overrides, pagination, library import |
-| **1.4** | Quality — watermark/banner detection, auto-fix, image order checking |
-| **1.5** | Auth — roles, SSO, user management |
+| Release | Focus | Status |
+|---|---|---|
+| **1.0** | MVP — download pipeline, source upgrades, basic auth | Released |
+| **1.1** | Metadata — `ComicInfo.xml`, covers, multi-alias, cadence inference, per-comic schedules | Released |
+| **1.2** | Scale — local source overrides, pagination, library import | Planned |
+| **1.3** | Quality — watermark/banner detection, auto-fix, image order checking | Planned |
+| **1.4** | Auth — roles, SSO, user management | Planned |
 
 Full details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -91,7 +89,7 @@ Key `.env` values:
 | `SUWAYOMI_DOWNLOAD_PATH` | Suwayomi's download folder (must be a shared volume) |
 | `LIBRARY_PATH` | Final destination for settled chapters |
 | `CHAPTER_NAMING_FORMAT` | Naming template, e.g. `{title}/{title} - Ch.{chapter:04.1f}.cbz` |
-| `DEFAULT_POLL_DAYS` | How often to check for new chapters (in days) |
+| `DEFAULT_POLL_DAYS` | Fallback poll interval in days — used when cadence cannot be inferred from chapter history |
 
 Available naming tokens: `{title}`, `{chapter}`, `{volume}`, `{year}`, `{source}`
 

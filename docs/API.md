@@ -542,6 +542,44 @@ Re-run source discovery for a comic and queue any chapters not yet assigned. Saf
 
 ---
 
+### `POST /api/requests/{id}/reprocess`
+
+Walk every active chapter through whatever pipeline stage it is currently stuck or incomplete in. Idempotent — safe to call multiple times.
+
+For each active `ChapterAssignment`:
+
+| Condition | Action |
+|---|---|
+| `relocation_status=done`, library file exists | Re-pack CBZ, update `ComicInfo.xml` (`library_title`) and cover, move to correct path if `library_title` changed |
+| `download_status=queued` or `downloading` | Skip — already in progress |
+| `download_status=failed` | Re-enqueue download |
+| `download_status=done`, staging file found | Run relocate / replace-in-library pipeline |
+| `download_status=done`, no staging, library file exists | Re-pack and update as above |
+| No staging, no library file | Re-enqueue download |
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+{ "queued": 2, "processed": 5, "skipped": 1 }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `queued` | int | Chapters re-enqueued for download (failed or missing) |
+| `processed` | int | Chapters that ran through the relocate / update pipeline |
+| `skipped` | int | Chapters already in progress (`queued`/`downloading`) |
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
 ### `DELETE /api/requests/{id}`
 
 Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, and the `Comic` row. Optionally deletes library files.

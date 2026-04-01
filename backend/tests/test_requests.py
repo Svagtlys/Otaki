@@ -872,3 +872,140 @@ async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_
     for a in assignments:
         assert a.suwayomi_chapter_id is not None
         assert a.suwayomi_chapter_id != ""
+
+
+# ---------------------------------------------------------------------------
+# POST /{id}/reprocess tests
+# ---------------------------------------------------------------------------
+
+
+async def test_reprocess_404_for_unknown_comic(logged_in_client):
+    r = await logged_in_client.post("/api/requests/99999/reprocess")
+    assert r.status_code == 404
+
+
+async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypatch, tmp_path):
+    """Chapters already queued or downloading are counted as skipped."""
+    from app import database
+    from app.services import file_relocator
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp1", priority=1)
+    comic = await _add_comic(title="Reprocess Comic 1")
+
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
+
+    async with database.AsyncSessionLocal() as db:
+        for status, ch_num in [(DownloadStatus.queued, 1.0), (DownloadStatus.downloading, 2.0)]:
+            a = ChapterAssignment(
+                comic_id=comic.id, chapter_number=ch_num, source_id=source.id,
+                suwayomi_manga_id="m1", suwayomi_chapter_id=f"ch-{ch_num}",
+                download_status=status, is_active=True,
+                chapter_published_at=datetime.now(timezone.utc),
+                relocation_status=RelocationStatus.pending,
+            )
+            db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["skipped"] == 2
+    assert data["queued"] == 0
+    assert data["processed"] == 0
+
+
+async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_path):
+    """Failed chapters are re-enqueued and counted as queued."""
+    from app import database
+    from app.services import file_relocator, suwayomi
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp2", priority=1)
+    comic = await _add_comic(title="Reprocess Comic 2")
+
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-fail",
+            download_status=DownloadStatus.failed, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["queued"] == 1
+    assert data["processed"] == 0
+
+
+async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypatch, tmp_path):
+    """Chapters with download_status=done and a staging file are relocated."""
+    from app import database
+    from app.services import file_relocator, suwayomi
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp3", priority=1)
+    comic = await _add_comic(title="Reprocess Comic 3")
+
+    fake_staging = tmp_path / "fake.cbz"
+    fake_staging.write_bytes(b"")
+
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: fake_staging)
+    mock_relocate = AsyncMock()
+    monkeypatch.setattr(file_relocator, "relocate", mock_relocate)
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-stg",
+            download_status=DownloadStatus.done, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    assert r.json()["processed"] == 1
+    mock_relocate.assert_awaited_once()
+
+
+async def test_reprocess_calls_update_library_file_for_done_chapters(
+    logged_in_client, monkeypatch, tmp_path
+):
+    """Chapters with relocation_status=done and an existing library file call update_library_file."""
+    from app import database
+    from app.services import file_relocator
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp4", priority=1)
+    comic = await _add_comic(title="Reprocess Comic 4")
+
+    # Create an actual file so Path.exists() returns True
+    lib_file = tmp_path / "library" / "ch1.cbz"
+    lib_file.parent.mkdir(parents=True)
+    lib_file.write_bytes(b"")
+
+    mock_update = AsyncMock()
+    monkeypatch.setattr(file_relocator, "update_library_file", mock_update)
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-lib",
+            download_status=DownloadStatus.done, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            library_path=str(lib_file),
+            relocation_status=RelocationStatus.done,
+        )
+        db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    assert r.json()["processed"] == 1
+    mock_update.assert_awaited_once()

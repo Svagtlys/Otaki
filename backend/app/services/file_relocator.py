@@ -15,7 +15,7 @@ from . import comicinfo_writer, cover_handler
 logger = logging.getLogger(f"otaki.{__name__}")
 
 
-def _find_staging_path(
+def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
     base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
@@ -197,7 +197,7 @@ async def relocate(
         chapter_name,
         source_display_name,
     )
-    staging = _find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
         logger.warning(
             "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
@@ -242,7 +242,7 @@ async def replace_in_library(
         chapter_name,
         source_display_name,
     )
-    staging = _find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
         logger.warning(
             "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",
@@ -273,3 +273,57 @@ async def replace_in_library(
     new.library_path = str(dest)
     new.relocation_status = RelocationStatus.done
     old.relocation_status = RelocationStatus.skipped
+
+
+async def update_library_file(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+) -> None:
+    """Re-process a chapter that is already in the library.
+
+    Extracts the existing CBZ, rewrites ``ComicInfo.xml`` and the cover to
+    reflect the current ``comic.library_title`` and ``comic.cover_path``,
+    repacks, and moves the file to the canonical path derived from the
+    current ``library_title`` (in case it has changed since original relocation).
+
+    Updates ``assignment.library_path`` if the file was moved.
+    No-ops silently if ``assignment.library_path`` is unset or the file is missing.
+    """
+    if not assignment.library_path:
+        logger.warning(
+            "update_library_file: assignment id=%d has no library_path — skipping",
+            assignment.id,
+        )
+        return
+
+    current = Path(assignment.library_path)
+    if not current.exists():
+        logger.warning(
+            "update_library_file: library file not found at %s — skipping",
+            current,
+        )
+        return
+
+    logger.info("update_library_file: processing %s", current)
+
+    # Extract, update metadata and cover, repack.
+    folder = _normalize_to_folder(current)
+    comicinfo_writer.write(folder, comic, assignment)
+    cover_handler.inject(folder, comic)
+    packed = _pack_to_cbz(folder)
+
+    # Resolve expected destination based on current library_title.
+    dest = resolve_path(assignment, comic)
+
+    if dest == current:
+        # Path unchanged — replace in-place atomically.
+        os.replace(packed, dest)
+    else:
+        # library_title changed — move to new path, clean up old.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _place_file(packed, dest)
+        current.unlink(missing_ok=True)
+        assignment.library_path = str(dest)
+
+    logger.info("update_library_file: done — %s", dest)

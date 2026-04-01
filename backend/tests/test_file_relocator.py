@@ -43,6 +43,7 @@ def _make_assignment(
     chapter_published_at=None,
 ):
     return SimpleNamespace(
+        id=1,
         chapter_number=chapter_number,
         volume_number=volume_number,
         library_path=library_path,
@@ -563,7 +564,7 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
 
 
 def test_find_staging_path_returns_folder(tmp_path, monkeypatch):
-    """Chapter staging area is a folder (not a CBZ): _find_staging_path returns it."""
+    """Chapter staging area is a folder (not a CBZ): find_staging_path returns it."""
     downloads = tmp_path / "downloads"
     source_display = "MangaSource"
     manga_title = "OnePiece"
@@ -576,7 +577,7 @@ def test_find_staging_path_returns_folder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
 
-    result = file_relocator._find_staging_path(chapter_name, manga_title, source_display)
+    result = file_relocator.find_staging_path(chapter_name, manga_title, source_display)
 
     assert result == chapter_folder
     assert result.is_dir()
@@ -711,3 +712,102 @@ async def test_relocate_injects_cover(tmp_path, monkeypatch):
 
     assert "cover.jpg" in names
     assert names[0] == "cover.jpg"
+
+
+# ---------------------------------------------------------------------------
+# update_library_file tests
+# ---------------------------------------------------------------------------
+
+
+async def test_update_library_file_updates_comicinfo_in_place(tmp_path, monkeypatch):
+    """update_library_file rewrites ComicInfo.xml when library_title has not changed."""
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}.cbz")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    # Place a CBZ at the exact path resolve_path would compute
+    dest = library / "My Comic" / "0001.0.cbz"
+    dest.parent.mkdir(parents=True)
+    _make_cbz(dest, {"001.jpg": b"page"})
+
+    assignment = _make_assignment(chapter_number=1.0, library_path=str(dest))
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic(library_title="My Comic")
+
+    await file_relocator.update_library_file(assignment, comic, None)
+
+    # File still exists at original path (no rename needed)
+    assert Path(assignment.library_path).exists()
+    with zipfile.ZipFile(assignment.library_path) as zf:
+        assert "ComicInfo.xml" in zf.namelist()
+
+
+async def test_update_library_file_moves_on_library_title_change(tmp_path, monkeypatch):
+    """update_library_file moves the CBZ when library_title has changed."""
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}.cbz")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    # Old path used the previous library title — matches what resolve_path("Old Title") would give
+    old_cbz = library / "Old Title" / "0001.0.cbz"
+    old_cbz.parent.mkdir(parents=True)
+    _make_cbz(old_cbz, {"001.jpg": b"page"})
+
+    assignment = _make_assignment(chapter_number=1.0, library_path=str(old_cbz))
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic(library_title="New Title")  # title changed
+
+    await file_relocator.update_library_file(assignment, comic, None)
+
+    expected_new = library / "New Title" / "0001.0.cbz"
+    assert expected_new.exists()
+    assert not old_cbz.exists()
+    assert assignment.library_path == str(expected_new)
+
+
+async def test_update_library_file_noop_missing_path(tmp_path, monkeypatch):
+    """update_library_file does nothing when library_path is None."""
+    assignment = _make_assignment(library_path=None)
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic()
+    # Should not raise
+    await file_relocator.update_library_file(assignment, comic, None)
+
+
+async def test_update_library_file_noop_missing_file(tmp_path, monkeypatch):
+    """update_library_file does nothing when the library file doesn't exist."""
+    assignment = _make_assignment(library_path=str(tmp_path / "nonexistent.cbz"))
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic()
+    # Should not raise
+    await file_relocator.update_library_file(assignment, comic, None)
+
+
+async def test_update_library_file_injects_cover(tmp_path, monkeypatch):
+    """update_library_file injects the comic cover into the repacked CBZ."""
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}.cbz")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    dest = library / "My Comic" / "0001.0.cbz"
+    dest.parent.mkdir(parents=True)
+    _make_cbz(dest, {"001.jpg": b"page"})
+
+    cover_file = tmp_path / "covers" / "1.jpg"
+    cover_file.parent.mkdir()
+    cover_file.write_bytes(b"cover-data")
+
+    assignment = _make_assignment(chapter_number=1.0, library_path=str(dest))
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic(library_title="My Comic", cover_path=str(cover_file))
+
+    await file_relocator.update_library_file(assignment, comic, None)
+
+    with zipfile.ZipFile(assignment.library_path) as zf:
+        assert "cover.jpg" in zf.namelist()

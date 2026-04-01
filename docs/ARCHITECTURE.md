@@ -368,7 +368,7 @@ Modifies CBZ files to remove banners. **Mutates files** — always backs up firs
 Moves settled chapters from Suwayomi's staging folder to the final library. Radarr/Sonarr-style.
 
 **Pipeline (called by `relocate` and `replace_in_library`):**
-1. `_find_staging_path` — locate the chapter in the download area (CBZ or folder)
+1. `find_staging_path` — locate the chapter in the download area (CBZ or folder)
 2. `_normalize_to_folder` — extract CBZ to a sibling folder if needed; no-op if already a folder
 3. `comicinfo_writer.write` — inject/update `ComicInfo.xml` in the folder
 4. `_pack_to_cbz` — zip the folder to a CBZ, delete the folder
@@ -377,12 +377,12 @@ Moves settled chapters from Suwayomi's staging folder to the final library. Rada
 Public API:
 
 - `resolve_path(assignment, comic) → Path` — renders `CHAPTER_NAMING_FORMAT` with tokens `{title}` (uses `comic.library_title`), `{chapter}` (zero-padded float), `{volume}` (optional), `{year}`, `{source}`. Returns absolute path under `LIBRARY_PATH`.
+- `find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Detection order: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
 - `relocate(assignment, comic, db, ...)` — runs the pipeline; resolves destination, creates parent dirs, places the CBZ. Updates `assignment.library_path` and `assignment.relocation_status=done`.
 - `replace_in_library(old_assignment, new_assignment, comic, db, ...)` — used during upgrades when `old_assignment.library_path` is set. Runs the pipeline then `os.replace()` for atomic swap. No window where the file is missing.
+- `update_library_file(assignment, comic, db)` — re-processes a chapter already in the library. Extracts the existing CBZ, rewrites `ComicInfo.xml` (picks up any `library_title` change) and re-injects the cover, repacks, then moves to the canonical path from `resolve_path`. If the path is unchanged, replaces in-place atomically. Called by `POST /api/requests/{id}/reprocess` for settled chapters.
 
 Internal helpers:
-
-- `_find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Detection order: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
 - `_normalize_to_folder(staging) → Path` — if *staging* is a directory, returns it unchanged. If it is a `.cbz` file, extracts all contents to `staging.parent / staging.stem /`, deletes the original CBZ, and returns the new folder.
 - `_pack_to_cbz(folder) → Path` — collects all files in *folder* recursively, sorts them by relative path (alphabetical — matches Suwayomi's zero-padded page-number naming), writes a new CBZ at `folder.parent / (folder.name + ".cbz")`, deletes the folder, and returns the CBZ path.
 
@@ -453,7 +453,7 @@ handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_displa
     8. db.commit()
 
 file_relocator.relocate() and replace_in_library() both run this internal pipeline:
-    a. _find_staging_path()          find CBZ or folder in Suwayomi download dir
+    a. find_staging_path()          find CBZ or folder in Suwayomi download dir
     b. _normalize_to_folder()        extract CBZ → folder, or noop if already a folder
     c. comicinfo_writer.write()      create/update ComicInfo.xml in the folder
     d. cover_handler.inject()                  copy cover.{ext} into the folder (noop if no cover)
@@ -508,7 +508,7 @@ flowchart TD
 
     subgraph PIPE ["file_relocator internal pipeline"]
         direction TB
-        S1["_find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
+        S1["find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
         S2["_normalize_to_folder()<br>extract CBZ → folder, or noop if already folder"]
         S3["comicinfo_writer.write()<br>create / update ComicInfo.xml in folder"]
         S4["cover_handler.inject()<br>copy cover.{ext} into folder (noop if no cover)"]

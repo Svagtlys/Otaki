@@ -28,7 +28,7 @@ from ..models.chapter_assignment import (
 from ..models.comic import Comic, ComicStatus
 from ..models.comic_alias import ComicAlias
 from ..models.user import User
-from ..services import cadence_inferrer, cover_handler, source_selector, suwayomi
+from ..services import cadence_inferrer, cover_handler, file_relocator, source_selector, suwayomi
 from ..workers import scheduler
 from .auth import require_auth
 
@@ -469,6 +469,141 @@ async def discover_chapters(
         new_chapters=new_count,
         source_errors=[SourceError(**e) for e in src_errors],
     )
+
+
+class ReprocessResponse(BaseModel):
+    queued: int
+    processed: int
+    skipped: int
+
+
+@router.post("/{comic_id}/reprocess", response_model=ReprocessResponse)
+async def reprocess_chapters(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> ReprocessResponse:
+    """Walk every active chapter through whatever pipeline stage it is stuck in.
+
+    - relocation_status=done, file exists → update_library_file (refreshes
+      ComicInfo.xml, cover, and moves to correct path if library_title changed)
+    - download_status=queued|downloading → skip (already in progress)
+    - download_status=failed → re-enqueue
+    - download_status=done, staging file exists → relocate / replace_in_library
+    - download_status=done, no staging, file at library_path → update_library_file
+    - no staging, no library file → re-enqueue
+
+    Idempotent — safe to call multiple times.
+    """
+    comic_result = await db.execute(
+        select(Comic).where(Comic.id == comic_id)
+    )
+    comic = comic_result.scalar_one_or_none()
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    assignments_result = await db.execute(
+        select(ChapterAssignment)
+        .where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(True),
+        )
+        .options(selectinload(ChapterAssignment.source))
+    )
+    assignments = assignments_result.scalars().all()
+
+    queued = processed = skipped = 0
+
+    for assignment in assignments:
+        chapter_name = assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+        manga_title = assignment.source_manga_title or comic.title
+        source_display_name = assignment.source.name
+
+        # Case 1: already fully relocated — refresh metadata/cover/path
+        if (
+            assignment.relocation_status == RelocationStatus.done
+            and assignment.library_path
+            and Path(assignment.library_path).exists()
+        ):
+            await file_relocator.update_library_file(assignment, comic, db)
+            processed += 1
+            continue
+
+        # Case 2: already in Suwayomi queue — nothing to do
+        if assignment.download_status in (DownloadStatus.queued, DownloadStatus.downloading):
+            skipped += 1
+            continue
+
+        # Case 3: failed download — re-enqueue
+        if assignment.download_status == DownloadStatus.failed:
+            assignment.download_status = DownloadStatus.queued
+            try:
+                await suwayomi.enqueue_downloads([assignment.suwayomi_chapter_id])
+            except Exception as exc:
+                logger.warning(
+                    "reprocess: enqueue_downloads failed for assignment id=%d: %r",
+                    assignment.id,
+                    exc,
+                )
+                assignment.download_status = DownloadStatus.failed
+            else:
+                queued += 1
+            continue
+
+        # Case 4: download done — check staging then library
+        if assignment.download_status == DownloadStatus.done:
+            staging = file_relocator.find_staging_path(
+                chapter_name, manga_title, source_display_name
+            )
+            if staging is not None:
+                # Staging file exists — run the normal relocation pipeline
+                existing_active = await db.scalar(
+                    select(ChapterAssignment).where(
+                        ChapterAssignment.comic_id == comic_id,
+                        ChapterAssignment.chapter_number == assignment.chapter_number,
+                        ChapterAssignment.is_active.is_(True),
+                        ChapterAssignment.id != assignment.id,
+                    )
+                )
+                if existing_active is None:
+                    await file_relocator.relocate(
+                        assignment, comic, db,
+                        chapter_name=chapter_name,
+                        manga_title=manga_title,
+                        source_display_name=source_display_name,
+                    )
+                else:
+                    await file_relocator.replace_in_library(
+                        existing_active, assignment, comic, db,
+                        chapter_name=chapter_name,
+                        manga_title=manga_title,
+                        source_display_name=source_display_name,
+                    )
+                processed += 1
+                continue
+
+            # No staging — if library file exists, refresh it
+            if assignment.library_path and Path(assignment.library_path).exists():
+                await file_relocator.update_library_file(assignment, comic, db)
+                processed += 1
+                continue
+
+        # Case 5: no staging, no library file — re-enqueue
+        assignment.download_status = DownloadStatus.queued
+        try:
+            await suwayomi.enqueue_downloads([assignment.suwayomi_chapter_id])
+        except Exception as exc:
+            logger.warning(
+                "reprocess: enqueue_downloads failed for assignment id=%d: %r",
+                assignment.id,
+                exc,
+            )
+            assignment.download_status = DownloadStatus.failed
+        else:
+            queued += 1
+
+    await db.commit()
+    return ReprocessResponse(queued=queued, processed=processed, skipped=skipped)
 
 
 @router.get("/{comic_id}/cover")

@@ -57,6 +57,10 @@ export default function Comic() {
   const [discoverError, setDiscoverError] = useState<string | null>(null)
   const [discoverResult, setDiscoverResult] = useState<string | null>(null)
 
+  const [reprocessing, setReprocessing] = useState(false)
+  const [reprocessError, setReprocessError] = useState<string | null>(null)
+  const [reprocessResult, setReprocessResult] = useState<string | null>(null)
+
   const [coverFormOpen, setCoverFormOpen] = useState(false)
   const [coverTab, setCoverTab] = useState<'url' | 'file'>('url')
   const [coverUrl, setCoverUrl] = useState('')
@@ -83,6 +87,27 @@ export default function Comic() {
     queryFn: () => apiFetch<ComicDetail>(`/api/requests/${comicId}`),
     enabled: comicId > 0,
   })
+
+  async function handleReprocess() {
+    setReprocessing(true)
+    setReprocessError(null)
+    setReprocessResult(null)
+    try {
+      const res = await apiFetch<{ queued: number; processed: number; skipped: number }>(
+        `/api/requests/${comicId}/reprocess`, { method: 'POST' }
+      )
+      const parts = []
+      if (res.processed > 0) parts.push(`${res.processed} processed`)
+      if (res.queued > 0) parts.push(`${res.queued} queued for download`)
+      if (res.skipped > 0) parts.push(`${res.skipped} already in progress`)
+      setReprocessResult(parts.length > 0 ? parts.join(', ') + '.' : 'Nothing to do.')
+      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
+    } catch (err) {
+      setReprocessError(extractDetail(err))
+    } finally {
+      setReprocessing(false)
+    }
+  }
 
   async function handleDiscover() {
     setDiscovering(true)
@@ -442,20 +467,35 @@ export default function Comic() {
             </div>
           )}
 
-          {/* Re-discover */}
-          {comic.chapters.length === 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <button
-                onClick={handleDiscover}
-                disabled={discovering}
-                style={{ ...primaryButtonStyle, opacity: discovering ? 0.6 : 1 }}
-              >
-                {discovering ? 'Searching sources…' : 'Re-discover chapters'}
-              </button>
-              {discoverResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{discoverResult}</p>}
-              {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
-            </div>
-          )}
+          {/* Re-discover / Reprocess */}
+          <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            {comic.chapters.length === 0 && (
+              <div>
+                <button
+                  onClick={handleDiscover}
+                  disabled={discovering}
+                  style={{ ...primaryButtonStyle, opacity: discovering ? 0.6 : 1 }}
+                >
+                  {discovering ? 'Searching sources…' : 'Re-discover chapters'}
+                </button>
+                {discoverResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{discoverResult}</p>}
+                {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
+              </div>
+            )}
+            {comic.chapters.length > 0 && (
+              <div>
+                <button
+                  onClick={handleReprocess}
+                  disabled={reprocessing}
+                  style={{ ...secondaryButtonStyle, opacity: reprocessing ? 0.6 : 1 }}
+                >
+                  {reprocessing ? 'Reprocessing…' : 'Reprocess chapters'}
+                </button>
+                {reprocessResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{reprocessResult}</p>}
+                {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
+              </div>
+            )}
+          </div>
 
           {/* Chapter table */}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

@@ -811,3 +811,100 @@ async def test_update_library_file_injects_cover(tmp_path, monkeypatch):
 
     with zipfile.ZipFile(assignment.library_path) as zf:
         assert "cover.jpg" in zf.namelist()
+
+
+# ---------------------------------------------------------------------------
+# find_staging_path fuzzy source directory fallback tests
+# ---------------------------------------------------------------------------
+
+
+def test_find_staging_path_source_dir_space_stripped(tmp_path, monkeypatch):
+    """displayName 'Weeb Central' but on-disk dir is 'WeebCentral' (no space).
+    find_staging_path should find the CBZ via the fuzzy fallback."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Dungeon Odyssey"
+    chapter_name = "Episode 141"
+    # Suwayomi created a directory without the space
+    source_dir = downloads / "WeebCentral" / manga_title
+    source_dir.mkdir(parents=True)
+    cbz = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    assert result == cbz
+
+
+def test_find_staging_path_source_dir_with_suffix(tmp_path, monkeypatch):
+    """displayName 'Weeb Central' but on-disk dir is 'Weeb Central (EN)'.
+    find_staging_path should find the CBZ via the fuzzy fallback."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Dungeon Odyssey"
+    chapter_name = "Episode 141"
+    source_dir = downloads / "Weeb Central (EN)" / manga_title
+    source_dir.mkdir(parents=True)
+    cbz = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    assert result == cbz
+
+
+def test_find_staging_path_source_dir_case_mismatch(tmp_path, monkeypatch):
+    """Case-only difference: displayName 'weebcentral', on-disk 'WeebCentral'."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Some Manga"
+    chapter_name = "Chapter 1"
+    source_dir = downloads / "WeebCentral" / manga_title
+    source_dir.mkdir(parents=True)
+    cbz = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "weebcentral")
+    assert result == cbz
+
+
+def test_find_staging_path_source_dir_ambiguous_returns_none(tmp_path, monkeypatch):
+    """Two source directories both fuzzy-match the display name with no exact match —
+    should return None to avoid relocating to the wrong source."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Some Manga"
+    chapter_name = "Chapter 1"
+    # Neither directory is an exact match for "Weeb Central";
+    # both fuzzy-match (normalized "weebcentral" is a prefix of both)
+    for dirname in ("Weeb Central (EN)", "Weeb Central (JP)"):
+        d = downloads / dirname / manga_title
+        d.mkdir(parents=True)
+        _make_cbz(d / f"{chapter_name}.cbz")
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    assert result is None
+
+
+def test_find_staging_path_exact_match_skips_fallback(tmp_path, monkeypatch):
+    """When the exact directory exists, the fuzzy fallback is not needed and
+    the correct CBZ is returned directly."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "ExactManga"
+    chapter_name = "Ch 1"
+    source_dir = downloads / "ExactSource" / manga_title
+    source_dir.mkdir(parents=True)
+    cbz = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    # Also create a fuzzy-match directory to confirm it is NOT picked over the exact one
+    fuzzy_dir = downloads / "ExactSource (EN)" / manga_title
+    fuzzy_dir.mkdir(parents=True)
+    _make_cbz(fuzzy_dir / f"{chapter_name}.cbz")
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "ExactSource")
+    assert result == cbz

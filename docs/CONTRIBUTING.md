@@ -89,6 +89,7 @@ Otaki uses [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 |---|---|
 | `main` | Always reflects the latest tagged release. Never commit directly. |
 | `develop` | Integration branch for the next minor or major release. All feature branches merge here. |
+| `release/x.y` | Archival branch for each shipped minor version (e.g. `release/1.0`). Kept current with every hotfix so users who stay on an older minor can see exactly what they're running. Cut from `main` at the first `x.y.0` tag; only hotfixes land here after that. |
 
 ### Temporary branches
 
@@ -96,30 +97,40 @@ Otaki uses [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 |---|---|---|---|
 | `feature/<name>` | `develop` | `develop` | New functionality for the next release |
 | `fix/<name>` | `release/x.y` | `release/x.y` + `develop` | Bug fix against a released version |
-| `hotfix/<name>` | `main` | `main` + `develop` | Critical production fix that can't wait for a release cycle |
-| `release/x.y` | `develop` | `main` | Stabilisation branch for a minor release; only bug fixes allowed once cut |
+| `hotfix/<name>` | `main` | `main` + `release/<major>.<minor>` + `develop` | Critical production fix that can't wait for a release cycle |
 | `docs/<name>` | `develop` | `develop` | Documentation-only changes |
 | `chore/<name>` | `develop` | `develop` | Tooling, deps, CI — no production code |
 
+### Hotfix flow
+
+Hotfixes branch off `main` and must land in three places so no branch falls behind:
+
+```
+hotfix/<name>  →  main            (tag v<major>.<minor>.<patch>, fires GHCR publish)
+               →  release/<x.y>   (keeps archival branch current)
+               →  develop         (backport so in-progress work picks up the fix)
+```
+
+Use the `merge-hotfix` skill — it handles all three merges, the tag, and the publish workflow check automatically.
+
 ### Targeting different versions simultaneously
 
-The common case: feature X is destined for 1.2 but there are bug fixes needed on the live 1.1 release.
+The common case: feature X is destined for 1.2 but a hotfix is needed on the live 1.0 release.
 
 ```
-main ──── tag:1.1.0 ──────────────────── tag:1.1.1 ──── tag:1.2.0 ──▶
-               │                              │
-               └── release/1.1 ── fix/foo ───┘ (merged to main, cherry-picked to develop)
-
-develop ───────────────────────── feature/bar ─────────────────────────▶
+main ──── tag:1.0.0 ──── tag:1.0.1 ──────────────────── tag:1.1.0 ──▶
+               │              │                               │
+               └─ release/1.0─┴─ hotfix/foo ─────────────────┘
+                                      │
+                                   develop ──── feature/bar ──────────▶
 ```
 
-1. Cut `release/1.1` from `main` at the `1.1.0` tag
-2. `fix/foo` branches from `release/1.1`, merges back into `release/1.1`
-3. Tag `release/1.1` as `1.1.1` and merge into `main`
-4. Cherry-pick the fix commit(s) into `develop` so the fix is not lost in the next release
-5. `feature/bar` runs independently on `develop` — it never touches `release/1.1`
+1. `hotfix/foo` branches from `main`
+2. Merges into `main` (tagged `v1.0.1`), into `release/1.0` (archival), and backported to `develop`
+3. `feature/bar` on `develop` picks up the fix via the backport — no manual cherry-pick needed
+4. When 1.1 ships, cut `release/1.1` from `main` at the `1.1.0` tag
 
-**Rule:** nothing targeting a future minor version ever touches a `release/x.y` branch.
+**Rule:** nothing targeting a future minor version ever touches a `release/x.y` branch. `release/x.y` is append-only with hotfixes.
 
 ---
 
@@ -141,7 +152,9 @@ Follow this process for every GitHub issue:
 |---|---|---|
 | `feature/*` → `develop` | **Yes** | One commit per feature keeps `develop` history readable |
 | `fix/*` → `release/x.y` | **Yes** | One commit per fix; easier to cherry-pick to `develop` |
-| `hotfix/*` → `main` | **Yes** | Same as fix |
+| `hotfix/*` → `main` | **No** | Preserve individual fix commits; `git merge --no-ff` |
+| `hotfix/*` → `release/x.y` | **No** | Same — keeps archival branch history readable |
+| `hotfix/*` → `develop` | **No** | Backport preserves commit identity for traceability |
 | `release/x.y` → `main` | **No** | Preserve the individual fix commits in `main` history |
 | `release/x.y` → `develop` (post-release sync) | **No** | Preserve for traceability |
 

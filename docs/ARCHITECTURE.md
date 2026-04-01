@@ -84,7 +84,7 @@ Otaki/
 #### `backend/app/main.py`
 FastAPI app entry point. Responsibilities:
 - Mount all API routers (`/api/setup`, `/api/auth`, `/api/search`, `/api/requests`, `/api/settings`)
-- Call `database.init()` on startup (creates tables if not present)
+- Call `database.init()` on startup (runs `alembic upgrade head` to apply any pending migrations)
 - Start APScheduler via `scheduler.start(db)` then start `download_listener` as a long-lived background task
 - Cancel `download_listener` task and shut down APScheduler on shutdown
 
@@ -272,6 +272,7 @@ CRUD for tracked comics.
 - `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
 - `GET /api/requests` — list all tracked comics with per-comic chapter counts by download status (`total`, `done`, `downloading`, `queued`, `failed`). Uses a single `GROUP BY` query across all comics.
 - `GET /api/requests/{id}` — full detail: comic metadata plus list of `ChapterSummary` rows ordered by chapter number (includes source name, download status, relocation status, library path).
+- `PATCH /api/requests/{id}` — partial update; applies only fields present in the request body. `poll_override_days`/`upgrade_override_days` changes advance the corresponding `next_*_at` and call `scheduler.register_comic_jobs`. `status=complete` calls `scheduler.remove_comic_jobs`; `status=tracking` re-registers jobs.
 - `GET /api/requests/{id}/cover` — serves the comic's cover image as a file response. Returns 404 if no cover has been stored.
 - `DELETE /api/requests/{id}?delete_files=false` — untrack a comic: removes APScheduler jobs via `scheduler.remove_comic_jobs()`, bulk-deletes all `ChapterAssignment` rows, deletes the `Comic` row. If `delete_files=true`, also unlinks any existing `library_path` files. Returns 204.
 
@@ -306,7 +307,7 @@ Implemented:
 - `fetch_chapters(manga_id)` → `list[{chapter_number, volume_number, suwayomi_chapter_id, chapter_published_at}]` — fetches all chapters for a manga from Suwayomi. `uploadDate` is a ms-epoch string; converted to `datetime` (UTC). `volume_number` is always `None` (not exposed by Suwayomi's chapter API).
 - `enqueue_downloads(chapter_ids)` → void — enqueues a list of chapter IDs for download via `enqueueChapterDownloads` mutation.
 - `subscribe_download_changed()` → async generator of `(event_type, chapter_id, chapter_name, manga_title, source_display_name)` tuples — maintains a `graphql-transport-ws` WebSocket subscription to Suwayomi's `downloadStatusChanged(input: DownloadChangedInput!)` subscription. Yields one tuple per `FINISHED` or `ERROR` event (checked via `DownloadUpdate.type`). On the first event, also yields any entries in the `initial` field with `state` of `FINISHED` or `ERROR`.
-- `poll_downloads()` → `list[tuple]` — REST fallback used when the WebSocket subscription is unavailable. Polls `GET /api/v1/downloads` and returns the same 5-tuple format as `subscribe_download_changed`.
+- `poll_downloads()` → `list[dict]` — GraphQL fallback used when the WebSocket subscription is unavailable. Queries `downloadStatus { queue { state chapter { id name } manga { title source { displayName } } } }` and returns all queue items as `{state, chapter_id, chapter_name, manga_title, source_name}` dicts. Callers infer FINISHED/ERROR events by diffing snapshots — items that disappear from the queue are assumed complete.
 
 Not yet implemented:
 - `add_to_library(source_id, manga_url)` → Suwayomi manga ID (deferred — not required for download flow)
@@ -315,13 +316,13 @@ Not yet implemented:
 Per-chapter source selection logic. Stateless — takes a DB session as argument.
 
 - `effective_priority(source, comic, db) → int` — async; returns `source.priority` for MVP. Stubbed as `async def` so callers need no changes when 1.3 adds `ComicSourceOverride` lookup.
-- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel using `comic.title` (alias lookup deferred to 1.1). For each source: searches for the title, then fetches chapters. Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
+- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel. For each source: searches using `comic.title` first; if no matching result is found in the response, retries the search with each `ComicAlias` title in turn until a match is found. `_find_matching_result` performs case-insensitive title comparison against the full alias set (`comic.title` + all alias titles). Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
 - `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source, str, dict]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns `(assignment, candidate_source, manga_id, chapter_data)` tuples where a better-priority source now has the chapter. `chapter_data` contains everything needed to create a new `ChapterAssignment` and enqueue the download.
 
 #### `backend/app/services/cadence_inferrer.py`
 Infers release cadence from chapter history.
 
-- `infer_cadence(comic, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) from the N most recent `ChapterAssignment` rows for the comic and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `next_poll_at`/`next_upgrade_check_at`) and after each poll job when new chapters are found.
+- `infer_cadence(comic_id, db) → float | None` — queries `chapter_published_at` (not `downloaded_at`) for all active `ChapterAssignment` rows for the comic, sorted ascending, and computes the median inter-chapter gap in days. Using source publication dates means bulk-downloading a back-catalogue produces a sensible cadence immediately, rather than clustering all gaps near zero. Hiatus-aware: gaps more than 3× the initial median are excluded before the final median is computed. Returns `None` if fewer than 2 chapters exist. Called at request time (to initialise `inferred_cadence_days`) and after each poll job when new chapters are found.
 
 #### `backend/app/services/quality_scanner.py`
 Image quality analysis. Does **not** modify files.
@@ -335,21 +336,21 @@ Watermark templates are loaded once at startup and cached in memory.
 Manages per-comic cover images.
 
 - `save_from_url(comic_id, url) → Path | None` — downloads the image at `url` and saves it to `COVERS_PATH/{comic_id}.{ext}`. Returns the saved path on success, `None` on failure. Called by `create_request` when a `cover_url` is provided.
-- `save_from_upload(comic_id, image_bytes, content_type) → Path` — [deferred 1.1] saves a user-uploaded image to `COVERS_PATH/{comic_id}.{ext}`. Existing cover is replaced.
-- `inject(cbz_path, comic)` — [deferred 1.1] if `comic.cover_path` is set, opens the CBZ and adds (or replaces) an entry named `cover.png` at the beginning of the archive. No-op if `comic.cover_path` is null.
+- `save_from_file(comic_id, content, content_type) → Path | None` — saves uploaded image bytes to `COVERS_PATH/{comic_id}.{ext}`, deriving extension from `content_type`. Returns `None` if `content_type` is not `image/*`.
+- `inject(folder, comic)` — if `comic.cover_path` is set and the file exists, copies it into *folder* as `cover.{ext}` (preserving original extension, e.g. `cover.jpg`). No-op if `comic.cover_path` is null or file missing. Called by `file_relocator` after `comicinfo_writer.write` and before `_pack_to_cbz`.
 
 #### `backend/app/services/comicinfo_writer.py`
-Writes or updates `ComicInfo.xml` inside a CBZ archive, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
+Writes or updates `ComicInfo.xml` inside a chapter folder before it is packed to CBZ, ensuring all chapters of a comic report the same series name to comic library software (Komga, Kavita, etc.).
 
-- `write(cbz_path, comic, assignment)` — opens the CBZ, reads existing `ComicInfo.xml` if present, sets `<Series>` to `comic.library_title`, `<Number>` to `assignment.chapter_number`, and `<Volume>` to `assignment.volume_number` (if set). Repacks the CBZ in-place. Called after quality scan / auto-fix and before relocation.
+- `write(folder, comic, assignment)` — looks for `ComicInfo.xml` in *folder*; if present, parses it with `xml.etree.ElementTree`; if absent, creates a new `<ComicInfo/>` element. Sets the target fields, preserves all other existing tags, then writes the result back to `folder / "ComicInfo.xml"`. Called by `file_relocator` after `_normalize_to_folder` and before `_pack_to_cbz`.
 
 Fields written to `ComicInfo.xml`:
 
 | Field | Value |
 |---|---|
 | `<Series>` | `comic.library_title` |
-| `<Number>` | `assignment.chapter_number` |
-| `<Volume>` | `assignment.volume_number` (omitted if null) |
+| `<Number>` | `str(assignment.chapter_number)` |
+| `<Volume>` | `str(assignment.volume_number)` (element omitted entirely if null) |
 
 Any other existing fields are preserved unchanged.
 
@@ -366,19 +367,44 @@ Modifies CBZ files to remove banners. **Mutates files** — always backs up firs
 #### `backend/app/services/file_relocator.py`
 Moves settled chapters from Suwayomi's staging folder to the final library. Radarr/Sonarr-style.
 
+**Pipeline (called by `relocate` and `replace_in_library`):**
+1. `find_staging_path` — locate the chapter in the download area (CBZ or folder)
+2. `_normalize_to_folder` — extract CBZ to a sibling folder if needed; no-op if already a folder
+3. `comicinfo_writer.write` — inject/update `ComicInfo.xml` in the folder
+4. `_pack_to_cbz` — zip the folder to a CBZ, delete the folder
+5. Place the CBZ at the destination (hardlink or copy) and update the assignment
+
+Public API:
+
 - `resolve_path(assignment, comic) → Path` — renders `CHAPTER_NAMING_FORMAT` with tokens `{title}` (uses `comic.library_title`), `{chapter}` (zero-padded float), `{volume}` (optional), `{year}`, `{source}`. Returns absolute path under `LIBRARY_PATH`.
-- `relocate(assignment, comic, db)` — resolves destination, creates parent dirs, then:
-  - **Same filesystem**: `os.link()` (hardlink — instant, no extra disk space)
-  - **Different filesystem**: `shutil.copy2()` to temp path, verify size, then `os.replace()`, delete staging copy
-  - Updates `assignment.library_path` and `assignment.relocation_status=done`
-- `replace_in_library(old_assignment, new_assignment, comic, db)` — used during upgrades when `old_assignment.library_path` is set. Writes new file to a temp path alongside the existing library file, then `os.replace()` for atomic swap. No window where the file is missing.
+- `find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Detection order: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
+- `relocate(assignment, comic, db, ...)` — runs the pipeline; resolves destination, creates parent dirs, places the CBZ. Updates `assignment.library_path` and `assignment.relocation_status=done`.
+- `replace_in_library(old_assignment, new_assignment, comic, db, ...)` — used during upgrades when `old_assignment.library_path` is set. Runs the pipeline then `os.replace()` for atomic swap. No window where the file is missing.
+- `update_library_file(assignment, comic, db)` — re-processes a chapter already in the library. Extracts the existing CBZ, rewrites `ComicInfo.xml` (picks up any `library_title` change) and re-injects the cover, repacks, then moves to the canonical path from `resolve_path`. If the path is unchanged, replaces in-place atomically. Called by `POST /api/requests/{id}/reprocess` for settled chapters.
+
+Internal helpers:
+- `_normalize_to_folder(staging) → Path` — if *staging* is a directory, returns it unchanged. If it is a `.cbz` file, extracts all contents to `staging.parent / staging.stem /`, deletes the original CBZ, and returns the new folder.
+- `_pack_to_cbz(folder) → Path` — collects all files in *folder* recursively, sorts them by relative path (alphabetical — matches Suwayomi's zero-padded page-number naming), writes a new CBZ at `folder.parent / (folder.name + ".cbz")`, deletes the folder, and returns the CBZ path.
 
 ---
 
 ### Workers
 
 #### `backend/app/workers/scheduler.py`
-Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes, advancing `next_poll_at` by the poll interval (hardcoded 7-day MVP fallback; cadence inference deferred to #16).
+Initialises APScheduler with an `AsyncIOScheduler` module-level singleton. All jobs use the `date` trigger — each job re-schedules itself when it finishes.
+
+**Interval priority chain**
+
+Each comic has two scheduled jobs (poll and upgrade). The interval for each is determined by the first non-null value in the following chain:
+
+| Job | Priority order |
+|---|---|
+| Poll | `poll_override_days` → `inferred_cadence_days` → `DEFAULT_POLL_DAYS` |
+| Upgrade | `upgrade_override_days` → `inferred_cadence_days` → `poll_override_days` → `DEFAULT_POLL_DAYS` |
+
+- `poll_override_days` is null unless the user has explicitly set a value. Setting it always takes precedence over inference.
+- `inferred_cadence_days` is computed by `cadence_inferrer` from the median gap between `chapter_published_at` values. Updated at request time (if chapters are found) and after each poll that discovers new chapters.
+- `DEFAULT_POLL_DAYS` is the system-wide fallback (configured in settings).
 
 Public API:
 
@@ -388,17 +414,20 @@ Public API:
 
 Internal:
 
+- `_effective_poll_days(comic)` — returns the effective poll interval using the priority chain above.
+- `_effective_upgrade_days(comic)` — returns the effective upgrade interval using the priority chain above.
 - `_register_poll_job(comic)` — calls `scheduler.add_job` with `trigger="date"`, `run_date=comic.next_poll_at` (or `now(UTC)` if unset), `id=f"poll_{comic.id}"`, `replace_existing=True`.
-- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, creates `ChapterAssignment` rows directly from the chapter data in the map (`download_status=queued`, `is_active=True`), calls `enqueue_downloads`, advances `comic.next_poll_at`, re-registers the job, and commits.
+- `_poll_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `build_chapter_source_map`, compares against existing active `ChapterAssignment` chapter numbers, creates `ChapterAssignment` rows directly from the chapter data in the map (`download_status=queued`, `is_active=True`), calls `enqueue_downloads`. If new chapters were found, commits and re-infers cadence (`cadence_inferrer.infer_cadence`). Advances `comic.next_poll_at` by `_effective_poll_days`, re-registers the job, and commits.
 - `_register_upgrade_job(comic)` — same shape as `_register_poll_job`; uses `comic.next_upgrade_check_at`, `id=f"upgrade_{comic.id}"`.
-- `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` (interval = `upgrade_override_days ?? poll_override_days`), re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
+- `_upgrade_comic(comic_id)` — opens a fresh `AsyncSessionLocal` session. Loads the comic; returns early if not found or `status=complete`. Calls `find_upgrade_candidates`; for each `(assignment, candidate_source, manga_id, ch_data)` creates a new `ChapterAssignment` (`is_active=False`, `download_status=queued`) on the better source and enqueues the download. For 1.0, always upgrades — no quality condition. Advances `comic.last_upgrade_check_at` and `comic.next_upgrade_check_at` by `_effective_upgrade_days`, re-registers the job, and commits. The actual swap (`is_active` flip + library file replace) is handled by `chapter_event_handler` when the upgrade download completes.
 
 #### `backend/app/workers/download_listener.py`
 Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged` GraphQL subscription. On each `FINISHED` or `ERROR` event (via `DownloadUpdate.type`), dispatches to `chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_display_name)` as a non-blocking `asyncio.create_task()` so slow relocations don't block the listener.
 
 State machine:
+- **Startup**: calls `_seed_poll()` once to snapshot the current Suwayomi download queue into `_polled_items`, then calls `reconcile_on_startup()` to dispatch FINISHED events for any chapters the DB shows as `queued`/`downloading` that are no longer in the Suwayomi queue (i.e. completed while the backend was down). The idempotency guard in `chapter_event_handler.handle()` silently no-ops for chapters already processed.
 - **SUBSCRIPTION mode** (default): connect via `subscribe_download_changed()`; on error, retry with exponential backoff (2s, 4s, 8s… capped at 30s). After `MAX_RECONNECT_ATTEMPTS` consecutive failures, switch to POLLING mode.
-- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. On first success, switch back to SUBSCRIPTION mode.
+- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. Compares the current queue snapshot against `_polled_items`: items that disappeared are dispatched as FINISHED; items with state ERROR are dispatched as ERROR (once, deduplicated). On first successful poll, switch back to SUBSCRIPTION mode.
 
 Started by `main.py` lifespan as `asyncio.create_task(download_listener.run())` and cancelled on shutdown. Runs for the lifetime of the process regardless of whether Otaki has active downloads — unrecognised chapter IDs (downloads not initiated by Otaki) are silently ignored in `chapter_event_handler`.
 
@@ -411,17 +440,25 @@ handle(event_type, suwayomi_chapter_id, chapter_name, manga_title, source_displa
   ERROR   → _handle_error()
   FINISHED →
     1. Load ChapterAssignment by suwayomi_chapter_id (warn + return if not found)
-    2. Set download_status=done, downloaded_at=now(UTC)
-    3. [deferred 1.4] scan     → quality_scanner.scan_chapter()
-    4. [deferred 1.4] write    → QualityScan row
-    5. [deferred 1.4] fix      → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
-    6. [deferred 1.1] comicinfo → comicinfo_writer.write()
-    7. [deferred 1.1] cover    → cover_handler.inject()
-    8. Check for upgrade: query for existing active ChapterAssignment with same
+    2. Idempotency check: if download_status already done → return
+    3. Set download_status=done, downloaded_at=now(UTC)
+    4. [deferred 1.4] scan  → quality_scanner.scan_chapter()
+    5. [deferred 1.4] write → QualityScan row
+    6. [deferred 1.4] fix   → image_processor.crop_chapter() (if AUTO_FIX_BANNERS)
+    7. Check for upgrade: query for existing active ChapterAssignment with same
        comic_id + chapter_number but different id
-       - None found → regular download: file_relocator.relocate(), set is_active=True
-       - Found      → upgrade download: file_relocator.replace_in_library(old, new),
-                      set old.is_active=False, new.is_active=True
+       - None found → file_relocator.relocate()      → set is_active=True
+       - Found      → file_relocator.replace_in_library(old, new)
+                      → set old.is_active=False, new.is_active=True
+    8. db.commit()
+
+file_relocator.relocate() and replace_in_library() both run this internal pipeline:
+    a. find_staging_path()          find CBZ or folder in Suwayomi download dir
+    b. _normalize_to_folder()        extract CBZ → folder, or noop if already a folder
+    c. comicinfo_writer.write()      create/update ComicInfo.xml in the folder
+    d. cover_handler.inject()                  copy cover.{ext} into the folder (noop if no cover)
+    e. _pack_to_cbz()                zip folder → CBZ, delete folder
+    f. _place_file()                 hardlink or copy CBZ to library path
 
 on upgrade download (1.0): always swap — no quality condition until scanner added in 1.4
 on upgrade download (1.4+): swap only if new severity ≤ old severity
@@ -437,6 +474,54 @@ _handle_error(suwayomi_chapter_id, ...)
 _retry_download(assignment_id, suwayomi_chapter_id)
   Scheduled by _handle_error. Sets download_status=queued, calls
   suwayomi.enqueue_downloads(). If enqueue raises, reverts status to failed.
+```
+
+**Post-download pipeline flow:**
+
+```mermaid
+flowchart TD
+    A["Suwayomi FINISHED / ERROR event"] --> B["download_listener"]
+    B --> C["chapter_event_handler.handle()"]
+
+    C --> D{event type?}
+    D -->|ERROR| ERR["_handle_error()"]
+    D -->|FINISHED| F["load ChapterAssignment"]
+
+    ERR --> ER1{retry_count ><br>MAX_RETRIES?}
+    ER1 -->|yes| ER2["mark permanently failed"]
+    ER1 -->|no| ER3["schedule _retry_download<br>with exponential backoff"]
+    ER3 --> ER4["_retry_download:<br>enqueue_downloads()"]
+    ER4 --> B
+
+    F --> G{found?}
+    G -->|no| WARN["warn + return"]
+    G -->|yes| IDEM{already<br>done?}
+    IDEM -->|yes| NOP["no-op"]
+    IDEM -->|no| K["set download_status=done<br>downloaded_at=now()"]
+
+    K --> L{"existing active assignment<br>same comic + chapter?"}
+    L -->|"no — first download"| REL["file_relocator.relocate()"]
+    L -->|"yes — upgrade"| UPG["file_relocator.replace_in_library()"]
+
+    REL --> PIPE
+    UPG --> PIPE
+
+    subgraph PIPE ["file_relocator internal pipeline"]
+        direction TB
+        S1["find_staging_path()<br>locate CBZ or folder in Suwayomi download dir"]
+        S2["_normalize_to_folder()<br>extract CBZ → folder, or noop if already folder"]
+        S3["comicinfo_writer.write()<br>create / update ComicInfo.xml in folder"]
+        S4["cover_handler.inject()<br>copy cover.{ext} into folder (noop if no cover)"]
+        S5["_pack_to_cbz()<br>zip folder → CBZ, delete folder"]
+        S6["_place_file()<br>hardlink or copy CBZ to library path"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
+
+    PIPE --> ACT{"regular or<br>upgrade?"}
+    ACT -->|regular| ACT1["set is_active=True"]
+    ACT -->|upgrade| ACT2["old.is_active=False<br>new.is_active=True"]
+    ACT1 --> CMT["db.commit()"]
+    ACT2 --> CMT
 ```
 
 ---

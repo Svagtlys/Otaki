@@ -9,19 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import AsyncSessionLocal
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
 from ..models.comic import Comic, ComicStatus
-from ..services import source_selector
-from ..services import suwayomi
+from ..services import cadence_inferrer, source_selector, suwayomi
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
+
 
 scheduler = AsyncIOScheduler()  # module-level singleton
 
 
 async def start(db: AsyncSession) -> None:
     """Load all tracking comics and register poll and upgrade jobs, then start the scheduler."""
-    result = await db.execute(
-        select(Comic).where(Comic.status == ComicStatus.tracking)
-    )
+    result = await db.execute(select(Comic).where(Comic.status == ComicStatus.tracking))
     comics = result.scalars().all()
     for comic in comics:
         _register_poll_job(comic)
@@ -45,6 +43,33 @@ def remove_comic_jobs(comic_id: int) -> None:
             pass
 
 
+def _effective_poll_days(comic: Comic) -> float:
+    """Return the effective poll interval in days for *comic*.
+
+    Priority: poll_override_days > inferred_cadence_days > DEFAULT_POLL_DAYS.
+    A null poll_override_days means the user has not set an override, so the
+    inferred cadence (if available) is used instead of a hardcoded default.
+    """
+    from ..config import settings
+
+    return comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
+
+
+def _effective_upgrade_days(comic: Comic) -> float:
+    """Return the effective upgrade check interval in days for *comic*.
+
+    Priority: upgrade_override_days > inferred_cadence_days > poll_override_days > DEFAULT_POLL_DAYS.
+    """
+    from ..config import settings
+
+    return (
+        comic.upgrade_override_days
+        or comic.inferred_cadence_days
+        or comic.poll_override_days
+        or settings.DEFAULT_POLL_DAYS
+    )
+
+
 def _register_poll_job(comic: Comic) -> None:
     scheduler.add_job(
         func=_poll_comic,
@@ -63,9 +88,7 @@ async def _poll_comic(comic_id: int) -> None:
             logger.warning("_poll_comic: comic_id=%d not found — skipping", comic_id)
             return
         if comic.status == ComicStatus.complete:
-            logger.info(
-                "_poll_comic: comic_id=%d status=complete — skipping", comic_id
-            )
+            logger.info("_poll_comic: comic_id=%d status=complete — skipping", comic_id)
             return
 
         chapter_map = await source_selector.build_chapter_source_map(comic, db)
@@ -99,7 +122,9 @@ async def _poll_comic(comic_id: int) -> None:
                     chapter_published_at=ch_data["chapter_published_at"],
                 )
                 db.add(assignment)
-                enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+                enqueue_by_manga.setdefault(manga_id, []).append(
+                    ch_data["suwayomi_chapter_id"]
+                )
 
             for manga_id, chapter_ids in enqueue_by_manga.items():
                 try:
@@ -111,7 +136,13 @@ async def _poll_comic(comic_id: int) -> None:
                         exc,
                     )
 
-        comic.next_poll_at = datetime.now(timezone.utc) + timedelta(days=comic.poll_override_days)
+        if new_entries:
+            await db.commit()
+            comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
+
+        comic.next_poll_at = datetime.now(timezone.utc) + timedelta(
+            days=_effective_poll_days(comic)
+        )
         _register_poll_job(comic)
 
         await db.commit()
@@ -135,7 +166,9 @@ async def _upgrade_comic(comic_id: int) -> None:
             logger.warning("_upgrade_comic: comic_id=%d not found — skipping", comic_id)
             return
         if comic.status == ComicStatus.complete:
-            logger.info("_upgrade_comic: comic_id=%d status=complete — skipping", comic_id)
+            logger.info(
+                "_upgrade_comic: comic_id=%d status=complete — skipping", comic_id
+            )
             return
 
         candidates = await source_selector.find_upgrade_candidates(comic, db)
@@ -154,7 +187,9 @@ async def _upgrade_comic(comic_id: int) -> None:
                 chapter_published_at=ch_data["chapter_published_at"],
             )
             db.add(upgrade)
-            enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+            enqueue_by_manga.setdefault(manga_id, []).append(
+                ch_data["suwayomi_chapter_id"]
+            )
 
         for manga_id, chapter_ids in enqueue_by_manga.items():
             try:
@@ -168,8 +203,7 @@ async def _upgrade_comic(comic_id: int) -> None:
 
         now = datetime.now(timezone.utc)
         comic.last_upgrade_check_at = now
-        interval = comic.upgrade_override_days if comic.upgrade_override_days is not None else comic.poll_override_days
-        comic.next_upgrade_check_at = now + timedelta(days=interval)
+        comic.next_upgrade_check_at = now + timedelta(days=_effective_upgrade_days(comic))
         _register_upgrade_job(comic)
 
         await db.commit()

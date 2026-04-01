@@ -7,7 +7,7 @@ from ..config import settings
 from ..services import suwayomi
 from . import chapter_event_handler
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 _background_tasks: set[asyncio.Task] = set()
 # chapter_id → poll item dict from the most recent poll snapshot
@@ -25,7 +25,9 @@ def _dispatch(
 ) -> None:
     """Schedule chapter_event_handler.handle() as a background task."""
     task = asyncio.create_task(
-        chapter_event_handler.handle(event_type, chapter_id, chapter_name, manga_title, source_name)
+        chapter_event_handler.handle(
+            event_type, chapter_id, chapter_name, manga_title, source_name
+        )
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -51,7 +53,13 @@ def _process_poll_result(items: list[dict]) -> None:
     for chapter_id in disappeared:
         if chapter_id not in _emitted_error_ids:
             old = _polled_items[chapter_id]
-            _dispatch("FINISHED", old["chapter_id"], old["chapter_name"], old["manga_title"], old["source_name"])
+            _dispatch(
+                "FINISHED",
+                old["chapter_id"],
+                old["chapter_name"],
+                old["manga_title"],
+                old["source_name"],
+            )
     # Clean up error tracking for items that have left the queue
     _emitted_error_ids -= disappeared
 
@@ -59,7 +67,13 @@ def _process_poll_result(items: list[dict]) -> None:
     for chapter_id, item in current.items():
         if item["state"] == "ERROR" and chapter_id not in _emitted_error_ids:
             _emitted_error_ids.add(chapter_id)
-            _dispatch("ERROR", item["chapter_id"], item["chapter_name"], item["manga_title"], item["source_name"])
+            _dispatch(
+                "ERROR",
+                item["chapter_id"],
+                item["chapter_name"],
+                item["manga_title"],
+                item["source_name"],
+            )
 
     _polled_items = current
 
@@ -87,6 +101,79 @@ async def _seed_poll() -> None:
         _polled_items = {}
 
 
+async def reconcile_on_startup() -> None:
+    """Dispatch FINISHED events for chapters that completed while the backend was down.
+
+    Queries the DB for assignments still in 'queued' or 'downloading' status and
+    cross-references them against the current Suwayomi queue snapshot in
+    ``_polled_items`` (populated by ``_seed_poll()``). Any assignment absent from
+    the current queue is assumed to have finished and gets a FINISHED event
+    dispatched. The idempotency guard in chapter_event_handler.handle() silently
+    no-ops for chapters that were already processed before the restart.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from ..database import AsyncSessionLocal
+    from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ChapterAssignment)
+            .where(
+                ChapterAssignment.download_status.in_(
+                    [DownloadStatus.queued, DownloadStatus.downloading]
+                )
+            )
+            .options(selectinload(ChapterAssignment.source))
+        )
+        in_flight = result.scalars().all()
+
+    if not in_flight:
+        logger.info("download_listener: reconcile_on_startup: no in-flight chapters")
+        return
+
+    current_ids = set(_polled_items.keys())
+    missed = [a for a in in_flight if a.suwayomi_chapter_id not in current_ids]
+
+    if not missed:
+        logger.info(
+            "download_listener: reconcile_on_startup: all %d in-flight chapter(s) still in queue",
+            len(in_flight),
+        )
+        return
+
+    # Fetch displayName from Suwayomi — download directories use displayName
+    # (e.g. "Webtoons.com (EN)"), not source.name ("Webtoons.com").
+    display_name_by_source_id: dict[str, str] = {}
+    try:
+        for s in await suwayomi.list_sources():
+            display_name_by_source_id[s["id"]] = s["display_name"]
+    except Exception as exc:
+        logger.warning(
+            "download_listener: reconcile_on_startup: could not fetch source display names: %r"
+            " — falling back to source.name",
+            exc,
+        )
+
+    logger.info(
+        "download_listener: reconcile_on_startup: dispatching FINISHED for %d chapter(s) "
+        "absent from Suwayomi queue",
+        len(missed),
+    )
+    for assignment in missed:
+        source_display_name = display_name_by_source_id.get(
+            assignment.source.suwayomi_source_id, assignment.source.name
+        )
+        _dispatch(
+            "FINISHED",
+            assignment.suwayomi_chapter_id,
+            assignment.source_chapter_name or "",
+            assignment.source_manga_title or "",
+            source_display_name,
+        )
+
+
 async def run() -> None:
     """Maintain a persistent connection to Suwayomi's downloadChanged subscription.
 
@@ -109,6 +196,7 @@ async def run() -> None:
     _emitted_error_ids = set()
 
     await _seed_poll()
+    await reconcile_on_startup()
 
     use_polling = False
 
@@ -117,11 +205,21 @@ async def run() -> None:
             attempt = 0
             while True:
                 try:
-                    async for (event_type, chapter_id, chapter_name, manga_title, source_name) in (
-                        suwayomi.subscribe_download_changed()
-                    ):
+                    async for (
+                        event_type,
+                        chapter_id,
+                        chapter_name,
+                        manga_title,
+                        source_name,
+                    ) in suwayomi.subscribe_download_changed():
                         attempt = 0
-                        _dispatch(event_type, chapter_id, chapter_name, manga_title, source_name)
+                        _dispatch(
+                            event_type,
+                            chapter_id,
+                            chapter_name,
+                            manga_title,
+                            source_name,
+                        )
                     # Generator exhausted cleanly — reconnect immediately.
                     attempt = 0
                 except (TransportError, ConnectionError, Exception) as exc:
@@ -139,7 +237,7 @@ async def run() -> None:
                         )
                         use_polling = True
                         break
-                    backoff = min(2 ** attempt, 30)
+                    backoff = min(2**attempt, 30)
                     await asyncio.sleep(backoff)
         else:
             # POLLING mode

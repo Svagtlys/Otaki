@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shutil
+import zipfile
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,14 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.chapter_assignment import ChapterAssignment, RelocationStatus
 from ..models.comic import Comic
+from . import comicinfo_writer, cover_handler
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 
-def _find_staging_path(
+def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
     base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
+
+    # --- CBZ checks ---
     exact = base / f"{chapter_name}.cbz"
     if exact.exists():
         return exact
@@ -32,12 +36,72 @@ def _find_staging_path(
     containing = [m for m in matches if pattern.search(m.stem.lower())]
     if len(containing) == 1:
         return containing[0]
-    log.warning(
+
+    # --- Folder checks ---
+    # Exact folder name match
+    exact_folder = base / chapter_name
+    if exact_folder.is_dir():
+        return exact_folder
+    # Fallback: exactly one subdirectory present
+    subdirs = [p for p in base.iterdir() if p.is_dir()] if base.is_dir() else []
+    if len(subdirs) == 1:
+        return subdirs[0]
+    # Prefix match for folders
+    folder_containing = [d for d in subdirs if pattern.search(d.name.lower())]
+    if len(folder_containing) == 1:
+        return folder_containing[0]
+
+    logger.warning(
         "file_relocator: ambiguous or missing staging file for chapter %r in %s",
         chapter_name,
         base,
     )
     return None
+
+
+def _normalize_to_folder(staging: Path) -> Path:
+    """Return *staging* as a folder, extracting a CBZ if necessary.
+
+    - If *staging* is already a directory, return it unchanged.
+    - If *staging* is a ``.cbz`` file, extract its contents to a sibling
+      directory named after the stem, delete the original CBZ, and return
+      the extracted folder path.
+    """
+    if staging.is_dir():
+        return staging
+
+    # staging is a CBZ file — extract to a folder with the same stem
+    dest_folder = staging.parent / staging.stem
+    if dest_folder.exists():
+        shutil.rmtree(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(staging, "r") as zf:
+        zf.extractall(dest_folder)
+    staging.unlink()
+    return dest_folder
+
+
+def _pack_to_cbz(folder: Path) -> Path:
+    """Pack *folder* into a ``.cbz`` file and delete the source folder.
+
+    Files are added in alphabetical order of their relative paths, which
+    matches Suwayomi's zero-padded page-number naming convention.
+
+    Returns the path of the newly created CBZ.
+    """
+    cbz_path = folder.parent / (folder.name + ".cbz")
+    all_files = sorted(
+        (p for p in folder.rglob("*") if p.is_file()),
+        key=lambda p: (
+            0 if p.name.lower().startswith("cover.") else 1,
+            str(p.relative_to(folder)),
+        ),
+    )
+    with zipfile.ZipFile(cbz_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for file_path in all_files:
+            zf.write(file_path, file_path.relative_to(folder))
+    shutil.rmtree(folder)
+    return cbz_path
 
 
 def _render_format(assignment: ChapterAssignment, comic: Comic) -> str:
@@ -51,7 +115,9 @@ def _render_format(assignment: ChapterAssignment, comic: Comic) -> str:
 
     if assignment.volume_number is not None:
         volume = f"{assignment.volume_number:02d}"
-        rendered = fmt.format(title=title, chapter=chapter, volume=volume, year=year, source=source)
+        rendered = fmt.format(
+            title=title, chapter=chapter, volume=volume, year=year, source=source
+        )
     else:
         # Strip the path segment containing {volume} entirely; if {volume} shares a
         # segment with other tokens, strip only the volume portion inline.
@@ -68,7 +134,9 @@ def _render_format(assignment: ChapterAssignment, comic: Comic) -> str:
                     cleaned_parts.append(p)
                 # else: segment is entirely volume-related — drop it
         cleaned = "/".join(cleaned_parts)
-        rendered = cleaned.format(title=title, chapter=chapter, year=year, source=source)
+        rendered = cleaned.format(
+            title=title, chapter=chapter, year=year, source=source
+        )
 
     return rendered
 
@@ -123,18 +191,40 @@ async def relocate(
     manga_title: str,
     source_display_name: str,
 ) -> None:
-    staging = _find_staging_path(chapter_name, manga_title, source_display_name)
+    logger.info(
+        "relocate: starting for comic=%r chapter=%r source=%r",
+        manga_title,
+        chapter_name,
+        source_display_name,
+    )
+    staging = find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
+        logger.warning(
+            "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
+            manga_title,
+            chapter_name,
+            source_display_name,
+        )
         assignment.relocation_status = RelocationStatus.failed
         return
+
+    logger.info("relocate: staging path resolved to %s", staging)
+    staging = _normalize_to_folder(staging)
+    comicinfo_writer.write(staging, comic, assignment)
+    cover_handler.inject(staging, comic)
+    staging = _pack_to_cbz(staging)
 
     dest = resolve_path(assignment, comic)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    logger.info("relocate: placing %s -> %s", staging, dest)
     _place_file(staging, dest)
 
     assignment.library_path = str(dest)
     assignment.relocation_status = RelocationStatus.done
+    logger.info(
+        "relocate: done for comic=%r chapter=%r -> %s", manga_title, chapter_name, dest
+    )
 
 
 async def replace_in_library(
@@ -146,8 +236,34 @@ async def replace_in_library(
     manga_title: str,
     source_display_name: str,
 ) -> None:
-    staging = _find_staging_path(chapter_name, manga_title, source_display_name)
+    logger.info(
+        "replace_in_library: starting upgrade for comic=%r chapter=%r source=%r",
+        manga_title,
+        chapter_name,
+        source_display_name,
+    )
+    staging = find_staging_path(chapter_name, manga_title, source_display_name)
     if staging is None:
+        logger.warning(
+            "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",
+            manga_title,
+            chapter_name,
+            source_display_name,
+        )
+        new.relocation_status = RelocationStatus.failed
+        return
+
+    logger.info("replace_in_library: staging path resolved to %s", staging)
+    staging = _normalize_to_folder(staging)
+    comicinfo_writer.write(staging, comic, new)
+    cover_handler.inject(staging, comic)
+    staging = _pack_to_cbz(staging)
+
+    if old.library_path is None:
+        logger.warning(
+            "replace_in_library: old assignment id=%s has no library_path — skipping upgrade swap",
+            old.id,
+        )
         new.relocation_status = RelocationStatus.failed
         return
 
@@ -157,3 +273,57 @@ async def replace_in_library(
     new.library_path = str(dest)
     new.relocation_status = RelocationStatus.done
     old.relocation_status = RelocationStatus.skipped
+
+
+async def update_library_file(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+) -> None:
+    """Re-process a chapter that is already in the library.
+
+    Extracts the existing CBZ, rewrites ``ComicInfo.xml`` and the cover to
+    reflect the current ``comic.library_title`` and ``comic.cover_path``,
+    repacks, and moves the file to the canonical path derived from the
+    current ``library_title`` (in case it has changed since original relocation).
+
+    Updates ``assignment.library_path`` if the file was moved.
+    No-ops silently if ``assignment.library_path`` is unset or the file is missing.
+    """
+    if not assignment.library_path:
+        logger.warning(
+            "update_library_file: assignment id=%d has no library_path — skipping",
+            assignment.id,
+        )
+        return
+
+    current = Path(assignment.library_path)
+    if not current.exists():
+        logger.warning(
+            "update_library_file: library file not found at %s — skipping",
+            current,
+        )
+        return
+
+    logger.info("update_library_file: processing %s", current)
+
+    # Extract, update metadata and cover, repack.
+    folder = _normalize_to_folder(current)
+    comicinfo_writer.write(folder, comic, assignment)
+    cover_handler.inject(folder, comic)
+    packed = _pack_to_cbz(folder)
+
+    # Resolve expected destination based on current library_title.
+    dest = resolve_path(assignment, comic)
+
+    if dest == current:
+        # Path unchanged — replace in-place atomically.
+        os.replace(packed, dest)
+    else:
+        # library_title changed — move to new path, clean up old.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _place_file(packed, dest)
+        current.unlink(missing_ok=True)
+        assignment.library_path = str(dest)
+
+    logger.info("update_library_file: done — %s", dest)

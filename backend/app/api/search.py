@@ -19,17 +19,29 @@ from .auth import require_auth
 
 router = APIRouter(prefix="/search", tags=["search"])
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"otaki.{__name__}")
 
 
 class SearchResult(BaseModel):
     title: str
-    cover_url: str | None       # absolute Suwayomi URL — submitted to POST /api/requests
-    cover_display_url: str | None  # /api/search/thumbnail proxy URL — used by <img> tags
+    cover_url: str | None  # absolute Suwayomi URL — submitted to POST /api/requests
+    cover_display_url: (
+        str | None
+    )  # /api/search/thumbnail proxy URL — used by <img> tags
     synopsis: str | None
     source_id: int
     source_name: str
     url: str | None
+
+
+class SourceError(BaseModel):
+    source_name: str
+    reason: str
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResult]
+    source_errors: list[SourceError]
 
 
 def _absolute_cover_url(raw: str | None) -> str | None:
@@ -67,8 +79,13 @@ async def thumbnail_proxy(
         ).decode()
         headers["Authorization"] = f"Basic {token}"
 
-    async with httpx.AsyncClient(verify=False) as client:
-        resp = await client.get(url, headers=headers, timeout=15)
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            resp = await client.get(url, headers=headers, timeout=15)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Thumbnail request timed out")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Thumbnail fetch failed")
 
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Thumbnail fetch failed")
@@ -82,31 +99,47 @@ async def search(
     q: str = Query(min_length=1),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
-) -> list[SearchResult]:
+) -> SearchResponse:
     result = await db.execute(
         select(Source).where(Source.enabled == True).order_by(Source.priority)  # noqa: E712
     )
     sources = result.scalars().all()
 
-    async def _search_source(source: Source) -> list[SearchResult]:
+    async def _search_source(source: Source) -> tuple[list[SearchResult], str | None]:
+        """Return (results, error_reason). error_reason is None on success."""
         try:
-            results = await suwayomi.search_source(source.suwayomi_source_id, q)
+            raw = await suwayomi.search_source(source.suwayomi_source_id, q)
             items = []
-            for r in results:
+            for r in raw:
                 cover = _absolute_cover_url(r.get("cover_url"))
-                items.append(SearchResult(
-                    title=r["title"],
-                    cover_url=cover,
-                    cover_display_url=_display_url(cover),
-                    synopsis=r.get("synopsis"),
-                    source_id=source.id,
-                    source_name=source.name,
-                    url=r.get("url"),
-                ))
-            return items
+                items.append(
+                    SearchResult(
+                        title=r["title"],
+                        cover_url=cover,
+                        cover_display_url=_display_url(cover),
+                        synopsis=r.get("synopsis"),
+                        source_id=source.id,
+                        source_name=source.name,
+                        url=r.get("url"),
+                    )
+                )
+            return items, None
         except Exception as e:
-            logger.warning("search failed for source %s: %r", source.name, e)
-            return []
+            reason = suwayomi.classify_error(e)
+            logger.warning(
+                "search failed for source %s (%s): %r", source.name, reason, e
+            )
+            return [], reason
 
     gathered = await asyncio.gather(*[_search_source(s) for s in sources])
-    return [item for source_results in gathered for item in source_results]
+
+    all_results: list[SearchResult] = []
+    source_errors: list[SourceError] = []
+    for source, (items, error_reason) in zip(sources, gathered):
+        all_results.extend(items)
+        if error_reason is not None:
+            source_errors.append(
+                SourceError(source_name=source.name, reason=error_reason)
+            )
+
+    return SearchResponse(results=all_results, source_errors=source_errors)

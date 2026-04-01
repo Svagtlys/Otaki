@@ -1,4 +1,4 @@
-"""Tests for GET /api/search (issue #9).
+"""Tests for GET /api/search (issue #9) and thumbnail proxy.
 
 Unit-style tests mock suwayomi.search_source and seed sources directly in the DB.
 Integration tests require a configured Suwayomi instance via suwayomi_settings.
@@ -45,10 +45,13 @@ async def test_search_missing_query(logged_in_client):
 async def test_search_returns_empty_when_no_sources(logged_in_client):
     r = await logged_in_client.get("/api/search?q=anything")
     assert r.status_code == 200
-    assert r.json() == []
+    body = r.json()
+    assert body["results"] == []
+    assert body["source_errors"] == []
 
 
 async def test_search_skips_failed_source(logged_in_client, monkeypatch):
+    """A source that throws populates source_errors and returns empty results for that source."""
     from app.services import suwayomi
     await _add_source()
 
@@ -59,7 +62,29 @@ async def test_search_skips_failed_source(logged_in_client, monkeypatch):
 
     r = await logged_in_client.get("/api/search?q=test")
     assert r.status_code == 200
-    assert r.json() == []
+    body = r.json()
+    assert body["results"] == []
+    assert len(body["source_errors"]) == 1
+    assert body["source_errors"][0]["source_name"] == "Test Source"
+    assert body["source_errors"][0]["reason"] == "unexpected error"
+
+
+async def test_search_timeout_populates_source_error(logged_in_client, monkeypatch):
+    """A TimeoutException from a source maps to 'connection timed out' in source_errors."""
+    import httpx
+    from app.services import suwayomi
+    await _add_source()
+
+    async def _timeout_search(source_id, query):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(suwayomi, "search_source", _timeout_search)
+
+    r = await logged_in_client.get("/api/search?q=test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["results"] == []
+    assert body["source_errors"][0]["reason"] == "connection timed out"
 
 
 async def test_search_result_shape(logged_in_client, monkeypatch):
@@ -73,13 +98,14 @@ async def test_search_result_shape(logged_in_client, monkeypatch):
 
     r = await logged_in_client.get("/api/search?q=test")
     assert r.status_code == 200
-    results = r.json()
-    assert len(results) == 1
-    result = results[0]
+    body = r.json()
+    assert len(body["results"]) == 1
+    result = body["results"][0]
     assert result["title"] == "Test Manga"
     assert "source_id" in result
     assert "source_name" in result
     assert result["source_name"] == "Test Source"
+    assert body["source_errors"] == []
 
 
 async def test_search_cover_urls(logged_in_client, monkeypatch):
@@ -98,7 +124,7 @@ async def test_search_cover_urls(logged_in_client, monkeypatch):
 
     r = await logged_in_client.get("/api/search?q=test")
     assert r.status_code == 200
-    result = r.json()[0]
+    result = r.json()["results"][0]
     assert result["cover_url"] == "https://suwayomi.example.com/api/v1/manga/1/thumbnail"
     assert result["cover_display_url"].startswith("/api/search/thumbnail?url=")
 
@@ -160,6 +186,28 @@ async def test_thumbnail_proxy_fetches_from_suwayomi(logged_in_client, monkeypat
     assert r.content == b"fake-thumbnail"
 
 
+async def test_thumbnail_proxy_timeout_returns_504(logged_in_client, monkeypatch):
+    """A timeout from Suwayomi returns 504, not 500."""
+    from app.config import settings
+    import httpx
+
+    monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw):
+            raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    import urllib.parse
+    url = urllib.parse.quote("https://suwayomi.example.com/img.jpg", safe="")
+    r = await logged_in_client.get(f"/api/search/thumbnail?url={url}")
+    assert r.status_code == 504
+
+
 async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
     from app.services import suwayomi
     await _add_source(name="Source A", suwayomi_source_id="src-1", priority=1)
@@ -175,7 +223,7 @@ async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
 
     r = await logged_in_client.get("/api/search?q=test")
     assert r.status_code == 200
-    assert len(r.json()) == 2
+    assert len(r.json()["results"]) == 2
     assert set(called_with) == {"src-1", "src-2"}
 
 
@@ -199,7 +247,10 @@ async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, 
 
     r = await logged_in_client.get(f"/api/search?q={test_manga_title}")
     assert r.status_code == 200
-    assert isinstance(r.json(), list)
+    body = r.json()
+    assert "results" in body
+    assert "source_errors" in body
+    assert isinstance(body["results"], list)
 
 
 async def test_search_live_result_has_required_fields(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
@@ -215,7 +266,10 @@ async def test_search_live_result_has_required_fields(suwayomi_credentials, logg
 
     chosen = None
     for s in sources:
-        results = await _search_source(s["id"], test_manga_title)
+        try:
+            results = await _search_source(s["id"], test_manga_title)
+        except Exception:
+            continue
         if results:
             chosen = s
             break
@@ -226,7 +280,7 @@ async def test_search_live_result_has_required_fields(suwayomi_credentials, logg
 
     r = await logged_in_client.get(f"/api/search?q={test_manga_title}")
     assert r.status_code == 200
-    results = r.json()
+    results = r.json()["results"]
     assert len(results) > 0
     for result in results:
         assert "title" in result

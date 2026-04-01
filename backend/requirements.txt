@@ -8,3 +8,5 @@ python-dotenv
 bcrypt
 PyJWT
 apscheduler>=3.10,<4
+alembic
+python-multipart

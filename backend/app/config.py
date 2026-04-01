@@ -4,6 +4,10 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings
 
+import logging
+
+logger = logging.getLogger(f"otaki.{__name__}")
+
 _here = Path(__file__).parent.parent  # backend/
 _env_file = os.environ.get("ENV_FILE", ".env")
 
@@ -20,6 +24,7 @@ class Settings(BaseSettings):
     SUWAYOMI_URL: str | None = None
     SUWAYOMI_USERNAME: str | None = None
     SUWAYOMI_PASSWORD: str | None = None
+    SUWAYOMI_VERIFY_SSL: bool = True
     SUWAYOMI_DOWNLOAD_PATH: str | None = None
     LIBRARY_PATH: str | None = None
     COVERS_PATH: str = str(_here / "covers")

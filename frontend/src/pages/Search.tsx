@@ -17,6 +17,16 @@ interface SearchResult {
   url: string
 }
 
+interface SourceError {
+  source_name: string
+  reason: string
+}
+
+interface SearchResponse {
+  results: SearchResult[]
+  source_errors: SourceError[]
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -47,11 +57,14 @@ export default function Search() {
     return () => clearTimeout(id)
   }, [query])
 
-  const { data: results, isLoading, error } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['search', debouncedQuery],
-    queryFn: () => apiFetch<SearchResult[]>(`/api/search?q=${encodeURIComponent(debouncedQuery)}`),
+    queryFn: () => apiFetch<SearchResponse>(`/api/search?q=${encodeURIComponent(debouncedQuery)}`),
     enabled: debouncedQuery.length > 0,
   })
+
+  const results = data?.results ?? []
+  const sourceErrors = data?.source_errors ?? []
 
   function toggleSelect(url: string) {
     setSelected(prev => {
@@ -63,7 +76,7 @@ export default function Search() {
   }
 
   function handleReview() {
-    const firstSelected = results?.find(r => selected.has(r.url))
+    const firstSelected = results.find(r => selected.has(r.url))
     setDisplayName(firstSelected?.title ?? '')
     setLibraryTitle(firstSelected?.title ?? '')
     setLibraryTitleTouched(false)
@@ -92,6 +105,7 @@ export default function Search() {
           primary_title: displayName,
           library_title: libraryTitle,
           cover_url: chosenCoverUrl,
+          aliases: aliasTitles,
         }),
       })
       navigate('/library')
@@ -102,7 +116,10 @@ export default function Search() {
     }
   }
 
-  const selectedResults = results?.filter(r => selected.has(r.url)) ?? []
+  const selectedResults = results.filter(r => selected.has(r.url))
+  const aliasTitles = [...new Set(
+    selectedResults.map(r => r.title).filter(t => t !== displayName)
+  )]
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
@@ -129,12 +146,21 @@ export default function Search() {
           {debouncedQuery && error && (
             <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>
           )}
-          {debouncedQuery && !isLoading && !error && results?.length === 0 && (
+          {debouncedQuery && !isLoading && !error && results.length === 0 && sourceErrors.length === 0 && (
             <p style={{ color: '#666' }}>No results.</p>
           )}
 
+          {/* Source error banner */}
+          {sourceErrors.length > 0 && (
+            <div style={sourceErrorBannerStyle}>
+              <strong>Some sources could not be reached:</strong>{' '}
+              {sourceErrors.map(e => `${e.source_name} (${e.reason})`).join(', ')}.
+              Results may be incomplete.
+            </div>
+          )}
+
           {/* Result cards */}
-          {results && results.length > 0 && (
+          {results.length > 0 && (
             <div style={gridStyle}>
               {results.map(r => (
                 <div
@@ -153,15 +179,15 @@ export default function Search() {
                     <img
                       src={r.cover_display_url}
                       alt=""
-                      width={48}
-                      height={64}
-                      style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                      width={160}
+                      height={220}
+                      style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
                       onError={e => { e.currentTarget.style.display = 'none' }}
                     />
                   ) : (
-                    <div style={{ width: 48, height: 64, background: '#eee', borderRadius: 4, flexShrink: 0 }} />
+                    <div style={{ width: 160, height: 220, background: '#eee', borderRadius: 4 }} />
                   )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ marginTop: 8 }}>
                     <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{r.title}</div>
                     <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{r.source_name}</div>
                     {r.synopsis && (
@@ -169,7 +195,7 @@ export default function Search() {
                         fontSize: 12,
                         color: '#444',
                         display: '-webkit-box',
-                        WebkitLineClamp: 2,
+                        WebkitLineClamp: 3,
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden',
                       }}>
@@ -239,6 +265,18 @@ export default function Search() {
             </label>
           </div>
 
+          {/* Aliases (read-only) */}
+          {aliasTitles.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Other titles (aliases)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {aliasTitles.map(t => (
+                  <span key={t} style={aliasChipStyle}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Cover picker */}
           {selectedResults.some(r => r.cover_display_url) && (
             <div style={{ marginBottom: 16 }}>
@@ -251,8 +289,8 @@ export default function Search() {
                       key={r.url}
                       src={r.cover_display_url!}
                       alt={r.source_name}
-                      width={48}
-                      height={64}
+                      width={160}
+                      height={220}
                       onClick={() => setChosenCoverUrl(r.cover_url)}
                       style={{
                         objectFit: 'cover',
@@ -318,14 +356,14 @@ const primaryButtonStyle: React.CSSProperties = {
 
 const gridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(184px, 1fr))',
   gap: 12,
   marginTop: 16,
 }
 
 const cardStyle: React.CSSProperties = {
   display: 'flex',
-  gap: 12,
+  flexDirection: 'column',
   padding: 12,
   borderRadius: 6,
   cursor: 'pointer',
@@ -337,4 +375,25 @@ const labelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: '#444',
+}
+
+const aliasChipStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '2px 8px',
+  fontSize: 12,
+  background: '#f0f0f0',
+  border: '1px solid #ddd',
+  borderRadius: 12,
+  color: '#555',
+}
+
+const sourceErrorBannerStyle: React.CSSProperties = {
+  marginTop: 8,
+  marginBottom: 8,
+  padding: '8px 12px',
+  background: '#fff8e1',
+  border: '1px solid #ffe082',
+  borderRadius: 4,
+  fontSize: 13,
+  color: '#5d4037',
 }

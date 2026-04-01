@@ -255,39 +255,56 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 **Response `200`**
 
 ```json
-[
-  {
-    "title": "One Piece",
-    "cover_url": "https://...",
-    "synopsis": "...",
-    "source_id": 1,
-    "source_name": "MangaDex",
-    "url": "https://source-url/manga/one-piece"
-  },
-  {
-    "title": "ワンピース",
-    "cover_url": "https://...",
-    "synopsis": "...",
-    "source_id": 2,
-    "source_name": "MangaPlus",
-    "url": "https://source2-url/manga/wan-piisu"
-  }
-]
+{
+  "results": [
+    {
+      "title": "One Piece",
+      "cover_url": "https://...",
+      "cover_display_url": "/api/search/thumbnail?url=...",
+      "synopsis": "...",
+      "source_id": 1,
+      "source_name": "MangaDex",
+      "url": "https://source-url/manga/one-piece"
+    },
+    {
+      "title": "ワンピース",
+      "cover_url": "https://...",
+      "cover_display_url": "/api/search/thumbnail?url=...",
+      "synopsis": "...",
+      "source_id": 2,
+      "source_name": "MangaPlus",
+      "url": "https://source2-url/manga/wan-piisu"
+    }
+  ],
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
+}
 ```
+
+`results` fields:
 
 | Field | Type | Notes |
 |---|---|---|
 | `title` | string | Title as returned by this source |
-| `cover_url` | string \| null | Cover image URL served by Suwayomi |
+| `cover_url` | string \| null | Absolute Suwayomi cover URL — submitted to `POST /api/requests` |
+| `cover_display_url` | string \| null | Proxied `/api/search/thumbnail?url=…` — used by `<img>` tags |
 | `synopsis` | string \| null | Short description, may be empty |
 | `source_id` | int | Otaki source ID |
 | `source_name` | string | Human-readable source label |
 | `url` | string | Source-specific manga URL, passed back when submitting a request |
 
+`source_errors` fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `source_name` | string | Name of the source that failed |
+| `reason` | string | Human-readable failure reason: `"connection timed out"`, `"connection refused or DNS failure"`, `"authentication failed (401)"`, `"unexpected HTTP <N>"`, or `"unexpected error"` |
+
 **Notes**
 - Fans out to all enabled sources in parallel; slow sources are waited on up to a timeout.
 - No deduplication — the frontend shows all results and lets the user select which ones represent the same series.
-- Returns an empty array `[]` if no results are found — never 404.
+- `results` is empty and `source_errors` is populated when all sources fail.
 - Does not require a `Comic` row to exist; this is purely a live Suwayomi query.
 
 ---
@@ -306,7 +323,8 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "library_title": "One Piece",
   "cover_url": "https://source1-url/cover.jpg",
   "poll_override_days": 7.0,
-  "upgrade_override_days": null
+  "upgrade_override_days": null,
+  "aliases": ["ワンピース", "One Piece (Viz)"]
 }
 ```
 
@@ -314,9 +332,10 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 |---|---|---|---|
 | `primary_title` | string | yes | Display name for the comic in the Otaki UI |
 | `library_title` | string | no | Name used for the library folder path and `ComicInfo.xml` `<Series>` tag. Defaults to `primary_title` if omitted. |
-| `cover_url` | string \| null | no | Stored for future use (cover injection deferred to 1.1). |
-| `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` = use `DEFAULT_POLL_DAYS` (default 7) |
+| `cover_url` | string \| null | no | Cover image URL; downloaded and stored at request time. Injected as `cover.{ext}` into each chapter CBZ during relocation. |
+| `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` (default) = use inferred cadence, falling back to `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
+| `aliases` | string[] | no | Alternative titles for this comic. Saved as `ComicAlias` rows and used during source searches to find the comic under its alternative names. |
 
 **Response `201`**
 
@@ -329,20 +348,30 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "status": "tracking",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
+  "inferred_cadence_days": 6.5,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": null,
-  "created_at": "2025-03-15T09:00:00Z"
+  "created_at": "2025-03-15T09:00:00Z",
+  "aliases": [
+    { "id": 1, "title": "ワンピース" }
+  ],
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
 }
 ```
 
+`source_errors` is an empty array on full success. A non-empty array means one or more sources could not be reached during chapter discovery — the comic was still created and chapters from reachable sources were enqueued. Call `POST /api/requests/{id}/discover` to retry failed sources.
+
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
-2. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources by `primary_title` and assigns each chapter to the highest-priority source that has it.
-3. Calls `suwayomi.fetch_chapters()` per source group.
-4. Calls `suwayomi.enqueue_downloads()` grouped by source.
-5. Creates one `ChapterAssignment` row per chapter with `download_status=queued`, `is_active=True`.
-6. Registers an APScheduler poll job for this comic.
+2. Creates `ComicAlias` rows for each entry in `aliases`.
+3. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources using `primary_title` and all alias titles, assigning each chapter to the highest-priority source that has it.
+4. Calls `suwayomi.fetch_chapters()` per source group.
+5. Calls `suwayomi.enqueue_downloads()` grouped by source.
+6. Creates one `ChapterAssignment` row per chapter with `download_status=queued`, `is_active=True`.
+7. Registers an APScheduler poll job for this comic.
 
 **Error Cases**
 - `409 Conflict` — a `Comic` with the same title is already being tracked.
@@ -370,8 +399,9 @@ List all tracked comics with a summary of download progress.
       "queued": 1,
       "failed": 0
     },
-    "poll_override_days": 7.0,
+    "poll_override_days": null,
     "upgrade_override_days": null,
+    "inferred_cadence_days": 6.5,
     "next_poll_at": "2025-03-22T09:00:00Z",
     "next_upgrade_check_at": "2025-03-22T09:00:00Z",
     "last_upgrade_check_at": null
@@ -382,8 +412,9 @@ List all tracked comics with a summary of download progress.
 | Field | Type | Notes |
 |---|---|---|
 | `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
-| `poll_override_days` | float | Effective poll interval in days |
+| `poll_override_days` | float \| null | User override for poll interval; `null` = use inferred cadence / `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
+| `inferred_cadence_days` | float \| null | Median inter-chapter gap in days, inferred from `chapter_published_at`; `null` until ≥ 2 chapters are available |
 | `next_poll_at` | datetime \| null | When the next new-chapter poll will run |
 | `next_upgrade_check_at` | datetime \| null | When the next upgrade check will run |
 | `last_upgrade_check_at` | datetime \| null | When upgrade checks last ran |
@@ -411,10 +442,14 @@ Full detail for one comic: all chapter assignments with download and relocation 
   "status": "tracking",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
+  "inferred_cadence_days": 6.5,
   "next_poll_at": "2025-03-22T09:00:00Z",
   "next_upgrade_check_at": "2025-03-22T09:00:00Z",
   "last_upgrade_check_at": "2025-03-15T10:00:00Z",
   "created_at": "2025-03-15T09:00:00Z",
+  "aliases": [
+    { "id": 1, "title": "ワンピース" }
+  ],
   "chapters": [
     {
       "assignment_id": 55,
@@ -435,6 +470,110 @@ Full detail for one comic: all chapter assignments with download and relocation 
 **Notes**
 - `chapters` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
 - `library_path` is `null` until relocation completes.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `PATCH /api/requests/{id}`
+
+Update one or more settings for a tracked comic. All fields are optional — only fields present in the request body are applied; omitted fields are left unchanged.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body** (any subset)
+
+```json
+{
+  "library_title": "One Piece Vol. 1+",
+  "poll_override_days": 3.0,
+  "upgrade_override_days": null,
+  "status": "complete"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `library_title` | string | Folder name and `ComicInfo.xml` `<Series>` tag for future relocations. Does **not** rename existing library files. |
+| `poll_override_days` | float \| null | New poll interval. `null` = clear override (reverts to inferred cadence / default). Reschedules the APScheduler poll job immediately. |
+| `upgrade_override_days` | float \| null | New upgrade interval. `null` = clear override (reverts to inferred cadence / poll override / default). Reschedules the upgrade job. |
+| `status` | `"tracking"` \| `"complete"` | `"complete"` stops all scheduled jobs; `"tracking"` re-registers them. |
+
+**Response `200`** — `ComicResponse` (same shape as `POST /api/requests`).
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `POST /api/requests/{id}/discover`
+
+Re-run source discovery for a comic and queue any chapters not yet assigned. Safe to call at any time — only creates assignments for chapter numbers not already tracked with `is_active=True`. Intended for comics that ended up with 0 (or partial) assignments due to a connectivity failure at request time.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+{
+  "new_chapters": 3,
+  "source_errors": [
+    { "source_name": "BrokenSource", "reason": "connection timed out" }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `new_chapters` | int | Number of new `ChapterAssignment` rows created |
+| `source_errors` | array | Sources that could not be reached during this discovery run |
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `POST /api/requests/{id}/reprocess`
+
+Walk every active chapter through whatever pipeline stage it is currently stuck or incomplete in. Idempotent — safe to call multiple times.
+
+For each active `ChapterAssignment`:
+
+| Condition | Action |
+|---|---|
+| `relocation_status=done`, library file exists | Re-pack CBZ, update `ComicInfo.xml` (`library_title`) and cover, move to correct path if `library_title` changed |
+| `download_status=queued` or `downloading` | Skip — already in progress |
+| `download_status=failed` | Re-enqueue download |
+| `download_status=done`, staging file found | Run relocate / replace-in-library pipeline |
+| `download_status=done`, no staging, library file exists | Re-pack and update as above |
+| No staging, no library file | Re-enqueue download |
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+{ "queued": 2, "processed": 5, "skipped": 1 }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `queued` | int | Chapters re-enqueued for download (failed or missing) |
+| `processed` | int | Chapters that ran through the relocate / update pipeline |
+| `skipped` | int | Chapters already in progress (`queued`/`downloading`) |
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.
@@ -512,6 +651,53 @@ Set or replace the cover image for a comic. Accepts either a URL to download fro
 Remove the cover image. Future chapter CBZs will not have `cover.png` injected.
 
 **Response `204 No Content`**
+
+---
+
+### `GET /api/requests/{id}/aliases`
+
+List all aliases for a comic.
+
+**Response `200`**
+
+```json
+[
+  { "id": 1, "title": "ワンピース" },
+  { "id": 2, "title": "One Piece (Viz)" }
+]
+```
+
+---
+
+### `POST /api/requests/{id}/aliases`
+
+Add a new alias to a comic. The alias title is used as a fallback search query when `source_selector` searches for this comic on sources.
+
+**Request Body**
+
+```json
+{ "title": "ワンピース" }
+```
+
+**Response `201`**
+
+```json
+{ "id": 3, "title": "ワンピース" }
+```
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `DELETE /api/requests/{id}/aliases/{alias_id}`
+
+Remove an alias from a comic.
+
+**Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — alias does not exist or does not belong to this comic.
 
 ---
 

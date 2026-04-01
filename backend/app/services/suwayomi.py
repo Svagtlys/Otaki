@@ -4,10 +4,41 @@ from typing import AsyncGenerator
 
 import httpx
 from gql import Client, gql
+from gql.transport.exceptions import (
+    TransportConnectionFailed,
+    TransportError,
+    TransportQueryError,
+    TransportServerError,
+)
 from gql.transport.httpx import HTTPXAsyncTransport
 from gql.transport.websockets import WebsocketsTransport
 
 from ..config import settings
+
+
+def classify_error(exc: Exception) -> str:
+    """Return a user-friendly reason string for a Suwayomi connectivity failure."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "connection timed out"
+    if isinstance(exc, httpx.ConnectError):
+        return "connection refused or DNS failure"
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 401:
+        return "authentication failed (401)"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"unexpected HTTP {exc.response.status_code}"
+    if isinstance(exc, TransportServerError):
+        if exc.code == 401:
+            return "authentication failed (401)"
+        if exc.code is not None:
+            return f"unexpected HTTP {exc.code}"
+        return "server error"
+    if isinstance(exc, TransportQueryError):
+        return "source returned an error"
+    if isinstance(exc, TransportConnectionFailed):
+        return "connection refused or DNS failure"
+    if isinstance(exc, TransportError):
+        return "connection error"
+    return "unexpected error"
 
 
 def _auth_headers() -> dict[str, str]:
@@ -22,7 +53,9 @@ def _auth_headers() -> dict[str, str]:
 
 def _make_client(url: str, username: str | None, password: str | None) -> Client:
     auth = (username, password) if username else None
-    transport = HTTPXAsyncTransport(url=f"{url}/api/graphql", auth=auth, verify=False)
+    transport = HTTPXAsyncTransport(
+        url=f"{url}/api/graphql", auth=auth, verify=settings.SUWAYOMI_VERIFY_SSL
+    )
     return Client(transport=transport, fetch_schema_from_transport=False)
 
 
@@ -35,7 +68,7 @@ async def ping(url: str, username: str | None, password: str | None) -> bool:
     """
     try:
         auth = (username, password) if username else None
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=settings.SUWAYOMI_VERIFY_SSL) as client:
             r = await client.post(
                 f"{url}/api/graphql",
                 json={"query": "{ __typename }"},
@@ -100,6 +133,7 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
                     fetchChapters(input: $input) {
                         chapters {
                             id
+                            name
                             chapterNumber
                             uploadDate
                         }
@@ -119,6 +153,7 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
                 "volume_number": None,  # not available from Suwayomi chapter data
                 "suwayomi_chapter_id": str(node["id"]),
                 "chapter_published_at": published_at,
+                "source_chapter_name": node["name"],
             }
         )
     return chapters
@@ -149,12 +184,13 @@ async def list_sources() -> list[dict]:
         settings.SUWAYOMI_PASSWORD,
     ) as session:
         result = await session.execute(
-            gql("{ sources { nodes { id name lang iconUrl } } }")
+            gql("{ sources { nodes { id name displayName lang iconUrl } } }")
         )
     return [
         {
             "id": node["id"],
             "name": node["name"],
+            "display_name": node["displayName"],
             "lang": node["lang"],
             "icon_url": node["iconUrl"],
         }
@@ -188,13 +224,17 @@ async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, st
     WebSocket subscription."""
     ws_url = settings.SUWAYOMI_URL.replace("https://", "wss://").replace("http://", "ws://")
     ws_url += "/api/graphql"
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    if settings.SUWAYOMI_VERIFY_SSL:
+        ssl_arg: ssl.SSLContext | bool = True
+    else:
+        _ssl_ctx = ssl.create_default_context()
+        _ssl_ctx.check_hostname = False
+        _ssl_ctx.verify_mode = ssl.CERT_NONE
+        ssl_arg = _ssl_ctx
     transport = WebsocketsTransport(
         url=ws_url,
         headers=_auth_headers(),
-        ssl=_ssl_ctx,
+        ssl=ssl_arg,
         subprotocols=["graphql-transport-ws"],
     )
     async with Client(transport=transport) as session:

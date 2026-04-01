@@ -88,4 +88,6 @@ async def test_paths_invalid_directory(client, suwayomi_credentials, path_config
         },
     )
     assert r.status_code == 400
-    assert "download_path" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["code"] == "directories_missing"
+    assert any(e["field"] == "download_path" for e in detail["missing"])

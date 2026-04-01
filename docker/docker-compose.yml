@@ -9,12 +9,12 @@ services:
 
   backend:
     build: ../backend
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${UID:-1000}:${GID:-1000}" # make sure the group has write permissions to the mounted volumes
     environment:
       ENV_FILE: "/app/data/.env"
       DATABASE_URL: "sqlite+aiosqlite:////app/data/otaki.db"
       LIBRARY_PATH: "/app/library"
-      SUWAYOMI_DOWNLOAD_PATH: "/app/suwayomi_data/downloads"
+      SUWAYOMI_DOWNLOAD_PATH: "/app/suwayomi_data"
       COVERS_PATH: "/app/covers"
       WATERMARKS_PATH: "/app/watermarks"
     volumes:

@@ -167,6 +167,37 @@ async def test_poll_downloads_maps_fields_correctly():
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — SUWAYOMI_VERIFY_SSL (#40)
+# ---------------------------------------------------------------------------
+
+
+async def test_make_client_passes_verify_true(monkeypatch):
+    """_make_client passes verify=True to the transport when SUWAYOMI_VERIFY_SSL is True."""
+    from app.config import settings
+    from app.services.suwayomi import _make_client
+    from gql.transport.httpx import HTTPXAsyncTransport
+
+    monkeypatch.setattr(settings, "SUWAYOMI_VERIFY_SSL", True)
+    client = _make_client("http://suwayomi", None, None)
+    transport = client.transport
+    assert isinstance(transport, HTTPXAsyncTransport)
+    assert transport.kwargs.get("verify") is True
+
+
+async def test_make_client_passes_verify_false(monkeypatch):
+    """_make_client passes verify=False to the transport when SUWAYOMI_VERIFY_SSL is False."""
+    from app.config import settings
+    from app.services.suwayomi import _make_client
+    from gql.transport.httpx import HTTPXAsyncTransport
+
+    monkeypatch.setattr(settings, "SUWAYOMI_VERIFY_SSL", False)
+    client = _make_client("http://suwayomi", None, None)
+    transport = client.transport
+    assert isinstance(transport, HTTPXAsyncTransport)
+    assert transport.kwargs.get("verify") is False
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — require live Suwayomi
 # ---------------------------------------------------------------------------
 

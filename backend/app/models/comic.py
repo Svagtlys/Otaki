@@ -10,6 +10,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .chapter_assignment import ChapterAssignment
+    from .comic_alias import ComicAlias
 
 
 class ComicStatus(str, enum.Enum):
@@ -28,9 +29,11 @@ class Comic(Base):
         nullable=False,
         default=ComicStatus.tracking,
     )
-    poll_override_days: Mapped[float] = mapped_column(Float, nullable=False, default=settings.DEFAULT_POLL_DAYS)
+    poll_override_days: Mapped[float | None] = mapped_column(Float, nullable=True)
     upgrade_override_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inferred_cadence_days: Mapped[float | None] = mapped_column(Float, nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    requested_cover_url: Mapped[str | None] = mapped_column(String, nullable=True)
     next_poll_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -46,4 +49,7 @@ class Comic(Base):
 
     chapter_assignments: Mapped[list["ChapterAssignment"]] = relationship(
         "ChapterAssignment", back_populates="comic"
+    )
+    aliases: Mapped[list["ComicAlias"]] = relationship(
+        "ComicAlias", back_populates="comic", cascade="all, delete-orphan"
     )

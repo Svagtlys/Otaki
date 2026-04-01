@@ -53,19 +53,7 @@ Make the library usable in a comic reader without manual cleanup. Also lays the 
 
 ---
 
-## 1.2 — Intelligence & Convenience
-
-Smarter scheduling and per-comic control.
-
-- [ ] Cadence inference (replace fixed poll interval with median gap from chapter history; hiatus-aware)
-- [ ] Per-comic poll and upgrade interval overrides
-- [ ] Bulk operations (force-upgrade all, re-inject covers, re-process all)
-- [ ] Notification support (webhook or Discord on new chapter, upgrade, or quality issue)
-- [ ] Additional `ComicInfo.xml` fields from Suwayomi metadata (author, artist, genre, status)
-
----
-
-## 1.3 — Better Searching & Scale
+## 1.2 — Better Searching & Scale
 
 Stronger cross-source coverage and library management at scale.
 
@@ -77,7 +65,7 @@ Stronger cross-source coverage and library management at scale.
 
 ---
 
-## 1.4 — Quality
+## 1.3 — Quality
 
 - [ ] Watermark detection (template matching on first/last page)
 - [ ] Banner / header / footer detection (phash)
@@ -91,11 +79,19 @@ Stronger cross-source coverage and library management at scale.
 
 ---
 
-## 1.5 — Auth & Multi-User
+## 1.4 — Auth & Multi-User
 
 - [ ] Reader / Requestor / Admin roles and permission enforcement (the auth middleware stub from 1.0 gets activated)
 - [ ] SSO login (OAuth2 / OIDC — Google, GitHub, custom provider)
 - [ ] User management page
+
+---
+
+## Future
+
+- [ ] Force-upgrade all — trigger upgrade check for every chapter of a comic in one action
+- [ ] Notification support (webhook or Discord on new chapter, upgrade, or quality issue)
+- [ ] Additional `ComicInfo.xml` fields from Suwayomi metadata (author, artist, genre, status)
 
 ---
 

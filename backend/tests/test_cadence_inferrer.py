@@ -137,6 +137,73 @@ async def test_hiatus_gap_is_filtered(db_session):
 
 
 @pytest.mark.asyncio
+async def test_all_sub_day_gaps_returns_none(db_session):
+    """Three chapters released 1 hour apart — all gaps are ~0.041 days, well under 1 day.
+    infer_cadence should return None so callers fall back to DEFAULT_POLL_DAYS."""
+    comic = await _make_comic(db_session)
+    source = await _make_source(db_session)
+    for i in range(3):
+        await _add_chapter(
+            db_session, comic, source,
+            chapter_number=float(i + 1),
+            published_at=_T0 + timedelta(hours=i),
+        )
+    result = await cadence_inferrer.infer_cadence(comic.id, db_session)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_sub_day_median_after_hiatus_filter_returns_none(db_session):
+    """Six chapters 6 hours apart (gaps = 0.25d each), then one 30-day gap.
+    Initial median = 0.25d → hiatus threshold = 0.75d → 30-day gap is filtered.
+    Filtered median = 0.25d < 1.0 → should return None."""
+    comic = await _make_comic(db_session)
+    source = await _make_source(db_session)
+    # Six chapters 6 hours apart, then one more 30 days later
+    offsets = [timedelta(hours=6 * i) for i in range(6)] + [timedelta(hours=30, days=30)]
+    for i, offset in enumerate(offsets):
+        await _add_chapter(
+            db_session, comic, source,
+            chapter_number=float(i + 1),
+            published_at=_T0 + offset,
+        )
+    result = await cadence_inferrer.infer_cadence(comic.id, db_session)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_exactly_one_day_cadence_is_accepted(db_session):
+    """Chapters released exactly 1 day apart should be returned as-is (boundary: >= 1.0)."""
+    comic = await _make_comic(db_session)
+    source = await _make_source(db_session)
+    for i in range(4):
+        await _add_chapter(
+            db_session, comic, source,
+            chapter_number=float(i + 1),
+            published_at=_T0 + timedelta(days=i),
+        )
+    result = await cadence_inferrer.infer_cadence(comic.id, db_session)
+    assert result is not None
+    assert abs(result - 1.0) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_sub_day_gaps_surviving_hiatus_filter_are_floored(db_session):
+    """Four chapters 30 minutes apart — no hiatus, all gaps survive the filter.
+    Median is ~0.021 days, which should return None."""
+    comic = await _make_comic(db_session)
+    source = await _make_source(db_session)
+    for i in range(4):
+        await _add_chapter(
+            db_session, comic, source,
+            chapter_number=float(i + 1),
+            published_at=_T0 + timedelta(minutes=30 * i),
+        )
+    result = await cadence_inferrer.infer_cadence(comic.id, db_session)
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_inactive_chapters_are_ignored(db_session):
     """Inactive chapters (superseded upgrades) should not affect cadence."""
     comic = await _make_comic(db_session)

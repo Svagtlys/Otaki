@@ -54,4 +54,5 @@ async def infer_cadence(comic_id: int, db: AsyncSession) -> float | None:
         # All gaps were hiatuses — fall back to the full set
         filtered = gaps
 
-    return statistics.median(filtered)
+    result = statistics.median(filtered)
+    return result if result >= 1.0 else None

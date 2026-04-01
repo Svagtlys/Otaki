@@ -143,18 +143,34 @@ async def reconcile_on_startup() -> None:
         )
         return
 
+    # Fetch displayName from Suwayomi — download directories use displayName
+    # (e.g. "Webtoons.com (EN)"), not source.name ("Webtoons.com").
+    display_name_by_source_id: dict[str, str] = {}
+    try:
+        for s in await suwayomi.list_sources():
+            display_name_by_source_id[s["id"]] = s["display_name"]
+    except Exception as exc:
+        logger.warning(
+            "download_listener: reconcile_on_startup: could not fetch source display names: %r"
+            " — falling back to source.name",
+            exc,
+        )
+
     logger.info(
         "download_listener: reconcile_on_startup: dispatching FINISHED for %d chapter(s) "
         "absent from Suwayomi queue",
         len(missed),
     )
     for assignment in missed:
+        source_display_name = display_name_by_source_id.get(
+            assignment.source.suwayomi_source_id, assignment.source.name
+        )
         _dispatch(
             "FINISHED",
             assignment.suwayomi_chapter_id,
             assignment.source_chapter_name or "",
             assignment.source_manga_title or "",
-            assignment.source.name,
+            source_display_name,
         )
 
 

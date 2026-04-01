@@ -184,12 +184,13 @@ async def list_sources() -> list[dict]:
         settings.SUWAYOMI_PASSWORD,
     ) as session:
         result = await session.execute(
-            gql("{ sources { nodes { id name lang iconUrl } } }")
+            gql("{ sources { nodes { id name displayName lang iconUrl } } }")
         )
     return [
         {
             "id": node["id"],
             "name": node["name"],
+            "display_name": node["displayName"],
             "lang": node["lang"],
             "icon_url": node["iconUrl"],
         }

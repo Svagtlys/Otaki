@@ -512,12 +512,23 @@ async def reprocess_chapters(
     )
     assignments = assignments_result.scalars().all()
 
+    # Fetch displayName once — download directories use displayName
+    # (e.g. "Webtoons.com (EN)"), not source.name ("Webtoons.com").
+    display_name_by_source_id: dict[str, str] = {}
+    try:
+        for s in await suwayomi.list_sources():
+            display_name_by_source_id[s["id"]] = s["display_name"]
+    except Exception as exc:
+        logger.warning("reprocess: could not fetch source display names: %r — falling back to source.name", exc)
+
     queued = processed = skipped = 0
 
     for assignment in assignments:
         chapter_name = assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
         manga_title = assignment.source_manga_title or comic.title
-        source_display_name = assignment.source.name
+        source_display_name = display_name_by_source_id.get(
+            assignment.source.suwayomi_source_id, assignment.source.name
+        )
 
         # Case 1: already fully relocated — refresh metadata/cover/path
         if (

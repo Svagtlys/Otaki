@@ -15,10 +15,44 @@ from . import comicinfo_writer, cover_handler
 logger = logging.getLogger(f"otaki.{__name__}")
 
 
+def _normalize_source_name(name: str) -> str:
+    """Lowercase and strip all non-alphanumeric characters for fuzzy directory matching."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
 def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
     base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
+
+    if not base.exists():
+        # Fuzzy fallback: scan SUWAYOMI_DOWNLOAD_PATH for a source directory whose
+        # normalised name starts with the normalised display name. This handles cases
+        # like displayName="Weeb Central" but on-disk dir="WeebCentral" or
+        # "Weeb Central (EN)".
+        download_root = Path(settings.SUWAYOMI_DOWNLOAD_PATH)
+        norm_display = _normalize_source_name(source_display_name)
+        candidates = [
+            d for d in download_root.iterdir()
+            if d.is_dir() and _normalize_source_name(d.name).startswith(norm_display)
+            and (d / manga_title).exists()
+        ]
+        if len(candidates) == 1:
+            logger.warning(
+                "file_relocator: source dir %r not found; using fuzzy match %r for display name %r",
+                source_display_name,
+                candidates[0].name,
+                source_display_name,
+            )
+            base = candidates[0] / manga_title
+        elif len(candidates) > 1:
+            logger.warning(
+                "file_relocator: ambiguous source directory for display name %r — "
+                "multiple fuzzy matches: %s",
+                source_display_name,
+                [d.name for d in candidates],
+            )
+            return None
 
     # --- CBZ checks ---
     exact = base / f"{chapter_name}.cbz"

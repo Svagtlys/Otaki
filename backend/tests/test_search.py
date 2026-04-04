@@ -105,6 +105,7 @@ async def test_search_result_shape(logged_in_client, monkeypatch):
     assert "source_id" in result
     assert "source_name" in result
     assert result["source_name"] == "Test Source"
+    assert result["suwayomi_manga_id"] == "1"
     assert body["source_errors"] == []
 
 

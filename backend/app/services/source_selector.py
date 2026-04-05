@@ -72,21 +72,27 @@ async def build_chapter_source_map(
     ) -> tuple[list[tuple[Source, str, dict]], str | None]:
         """Return (chapters, error_reason). error_reason is None on success."""
         if source.id in pins:
-            all_chapters = []
+            all_chapters: list[tuple[Source, str, dict]] = []
+            last_reason: str | None = None
+            failed_count = 0
             for manga_id in pins[source.id]:
                 try:
                     chapters = await suwayomi.fetch_chapters(manga_id)
                 except Exception as e:
-                    reason = suwayomi.classify_error(e)
+                    last_reason = suwayomi.classify_error(e)
+                    failed_count += 1
                     logger.warning(
                         "source %s: fetch_chapters failed for pinned manga_id %s (%s): %r",
-                        source.name, manga_id, reason, e
+                        source.name, manga_id, last_reason, e,
                     )
-                    return [], reason
+                    continue
                 all_chapters.extend(
                     (source, manga_id, {**ch, "source_manga_title": None})
                     for ch in chapters
                 )
+            if failed_count == len(pins[source.id]):
+                # Every pinned manga_id failed — report source as errored
+                return [], last_reason
             return all_chapters, None
 
         try:

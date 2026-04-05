@@ -758,8 +758,6 @@ class SourcePinResponse(BaseModel):
     suwayomi_manga_id: str
     pinned_at: datetime
 
-    model_config = {"from_attributes": True}
-
 
 class PutPinsBody(BaseModel):
     pins: list[SourcePinInput]

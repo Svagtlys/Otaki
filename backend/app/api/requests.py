@@ -537,7 +537,12 @@ async def reprocess_chapters(
         for s in await suwayomi.list_sources():
             display_name_by_source_id[s["id"]] = s["display_name"]
     except Exception as exc:
-        logger.warning("reprocess: could not fetch source display names: %r — falling back to source.name", exc)
+        reason = suwayomi.classify_error(exc)
+        logger.warning("reprocess: could not fetch source display names (%s): %r", reason, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Suwayomi is unreachable ({reason}) — reprocess aborted.",
+        )
 
     queued = processed = skipped = 0
 

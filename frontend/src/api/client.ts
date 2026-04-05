@@ -15,6 +15,10 @@ export function extractDetail(err: unknown): string {
     try {
       return (JSON.parse(err.message) as { detail: string }).detail
     } catch {
+      // Non-JSON response (e.g. raw HTML 504 from nginx proxy)
+      if (err.status >= 500) {
+        return 'Suwayomi is unreachable — check your connection and try again.'
+      }
       return err.message
     }
   }

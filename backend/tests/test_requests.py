@@ -970,14 +970,33 @@ async def test_reprocess_404_for_unknown_comic(logged_in_client):
     assert r.status_code == 404
 
 
+async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client, monkeypatch):
+    """If list_sources() fails (Suwayomi unreachable), reprocess returns 503 JSON."""
+    from app.services import suwayomi
+    import httpx
+
+    comic = await _add_comic(title="Reprocess 503 Comic")
+    monkeypatch.setattr(
+        suwayomi, "list_sources",
+        AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+    )
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 503
+    data = r.json()
+    assert "detail" in data
+    assert "unreachable" in data["detail"].lower()
+
+
 async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypatch, tmp_path):
     """Chapters already queued or downloading are counted as skipped."""
     from app import database
-    from app.services import file_relocator
+    from app.services import file_relocator, suwayomi
 
     source = await _add_source(name="Src", suwayomi_source_id="src-rp1", priority=1)
     comic = await _add_comic(title="Reprocess Comic 1")
 
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
 
     async with database.AsyncSessionLocal() as db:
@@ -1008,6 +1027,7 @@ async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_pa
     source = await _add_source(name="Src", suwayomi_source_id="src-rp2", priority=1)
     comic = await _add_comic(title="Reprocess Comic 2")
 
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
@@ -1040,6 +1060,7 @@ async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypat
     fake_staging = tmp_path / "fake.cbz"
     fake_staging.write_bytes(b"")
 
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: fake_staging)
     mock_relocate = AsyncMock()
     monkeypatch.setattr(file_relocator, "relocate", mock_relocate)
@@ -1066,7 +1087,7 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
 ):
     """Chapters with relocation_status=done and an existing library file call update_library_file."""
     from app import database
-    from app.services import file_relocator
+    from app.services import file_relocator, suwayomi
 
     source = await _add_source(name="Src", suwayomi_source_id="src-rp4", priority=1)
     comic = await _add_comic(title="Reprocess Comic 4")
@@ -1076,6 +1097,7 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
     lib_file.parent.mkdir(parents=True)
     lib_file.write_bytes(b"")
 
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     mock_update = AsyncMock()
     monkeypatch.setattr(file_relocator, "update_library_file", mock_update)
 

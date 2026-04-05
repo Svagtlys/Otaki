@@ -204,6 +204,18 @@ Two tables:
 | `source_id` | int FK → sources | |
 | `priority_override` | int | Lower = more preferred; replaces global priority for this comic |
 
+**`ComicSourcePin`** — per-comic, per-source manga ID pins that bypass title search.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `comic_id` | int FK → comics | |
+| `source_id` | int FK → sources | |
+| `suwayomi_manga_id` | str | Suwayomi's internal manga ID for this source |
+| `pinned_at` | datetime (tz-aware) | When the pin was created |
+
+`(comic_id, source_id, suwayomi_manga_id)` must be unique. A comic may have multiple pins for the same source (different manga IDs). When `source_selector.build_chapter_source_map` runs, pinned sources skip title search entirely and call `suwayomi.fetch_chapters` with the pinned manga ID(s) directly.
+
 **`WatermarkTemplate`** — metadata for a saved template image.
 
 | Column | Type | Notes |
@@ -269,12 +281,14 @@ Write/validate helpers are shared with `api/settings.py` — see `services/setti
 #### `backend/app/api/requests.py`
 CRUD for tracked comics.
 
-- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
+- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?, source_pins?}`. Duplicate-title check (409), creates `Comic`, creates `ComicSourcePin` rows for each entry in `source_pins`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
 - `GET /api/requests` — list all tracked comics with per-comic chapter counts by download status (`total`, `done`, `downloading`, `queued`, `failed`). Uses a single `GROUP BY` query across all comics.
 - `GET /api/requests/{id}` — full detail: comic metadata plus list of `ChapterSummary` rows ordered by chapter number (includes source name, download status, relocation status, library path).
 - `PATCH /api/requests/{id}` — partial update; applies only fields present in the request body. `poll_override_days`/`upgrade_override_days` changes advance the corresponding `next_*_at` and call `scheduler.register_comic_jobs`. `status=complete` calls `scheduler.remove_comic_jobs`; `status=tracking` re-registers jobs.
 - `GET /api/requests/{id}/cover` — serves the comic's cover image as a file response. Returns 404 if no cover has been stored.
 - `DELETE /api/requests/{id}?delete_files=false` — untrack a comic: removes APScheduler jobs via `scheduler.remove_comic_jobs()`, bulk-deletes all `ChapterAssignment` rows, deletes the `Comic` row. If `delete_files=true`, also unlinks any existing `library_path` files. Returns 204.
+- `GET /api/requests/{id}/pins` — list source-manga ID pins for a comic. Returns 404 if comic not found.
+- `PUT /api/requests/{id}/pins` — bulk-replace all pins for a comic. Deletes existing pins and inserts the new set. Returns 404 if comic not found.
 
 #### `backend/app/api/sources.py`
 - `GET/POST/PATCH/DELETE /api/sources` — source priority list CRUD
@@ -316,7 +330,7 @@ Not yet implemented:
 Per-chapter source selection logic. Stateless — takes a DB session as argument.
 
 - `effective_priority(source, comic, db) → int` — async; returns `source.priority` for MVP. Stubbed as `async def` so callers need no changes when 1.3 adds `ComicSourceOverride` lookup.
-- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel. For each source: searches using `comic.title` first; if no matching result is found in the response, retries the search with each `ComicAlias` title in turn until a match is found. `_find_matching_result` performs case-insensitive title comparison against the full alias set (`comic.title` + all alias titles). Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
+- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel. If `ComicSourcePin` rows exist for a source, that source bypasses title search and calls `suwayomi.fetch_chapters` directly for each pinned manga ID. Multiple pins per source are supported (chapters from all are merged). Only if no pin exists does the source fall back to title-matching search. For each source without a pin: searches using `comic.title` first; if no matching result is found in the response, retries the search with each `ComicAlias` title in turn until a match is found. `_find_matching_result` performs case-insensitive title comparison against the full alias set (`comic.title` + all alias titles). Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
 - `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source, str, dict]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns `(assignment, candidate_source, manga_id, chapter_data)` tuples where a better-priority source now has the chapter. `chapter_data` contains everything needed to create a new `ChapterAssignment` and enqueue the download.
 
 #### `backend/app/services/cadence_inferrer.py`

@@ -264,7 +264,8 @@ Search for a manga title across all enabled sources. Results are **not deduplica
       "synopsis": "...",
       "source_id": 1,
       "source_name": "MangaDex",
-      "url": "https://source-url/manga/one-piece"
+      "url": "https://source-url/manga/one-piece",
+      "suwayomi_manga_id": "42"
     },
     {
       "title": "ワンピース",
@@ -273,7 +274,8 @@ Search for a manga title across all enabled sources. Results are **not deduplica
       "synopsis": "...",
       "source_id": 2,
       "source_name": "MangaPlus",
-      "url": "https://source2-url/manga/wan-piisu"
+      "url": "https://source2-url/manga/wan-piisu",
+      "suwayomi_manga_id": "43"
     }
   ],
   "source_errors": [
@@ -293,6 +295,7 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 | `source_id` | int | Otaki source ID |
 | `source_name` | string | Human-readable source label |
 | `url` | string | Source-specific manga URL, passed back when submitting a request |
+| `suwayomi_manga_id` | string | Suwayomi's internal manga ID for this source — pass back when creating or updating source pins |
 
 `source_errors` fields:
 
@@ -324,7 +327,8 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "cover_url": "https://source1-url/cover.jpg",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
-  "aliases": ["ワンピース", "One Piece (Viz)"]
+  "aliases": ["ワンピース", "One Piece (Viz)"],
+  "source_pins": [{"source_id": 1, "suwayomi_manga_id": "42"}]
 }
 ```
 
@@ -336,6 +340,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 | `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` (default) = use inferred cadence, falling back to `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
 | `aliases` | string[] | no | Alternative titles for this comic. Saved as `ComicAlias` rows and used during source searches to find the comic under its alternative names. |
+| `source_pins` | `SourcePinInput[]` | no | Pin specific manga IDs per source. Each entry skips title search for that source and fetches chapters directly. Optional; defaults to `[]`. |
 
 **Response `201`**
 
@@ -367,6 +372,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
 2. Creates `ComicAlias` rows for each entry in `aliases`.
+3a. Creates `ComicSourcePin` rows for each entry in `source_pins`. Pins cause `source_selector` to bypass title search for that source and fetch chapters directly using the pinned manga ID.
 3. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources using `primary_title` and all alias titles, assigning each chapter to the highest-priority source that has it.
 4. Calls `suwayomi.fetch_chapters()` per source group.
 5. Calls `suwayomi.enqueue_downloads()` grouped by source.
@@ -698,6 +704,69 @@ Remove an alias from a comic.
 
 **Error Cases**
 - `404 Not Found` — alias does not exist or does not belong to this comic.
+
+---
+
+### `GET /api/requests/{id}/pins`
+
+List all source-manga ID pins for a comic.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+[
+  {
+    "id": 1,
+    "source_id": 2,
+    "source_name": "MangaDex",
+    "suwayomi_manga_id": "42",
+    "pinned_at": "2025-03-15T09:00:00Z"
+  }
+]
+```
+
+Returns an empty array if no pins have been set.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `PUT /api/requests/{id}/pins`
+
+Bulk-replace all source-manga ID pins for a comic. Deletes all existing pins and inserts the new set. Send an empty array to clear all pins.
+
+When pins are set, `source_selector` bypasses title search for those sources and fetches chapters directly using the pinned manga IDs. Call `POST /api/requests/{id}/discover` after updating pins to pick up any newly discoverable chapters.
+
+A comic may have multiple pins for the same source (e.g. a series split across several manga IDs on the same source).
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body**
+
+```json
+{
+  "pins": [
+    { "source_id": 2, "suwayomi_manga_id": "42" },
+    { "source_id": 2, "suwayomi_manga_id": "43" }
+  ]
+}
+```
+
+**Response `200`** — same shape as `GET /api/requests/{id}/pins`.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
 
 ---
 

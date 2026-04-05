@@ -27,6 +27,8 @@ from ..models.chapter_assignment import (
 )
 from ..models.comic import Comic, ComicStatus
 from ..models.comic_alias import ComicAlias
+from ..models.comic_source_pin import ComicSourcePin
+from ..models.source import Source
 from ..models.user import User
 from ..services import cadence_inferrer, cover_handler, file_relocator, source_selector, suwayomi
 from ..workers import scheduler
@@ -42,6 +44,11 @@ router = APIRouter(prefix="/requests", tags=["requests"])
 # ---------------------------------------------------------------------------
 
 
+class SourcePinInput(BaseModel):
+    source_id: int
+    suwayomi_manga_id: str
+
+
 class RequestBody(BaseModel):
     primary_title: str
     library_title: str | None = None
@@ -49,6 +56,7 @@ class RequestBody(BaseModel):
     poll_override_days: float | None = None
     upgrade_override_days: float | None = None
     aliases: list[str] = []
+    source_pins: list[SourcePinInput] = []
 
 
 class AliasResponse(BaseModel):
@@ -230,6 +238,16 @@ async def create_request(
     for alias_title in body.aliases:
         db.add(ComicAlias(comic_id=comic.id, title=alias_title))
     if body.aliases:
+        await db.flush()
+
+    # 2c. Save source pins
+    for pin in body.source_pins:
+        db.add(ComicSourcePin(
+            comic_id=comic.id,
+            source_id=pin.source_id,
+            suwayomi_manga_id=pin.suwayomi_manga_id,
+        ))
+    if body.source_pins:
         await db.flush()
 
     # 3. Build per-chapter source map and create assignments
@@ -731,6 +749,93 @@ async def delete_alias(
     await db.delete(alias)
     await db.commit()
     return Response(status_code=204)
+
+
+class SourcePinResponse(BaseModel):
+    id: int
+    source_id: int
+    source_name: str
+    suwayomi_manga_id: str
+    pinned_at: datetime
+
+
+class PutPinsBody(BaseModel):
+    pins: list[SourcePinInput]
+
+
+@router.get("/{comic_id}/pins", response_model=list[SourcePinResponse])
+async def list_pins(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> list[SourcePinResponse]:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    result = await db.execute(
+        select(ComicSourcePin, Source.name.label("source_name"))
+        .join(Source, ComicSourcePin.source_id == Source.id)
+        .where(ComicSourcePin.comic_id == comic_id)
+        .order_by(ComicSourcePin.source_id, ComicSourcePin.suwayomi_manga_id)
+    )
+    rows = result.all()
+    return [
+        SourcePinResponse(
+            id=pin.id,
+            source_id=pin.source_id,
+            source_name=source_name,
+            suwayomi_manga_id=pin.suwayomi_manga_id,
+            pinned_at=pin.pinned_at,
+        )
+        for pin, source_name in rows
+    ]
+
+
+@router.put("/{comic_id}/pins", response_model=list[SourcePinResponse])
+async def replace_pins(
+    comic_id: int,
+    body: PutPinsBody,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> list[SourcePinResponse]:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    # Delete all existing pins for this comic
+    await db.execute(
+        delete(ComicSourcePin).where(ComicSourcePin.comic_id == comic_id)
+    )
+
+    # Insert new pins
+    for pin in body.pins:
+        db.add(ComicSourcePin(
+            comic_id=comic_id,
+            source_id=pin.source_id,
+            suwayomi_manga_id=pin.suwayomi_manga_id,
+        ))
+
+    await db.commit()
+
+    # Return the new state
+    result = await db.execute(
+        select(ComicSourcePin, Source.name.label("source_name"))
+        .join(Source, ComicSourcePin.source_id == Source.id)
+        .where(ComicSourcePin.comic_id == comic_id)
+        .order_by(ComicSourcePin.source_id, ComicSourcePin.suwayomi_manga_id)
+    )
+    rows = result.all()
+    return [
+        SourcePinResponse(
+            id=pin.id,
+            source_id=pin.source_id,
+            source_name=source_name,
+            suwayomi_manga_id=pin.suwayomi_manga_id,
+            pinned_at=pin.pinned_at,
+        )
+        for pin, source_name in rows
+    ]
 
 
 @router.delete("/{comic_id}", status_code=204)

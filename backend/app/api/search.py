@@ -32,6 +32,7 @@ class SearchResult(BaseModel):
     source_id: int
     source_name: str
     url: str | None
+    suwayomi_manga_id: str
 
 
 class SourceError(BaseModel):
@@ -121,6 +122,7 @@ async def search(
                         source_id=source.id,
                         source_name=source.name,
                         url=r.get("url"),
+                        suwayomi_manga_id=r.get("manga_id", ""),
                     )
                 )
             return items, None

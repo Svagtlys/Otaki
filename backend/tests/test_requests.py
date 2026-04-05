@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from app.models.comic import Comic, ComicStatus
+from app.models.comic_source_pin import ComicSourcePin
 from app.models.source import Source
 
 
@@ -872,6 +873,91 @@ async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_
     for a in assignments:
         assert a.suwayomi_chapter_id is not None
         assert a.suwayomi_chapter_id != ""
+
+
+# ---------------------------------------------------------------------------
+# Source pin endpoint tests
+# ---------------------------------------------------------------------------
+
+
+async def test_post_creates_comic_with_source_pins(logged_in_client, monkeypatch):
+    """POST /api/requests with source_pins creates ComicSourcePin rows in the DB."""
+    from app import database
+    from app.models.comic_source_pin import ComicSourcePin
+    from app.services import source_selector
+
+    source = await _add_source(name="Pin Source", suwayomi_source_id="src-pin", priority=1)
+    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+
+    r = await logged_in_client.post(
+        "/api/requests",
+        json={
+            "primary_title": "Pinned Comic",
+            "source_pins": [{"source_id": source.id, "suwayomi_manga_id": "xyz"}],
+        },
+    )
+    assert r.status_code == 201
+    comic_id = r.json()["id"]
+
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ComicSourcePin).where(ComicSourcePin.comic_id == comic_id)
+        )
+        pins = result.scalars().all()
+
+    assert len(pins) == 1
+    assert pins[0].source_id == source.id
+    assert pins[0].suwayomi_manga_id == "xyz"
+
+
+async def test_get_pins_returns_empty_for_new_comic(logged_in_client):
+    """GET /{id}/pins returns an empty list for a comic with no pins."""
+    comic = await _add_comic(title="No Pins Comic")
+    r = await logged_in_client.get(f"/api/requests/{comic.id}/pins")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_put_pins_creates_and_replaces(logged_in_client):
+    """PUT /{id}/pins replaces all pins with the supplied list."""
+    source = await _add_source(name="Pin Replace Source", suwayomi_source_id="src-replace", priority=1)
+    comic = await _add_comic(title="Pin Replace Comic")
+
+    # First PUT — creates one pin
+    r = await logged_in_client.put(
+        f"/api/requests/{comic.id}/pins",
+        json={"pins": [{"source_id": source.id, "suwayomi_manga_id": "abc"}]},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["suwayomi_manga_id"] == "abc"
+
+    # Second PUT — replaces with a different manga id
+    r2 = await logged_in_client.put(
+        f"/api/requests/{comic.id}/pins",
+        json={"pins": [{"source_id": source.id, "suwayomi_manga_id": "xyz"}]},
+    )
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert len(data2) == 1
+    assert data2[0]["suwayomi_manga_id"] == "xyz"
+
+    # Verify DB state directly — not just API response
+    from app import database
+    async with database.AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ComicSourcePin).where(ComicSourcePin.comic_id == comic.id)
+        )
+        db_pins = result.scalars().all()
+    assert len(db_pins) == 1
+    assert db_pins[0].suwayomi_manga_id == "xyz"
+
+
+async def test_put_pins_404_for_unknown_comic(logged_in_client):
+    """PUT /api/requests/99999/pins returns 404 when the comic does not exist."""
+    r = await logged_in_client.put("/api/requests/99999/pins", json={"pins": []})
+    assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------

@@ -100,8 +100,11 @@ The path of the env file is resolved at module load time from the `ENV_FILE` env
 
 #### `backend/app/database.py`
 SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
-- `init()` — creates all tables
-- `get_db` — FastAPI dependency that yields a session per request
+- `init()` — runs Alembic migrations on startup
+- `get_db` — FastAPI dependency that yields a session per request (API handlers)
+- `write_session()` — async context manager for workers that open their own sessions. On SQLite: acquires a process-wide `asyncio.Lock` before opening the session, serialising concurrent writes and eliminating `database is locked` errors. On Postgres: no lock (the database handles concurrent writes natively). To switch backends, only this file needs changing.
+
+SQLite-specific setup (skipped for Postgres): WAL journal mode is enabled on every new connection via a SQLAlchemy `connect` event listener; `connect_args={"timeout": 30}` gives SQLite up to 30 s to acquire the write lock before raising. These cover all writers, including API handlers via `get_db`.
 
 ---
 

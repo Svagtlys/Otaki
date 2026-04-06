@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,7 +24,7 @@ from app.workers import chapter_event_handler
 
 @pytest_asyncio.fixture
 async def handler_db(monkeypatch):
-    """In-memory SQLite DB with the handler's AsyncSessionLocal patched to use it.
+    """In-memory SQLite DB with the handler's write_session patched to use it.
 
     Yields the session factory so individual tests can open sessions to seed
     data and verify state after calling handle().
@@ -36,7 +37,12 @@ async def handler_db(monkeypatch):
 
         await conn.run_sync(database.Base.metadata.create_all)
 
-    monkeypatch.setattr(chapter_event_handler, "AsyncSessionLocal", session_factory)
+    @asynccontextmanager
+    async def _write_session_stub():
+        async with session_factory() as session:
+            yield session
+
+    monkeypatch.setattr(chapter_event_handler, "write_session", _write_session_stub)
 
     yield session_factory
 
@@ -369,3 +375,45 @@ async def test_retry_download_reverts_on_enqueue_failure(handler_db, mock_suwayo
     async with handler_db() as db:
         result = await db.get(ChapterAssignment, assignment_id)
         assert result.download_status == DownloadStatus.failed
+
+
+# ---------------------------------------------------------------------------
+# Concurrency test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_concurrent_calls_do_not_raise(handler_db, mock_relocator):
+    """Two handle() calls dispatched concurrently both complete without error.
+
+    Validates that write_session() serialises DB writes so neither task fails
+    with a lock error even when they run concurrently via asyncio.gather.
+    """
+    import asyncio
+    from sqlalchemy import select
+
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        a1 = _make_assignment(comic_id, source_id, chapter_id="ch-conc-1", is_active=False, chapter_number=1.0)
+        a2 = _make_assignment(comic_id, source_id, chapter_id="ch-conc-2", is_active=False, chapter_number=2.0)
+        db.add_all([a1, a2])
+        await db.commit()
+
+    await asyncio.gather(
+        chapter_event_handler.handle("FINISHED", "ch-conc-1", "Ch 1", "Test Comic", "TestSource"),
+        chapter_event_handler.handle("FINISHED", "ch-conc-2", "Ch 2", "Test Comic", "TestSource"),
+    )
+
+    async with handler_db() as db:
+        r1 = await db.scalar(
+            select(ChapterAssignment).where(ChapterAssignment.suwayomi_chapter_id == "ch-conc-1")
+        )
+        r2 = await db.scalar(
+            select(ChapterAssignment).where(ChapterAssignment.suwayomi_chapter_id == "ch-conc-2")
+        )
+
+    assert r1.download_status == DownloadStatus.done
+    assert r1.is_active is True
+    assert r2.download_status == DownloadStatus.done
+    assert r2.is_active is True

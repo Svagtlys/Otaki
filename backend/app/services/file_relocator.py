@@ -20,22 +20,69 @@ def _normalize_source_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def _title_regex(title: str) -> re.Pattern:
+    """Build a regex where each special char in *title* matches any one special char.
+
+    Letters, digits, and whitespace match literally.  Any other character
+    (e.g. ':') becomes ``[^a-zA-Z0-9]`` so it matches whatever single
+    substitution Suwayomi applied on disk (e.g. '_' or ' ').
+    """
+    parts = []
+    for ch in title:
+        if re.match(r"[a-zA-Z0-9\s]", ch):
+            parts.append(re.escape(ch))
+        else:
+            parts.append(r"[^a-zA-Z0-9]")
+    return re.compile(r"^" + "".join(parts) + r"$")
+
+
+def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
+    """Return the manga subdirectory inside *source_dir*, tolerating sanitized names.
+
+    Tries exact match first, then falls back to regex match (one special char
+    in title matches any one special char on disk).  Returns ``None`` if zero
+    or multiple directories match.
+    """
+    exact = source_dir / manga_title
+    if exact.is_dir():
+        return exact
+    if not source_dir.is_dir():
+        return None
+    pattern = _title_regex(manga_title)
+    matches = [d for d in source_dir.iterdir() if d.is_dir() and pattern.match(d.name)]
+    if len(matches) == 1:
+        logger.warning(
+            "file_relocator: manga dir %r not found; using sanitized match %r",
+            manga_title,
+            matches[0].name,
+        )
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "file_relocator: ambiguous manga directory for title %r — matches: %s",
+            manga_title,
+            [d.name for d in matches],
+        )
+    return None
+
+
 def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
-    base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
+    source_dir = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name
+    base = _find_manga_subdir(source_dir, manga_title)
 
-    if not base.exists():
+    if base is None:
         # Fuzzy fallback: scan SUWAYOMI_DOWNLOAD_PATH for a source directory whose
         # normalised name starts with the normalised display name. This handles cases
         # like displayName="Weeb Central" but on-disk dir="WeebCentral" or
-        # "Weeb Central (EN)".
+        # "Weeb Central (EN)". Also handles sanitized manga subdirectory names.
         download_root = Path(settings.SUWAYOMI_DOWNLOAD_PATH)
         norm_display = _normalize_source_name(source_display_name)
         candidates = [
             d for d in download_root.iterdir()
             if d.is_dir() and _normalize_source_name(d.name).startswith(norm_display)
-            and (d / manga_title).exists()
+            and _find_manga_subdir(d, manga_title) is not None
         ]
         if len(candidates) == 1:
             logger.warning(
@@ -44,7 +91,7 @@ def find_staging_path(
                 candidates[0].name,
                 source_display_name,
             )
-            base = candidates[0] / manga_title
+            base = _find_manga_subdir(candidates[0], manga_title)
         elif len(candidates) > 1:
             logger.warning(
                 "file_relocator: ambiguous source directory for display name %r — "
@@ -53,6 +100,9 @@ def find_staging_path(
                 [d.name for d in candidates],
             )
             return None
+
+    if base is None:
+        base = source_dir / manga_title  # non-existent path; triggers warning at end
 
     # --- CBZ checks ---
     exact = base / f"{chapter_name}.cbz"

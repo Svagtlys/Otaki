@@ -908,3 +908,75 @@ def test_find_staging_path_exact_match_skips_fallback(tmp_path, monkeypatch):
 
     result = file_relocator.find_staging_path(chapter_name, manga_title, "ExactSource")
     assert result == cbz
+
+
+# ---------------------------------------------------------------------------
+# Sanitized manga title matching tests
+# ---------------------------------------------------------------------------
+
+
+def test_find_staging_path_sanitized_colon_in_title(tmp_path, monkeypatch):
+    """Suwayomi replaces ':' with '_' on disk; find_staging_path should still find the CBZ."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Re:Zero"
+    chapter_name = "Ch 1"
+    # On disk the colon is replaced with an underscore
+    sanitized_dir = downloads / "SomeSource" / "Re_Zero"
+    sanitized_dir.mkdir(parents=True)
+    cbz = sanitized_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    assert result == cbz
+
+
+def test_find_staging_path_sanitized_multiple_special_chars(tmp_path, monkeypatch):
+    """Multiple special chars in title each map to a single on-disk substitution."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "A: B? C!"
+    chapter_name = "Ch 1"
+    sanitized_dir = downloads / "SomeSource" / "A_ B_ C_"
+    sanitized_dir.mkdir(parents=True)
+    cbz = sanitized_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    assert result == cbz
+
+
+def test_find_staging_path_sanitized_ambiguous(tmp_path, monkeypatch):
+    """Two directories both match the title regex — should return None."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Re:Zero"
+    chapter_name = "Ch 1"
+    # Both 'Re_Zero' and 'Re-Zero' match 'Re:Zero'
+    for on_disk in ("Re_Zero", "Re-Zero"):
+        d = downloads / "SomeSource" / on_disk
+        d.mkdir(parents=True)
+        _make_cbz(d / f"{chapter_name}.cbz")
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    assert result is None
+
+
+def test_find_staging_path_sanitized_in_fuzzy_source_dir(tmp_path, monkeypatch):
+    """Source dir is fuzzy-matched AND manga subdir is sanitized — both layers work."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    manga_title = "Re:Zero"
+    chapter_name = "Ch 1"
+    # Source dir is 'WeebCentral' (display name 'Weeb Central'), manga subdir sanitized
+    sanitized_dir = downloads / "WeebCentral" / "Re_Zero"
+    sanitized_dir.mkdir(parents=True)
+    cbz = sanitized_dir / f"{chapter_name}.cbz"
+    _make_cbz(cbz)
+
+    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    assert result == cbz

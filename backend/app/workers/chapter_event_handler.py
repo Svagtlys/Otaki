@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..config import settings
-from ..database import AsyncSessionLocal
+from ..database import write_session
 from ..models.chapter_assignment import (
     ChapterAssignment,
     DownloadStatus,
@@ -45,7 +45,7 @@ async def handle(
         return
 
     # FINISHED path
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         assignment = await db.scalar(
             select(ChapterAssignment)
             .where(ChapterAssignment.suwayomi_chapter_id == suwayomi_chapter_id)
@@ -136,7 +136,7 @@ async def _handle_error(
     manga_title: str,
     source_display_name: str,
 ) -> None:
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         assignment = await db.scalar(
             select(ChapterAssignment).where(
                 ChapterAssignment.suwayomi_chapter_id == suwayomi_chapter_id
@@ -192,7 +192,7 @@ async def _handle_error(
 
 async def _retry_download(assignment_id: int, suwayomi_chapter_id: str) -> None:
     """Re-enqueue a failed chapter download. Scheduled by _handle_error."""
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         assignment = await db.get(ChapterAssignment, assignment_id)
         if assignment is None:
             logger.warning(
@@ -221,7 +221,7 @@ async def _retry_download(assignment_id: int, suwayomi_chapter_id: str) -> None:
             suwayomi_chapter_id,
             exc,
         )
-        async with AsyncSessionLocal() as db:
+        async with write_session() as db:
             assignment = await db.get(ChapterAssignment, assignment_id)
             if assignment is not None:
                 assignment.download_status = DownloadStatus.failed

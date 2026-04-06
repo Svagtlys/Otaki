@@ -1,5 +1,6 @@
 """Unit and integration tests for workers/scheduler.py."""
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -61,7 +62,7 @@ def _make_assignment(comic_id, source_id, *, chapter_number=1.0) -> ChapterAssig
 
 @pytest_asyncio.fixture
 async def sched_db(monkeypatch):
-    """In-memory SQLite with AsyncSessionLocal patched into the scheduler module.
+    """In-memory SQLite with write_session patched into the scheduler module.
 
     Also patches scheduler.add_job and scheduler.start so no real APScheduler
     state is mutated during tests.
@@ -74,7 +75,12 @@ async def sched_db(monkeypatch):
 
         await conn.run_sync(database.Base.metadata.create_all)
 
-    monkeypatch.setattr(scheduler_module, "AsyncSessionLocal", session_factory)
+    @asynccontextmanager
+    async def _write_session_stub():
+        async with session_factory() as session:
+            yield session
+
+    monkeypatch.setattr(scheduler_module, "write_session", _write_session_stub)
 
     # Prevent the real scheduler from running during unit tests.
     monkeypatch.setattr(scheduler_module.scheduler, "start", lambda: None)

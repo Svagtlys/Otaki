@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import AsyncSessionLocal
+from ..database import write_session
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
 from ..models.comic import Comic, ComicStatus
 from ..services import cadence_inferrer, source_selector, suwayomi
@@ -82,7 +82,7 @@ def _register_poll_job(comic: Comic) -> None:
 
 
 async def _poll_comic(comic_id: int) -> None:
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         comic = await db.get(Comic, comic_id)
         if comic is None:
             logger.warning("_poll_comic: comic_id=%d not found — skipping", comic_id)
@@ -160,7 +160,7 @@ def _register_upgrade_job(comic: Comic) -> None:
 
 
 async def _upgrade_comic(comic_id: int) -> None:
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         comic = await db.get(Comic, comic_id)
         if comic is None:
             logger.warning("_upgrade_comic: comic_id=%d not found — skipping", comic_id)

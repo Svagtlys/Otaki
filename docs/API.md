@@ -557,7 +557,9 @@ For each active `ChapterAssignment`:
 | Condition | Action |
 |---|---|
 | `relocation_status=done`, library file exists | Re-pack CBZ, update `ComicInfo.xml` (`library_title`) and cover, move to correct path if `library_title` changed |
-| `download_status=queued` or `downloading` | Skip — already in progress |
+| `download_status=queued\|downloading`, staging file found | Treat as done — run relocate / replace-in-library pipeline (recovers missed FINISHED events) |
+| `download_status=queued\|downloading`, no staging, chapter in live Suwayomi queue | Skip — genuinely still in progress |
+| `download_status=queued\|downloading`, no staging, absent from live queue | Re-enqueue download |
 | `download_status=failed` | Re-enqueue download |
 | `download_status=done`, staging file found | Run relocate / replace-in-library pipeline |
 | `download_status=done`, no staging, library file exists | Re-pack and update as above |

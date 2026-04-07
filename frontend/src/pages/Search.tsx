@@ -375,7 +375,7 @@ export default function Search() {
                 <strong>Pin these source-manga IDs</strong>
                 <span style={{ color: '#666', display: 'block', marginTop: 2 }}>
                   Otaki will fetch chapters directly using the selected manga IDs instead of searching by title.
-                  Useful when a title has an unusual name on a source.
+                  Useful when different comics have the same title.
                 </span>
               </span>
             </label>

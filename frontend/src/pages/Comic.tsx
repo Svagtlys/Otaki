@@ -646,7 +646,7 @@ export default function Comic() {
               <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
                 <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
                   Pins tell Otaki to fetch chapters directly by manga ID instead of searching by title.
-                  Useful when a title has an unusual name on a source.
+                  Useful when different comics have the same title.
                 </div>
 
                 {/* Current pins */}

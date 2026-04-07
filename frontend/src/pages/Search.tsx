@@ -47,6 +47,7 @@ export default function Search() {
   const [libraryTitle, setLibraryTitle] = useState('')
   const [libraryTitleTouched, setLibraryTitleTouched] = useState(false)
   const [chosenCoverUrl, setChosenCoverUrl] = useState<string | null>(null)
+  const [pinResults, setPinResults] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -124,6 +125,7 @@ export default function Search() {
     setLibraryTitle(firstSelected?.title ?? '')
     setLibraryTitleTouched(false)
     setChosenCoverUrl(firstSelected?.cover_url ?? null)
+    setPinResults(false)
     setSubmitError(null)
     setStep(2)
   }
@@ -149,6 +151,12 @@ export default function Search() {
           library_title: libraryTitle,
           cover_url: chosenCoverUrl,
           aliases: aliasTitles,
+          ...(pinResults && {
+            source_pins: selectedResults.map(r => ({
+              source_id: r.source_id,
+              suwayomi_manga_id: r.suwayomi_manga_id,
+            })),
+          }),
         }),
       })
       navigate('/library')
@@ -353,6 +361,25 @@ export default function Search() {
               </div>
             </div>
           )}
+
+          {/* Pin checkbox */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={pinResults}
+                onChange={e => setPinResults(e.target.checked)}
+                style={{ marginTop: 2, flexShrink: 0 }}
+              />
+              <span>
+                <strong>Pin these source-manga IDs</strong>
+                <span style={{ color: '#666', display: 'block', marginTop: 2 }}>
+                  Otaki will fetch chapters directly using the selected manga IDs instead of searching by title.
+                  Useful when different comics have the same title.
+                </span>
+              </span>
+            </label>
+          </div>
 
           {/* Submit */}
           <button

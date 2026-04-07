@@ -989,7 +989,7 @@ async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client,
 
 
 async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypatch, tmp_path):
-    """Chapters already queued or downloading are counted as skipped."""
+    """Chapters queued/downloading with no staging that are still in the live queue are skipped."""
     from app import database
     from app.services import file_relocator, suwayomi
 
@@ -998,6 +998,14 @@ async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypa
 
     monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
+    # Both chapters are genuinely still in the Suwayomi queue → skip them
+    monkeypatch.setattr(
+        suwayomi, "poll_downloads",
+        AsyncMock(return_value=[
+            {"chapter_id": "ch-1.0", "chapter_name": "Ch 1", "manga_title": "T", "source_name": "S", "state": "DOWNLOADING"},
+            {"chapter_id": "ch-2.0", "chapter_name": "Ch 2", "manga_title": "T", "source_name": "S", "state": "DOWNLOADING"},
+        ]),
+    )
 
     async with database.AsyncSessionLocal() as db:
         for status, ch_num in [(DownloadStatus.queued, 1.0), (DownloadStatus.downloading, 2.0)]:
@@ -1117,3 +1125,117 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
     assert r.status_code == 200
     assert r.json()["processed"] == 1
     mock_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reprocess_queued_with_staging_file_relocates(logged_in_client, monkeypatch, tmp_path):
+    """A queued chapter with a staging file is recovered: treated as done and relocated."""
+    from pathlib import Path as _Path
+    from app import database
+    from app.services import file_relocator, suwayomi
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp5", priority=1)
+    comic = await _add_comic(title="Reprocess Queued Staging Comic")
+
+    staging_file = tmp_path / "staging" / "ch1.cbz"
+    staging_file.parent.mkdir(parents=True)
+    staging_file.write_bytes(b"")
+
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: staging_file)
+    mock_relocate = AsyncMock()
+    monkeypatch.setattr(file_relocator, "relocate", mock_relocate)
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-qs1",
+            download_status=DownloadStatus.queued, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(a)
+        await db.commit()
+        assignment_id = a.id
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["processed"] == 1
+    assert data["skipped"] == 0
+    assert data["queued"] == 0
+    mock_relocate.assert_awaited_once()
+
+    async with database.AsyncSessionLocal() as db:
+        a = await db.get(ChapterAssignment, assignment_id)
+        assert a.download_status == DownloadStatus.done
+        assert a.downloaded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_reprocess_queued_absent_from_queue_reenqueues(logged_in_client, monkeypatch, tmp_path):
+    """A queued chapter with no staging and absent from the live queue is re-enqueued."""
+    from app import database
+    from app.services import file_relocator, suwayomi
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp6", priority=1)
+    comic = await _add_comic(title="Reprocess Absent Queue Comic")
+
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
+    # Empty queue — chapter is absent
+    monkeypatch.setattr(suwayomi, "poll_downloads", AsyncMock(return_value=[]))
+    mock_enqueue = AsyncMock()
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-aq1",
+            download_status=DownloadStatus.queued, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["queued"] == 1
+    assert data["processed"] == 0
+    assert data["skipped"] == 0
+    mock_enqueue.assert_awaited_once_with(["ch-aq1"])
+
+
+@pytest.mark.asyncio
+async def test_reprocess_queued_poll_fails_reenqueues(logged_in_client, monkeypatch, tmp_path):
+    """If poll_downloads raises, the chapter falls through to re-enqueue (not skipped)."""
+    from app import database
+    from app.services import file_relocator, suwayomi
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-rp7", priority=1)
+    comic = await _add_comic(title="Reprocess Poll Fail Comic")
+
+    monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
+    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
+    monkeypatch.setattr(suwayomi, "poll_downloads", AsyncMock(side_effect=Exception("timeout")))
+    mock_enqueue = AsyncMock()
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
+            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-pf1",
+            download_status=DownloadStatus.queued, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(a)
+        await db.commit()
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["queued"] == 1
+    mock_enqueue.assert_awaited_once_with(["ch-pf1"])

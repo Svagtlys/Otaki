@@ -563,10 +563,60 @@ async def reprocess_chapters(
             processed += 1
             continue
 
-        # Case 2: already in Suwayomi queue — nothing to do
+        # Case 2: queued/downloading — check staging before skipping
         if assignment.download_status in (DownloadStatus.queued, DownloadStatus.downloading):
-            skipped += 1
-            continue
+            staging = file_relocator.find_staging_path(
+                chapter_name, manga_title, source_display_name
+            )
+            if staging is not None:
+                # File already downloaded — treat as done and relocate (same as Case 4)
+                existing_active = await db.scalar(
+                    select(ChapterAssignment).where(
+                        ChapterAssignment.comic_id == comic_id,
+                        ChapterAssignment.chapter_number == assignment.chapter_number,
+                        ChapterAssignment.is_active.is_(True),
+                        ChapterAssignment.id != assignment.id,
+                    )
+                )
+                assignment.download_status = DownloadStatus.done
+                assignment.downloaded_at = datetime.now(timezone.utc)
+                if existing_active is None:
+                    await file_relocator.relocate(
+                        assignment, comic, db,
+                        chapter_name=chapter_name,
+                        manga_title=manga_title,
+                        source_display_name=source_display_name,
+                    )
+                else:
+                    await file_relocator.replace_in_library(
+                        existing_active, assignment, comic, db,
+                        chapter_name=chapter_name,
+                        manga_title=manga_title,
+                        source_display_name=source_display_name,
+                    )
+                processed += 1
+                continue
+
+            # No staging file — check the live Suwayomi queue
+            current_queue_ids: set[str] = set()
+            try:
+                current_queue_ids = {
+                    item["chapter_id"] for item in await suwayomi.poll_downloads()
+                }
+            except Exception as exc:
+                logger.warning(
+                    "reprocess: could not poll Suwayomi queue for assignment id=%d: %r",
+                    assignment.id,
+                    exc,
+                )
+
+            if assignment.suwayomi_chapter_id in current_queue_ids:
+                # Genuinely still in-flight
+                skipped += 1
+                continue
+
+            # Absent from queue with no staging file — missed FINISHED event; re-enqueue
+            # (fall through to Case 5 below)
 
         # Case 3: failed download — re-enqueue
         if assignment.download_status == DownloadStatus.failed:

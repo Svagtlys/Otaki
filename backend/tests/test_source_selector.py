@@ -649,13 +649,14 @@ async def _webtoons_en_source_id() -> str:
 
 
 @pytest.mark.integration
-async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayomi_settings):
-    """Integration: build_chapter_source_map correctly matches 'The Tyrant of the Tower
-    Defense Game' on the Webtoons EN source and returns a non-empty chapter map.
+async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayomi_settings, test_manga_title):
+    """Integration: build_chapter_source_map correctly matches a manga title on the
+    Webtoons EN source and returns a non-empty chapter map.
 
-    Skips if the title is not present in the live Suwayomi instance's search results.
+    Uses TEST_MANGA_TITLE from .env.test. Skips if the title is not present in
+    the live Suwayomi instance's search results.
     """
-    comic_title = "The Tyrant of the Tower Defense Game"
+    comic_title = test_manga_title
     source_id = await _webtoons_en_source_id()
 
     # Verify the title actually exists on this Suwayomi instance before asserting
@@ -663,7 +664,7 @@ async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayom
     matched = source_selector._find_matching_result(search_results, [comic_title])
     if matched is None:
         pytest.skip(
-            f"{comic_title!r} not found in Webtoons EN search results on this Suwayomi instance"
+            f"TEST_MANGA_TITLE {comic_title!r} not found in Webtoons EN search results on this Suwayomi instance"
         )
 
     source = await _make_source(

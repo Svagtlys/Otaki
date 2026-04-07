@@ -53,6 +53,9 @@ def suwayomi_settings(suwayomi_credentials, monkeypatch):
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
+    verify_ssl = _get("SUWAYOMI_VERIFY_SSL")
+    if verify_ssl is not None:
+        monkeypatch.setattr(settings, "SUWAYOMI_VERIFY_SSL", verify_ssl.lower() not in ("false", "0", "no"))
 
 
 @pytest.fixture

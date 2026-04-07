@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from gql.transport.exceptions import TransportError
 
@@ -14,6 +15,15 @@ _background_tasks: set[asyncio.Task] = set()
 _polled_items: dict[str, dict] = {}
 # chapter_ids where an ERROR event has already been dispatched in polling mode
 _emitted_error_ids: set[str] = set()
+# set when run() begins; cleared on process restart
+_started_at: datetime | None = None
+
+
+def get_status() -> dict:
+    """Return running state and uptime for the health endpoint."""
+    running = _started_at is not None
+    uptime = (datetime.now(timezone.utc) - _started_at).total_seconds() if running else None
+    return {"running": running, "uptime_seconds": uptime}
 
 
 def _dispatch(
@@ -191,9 +201,10 @@ async def run() -> None:
       complete. ERROR events are dispatched when an item's state is ERROR.
       On first successful poll, switch back to SUBSCRIPTION mode.
     """
-    global _polled_items, _emitted_error_ids
+    global _polled_items, _emitted_error_ids, _started_at
     _polled_items = {}
     _emitted_error_ids = set()
+    _started_at = datetime.now(timezone.utc)
 
     await _seed_poll()
     await reconcile_on_startup()

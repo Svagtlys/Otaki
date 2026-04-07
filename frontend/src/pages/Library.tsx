@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch, extractDetail } from '../api/client'
@@ -6,6 +7,24 @@ import { formatRelative } from '../utils/format'
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+interface HealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy'
+  database: string
+  suwayomi: {
+    status: string
+    url: string | null
+    sources: { name: string; enabled: boolean; reachable: boolean }[]
+  }
+  workers: {
+    download_listener: { running: boolean; uptime_seconds: number | null }
+    scheduler: {
+      running: boolean
+      uptime_seconds: number | null
+      jobs: { comic_id: number; title: string; next_poll_at: string | null; next_upgrade_at: string | null }[]
+    }
+  }
+}
 
 interface ChapterCounts {
   total: number
@@ -26,6 +45,72 @@ interface ComicListItem {
 // Component
 // ---------------------------------------------------------------------------
 
+const STATUS_DOT: Record<string, string> = {
+  healthy: '#22c55e',
+  degraded: '#f59e0b',
+  unhealthy: '#ef4444',
+}
+
+function HealthBadge() {
+  const [expanded, setExpanded] = useState(false)
+  const { data, error } = useQuery<HealthResponse>({
+    queryKey: ['health'],
+    queryFn: () => apiFetch<HealthResponse>('/api/health'),
+    refetchInterval: 30_000,
+    retry: false,
+  })
+
+  const status = error ? 'unhealthy' : (data?.status ?? null)
+  const color = status ? (STATUS_DOT[status] ?? '#94a3b8') : '#94a3b8'
+
+  function fmt(s: number | null | undefined) {
+    if (s == null) return '—'
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setExpanded(v => !v)}
+        title={status ? `System status: ${status}` : 'Checking system status…'}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}
+      >
+        <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
+        <span style={{ fontSize: 13, color: '#555' }}>{status ?? '…'}</span>
+      </button>
+      {expanded && (
+        <div style={healthPanelStyle}>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>System status</div>
+          {error || !data ? (
+            <div style={{ fontSize: 12, color: '#ef4444' }}>Health check unreachable</div>
+          ) : (
+            <>
+              <Row label="Database" value={data.database} ok={data.database === 'ok'} />
+              <Row label="Suwayomi" value={data.suwayomi.status} ok={data.suwayomi.status === 'ok'} />
+              {data.suwayomi.sources.map(s => (
+                <Row key={s.name} label={`  ${s.name}`} value={s.reachable ? 'reachable' : 'unreachable'} ok={s.reachable} indent />
+              ))}
+              <Row label="Download listener" value={data.workers.download_listener.running ? `up ${fmt(data.workers.download_listener.uptime_seconds)}` : 'down'} ok={data.workers.download_listener.running} />
+              <Row label="Scheduler" value={data.workers.scheduler.running ? `up ${fmt(data.workers.scheduler.uptime_seconds)}` : 'down'} ok={data.workers.scheduler.running} />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, value, ok, indent }: { label: string; value: string; ok: boolean; indent?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, paddingLeft: indent ? 8 : 0 }}>
+      <span style={{ color: '#555' }}>{label}</span>
+      <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 500 }}>{value}</span>
+    </div>
+  )
+}
+
 export default function Library() {
   const navigate = useNavigate()
   const { data: comics, isLoading, error } = useQuery({
@@ -37,7 +122,8 @@ export default function Library() {
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ margin: 0 }}>Library</h1>
-        <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <HealthBadge />
           <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
           <button onClick={() => navigate('/sources')} style={linkButtonStyle}>Sources</button>
           <button onClick={() => navigate('/settings')} style={linkButtonStyle}>Settings</button>
@@ -131,4 +217,18 @@ const linkButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
   fontSize: 14,
   padding: 0,
+}
+
+const healthPanelStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  marginTop: 6,
+  background: '#fff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 6,
+  padding: '12px 14px',
+  minWidth: 240,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  zIndex: 100,
 }

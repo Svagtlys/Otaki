@@ -15,10 +15,12 @@ logger = logging.getLogger(f"otaki.{__name__}")
 
 
 scheduler = AsyncIOScheduler()  # module-level singleton
+_started_at: datetime | None = None
 
 
 async def start(db: AsyncSession) -> None:
     """Load all tracking comics and register poll and upgrade jobs, then start the scheduler."""
+    global _started_at
     result = await db.execute(select(Comic).where(Comic.status == ComicStatus.tracking))
     comics = result.scalars().all()
     for comic in comics:
@@ -26,6 +28,44 @@ async def start(db: AsyncSession) -> None:
         _register_upgrade_job(comic)
     if not scheduler.running:
         scheduler.start()
+    _started_at = datetime.now(timezone.utc)
+
+
+async def get_status(db: AsyncSession) -> dict:
+    """Return scheduler running state, uptime, and per-comic job schedule."""
+    running = scheduler.running
+    uptime = (datetime.now(timezone.utc) - _started_at).total_seconds() if _started_at else None
+
+    # Collect next_run_time per comic from job IDs (format: poll_{id}, upgrade_{id})
+    poll_times: dict[int, datetime | None] = {}
+    upgrade_times: dict[int, datetime | None] = {}
+    for job in scheduler.get_jobs():
+        parts = job.id.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            comic_id = int(parts[1])
+            if parts[0] == "poll":
+                poll_times[comic_id] = job.next_run_time
+            elif parts[0] == "upgrade":
+                upgrade_times[comic_id] = job.next_run_time
+
+    comic_ids = set(poll_times) | set(upgrade_times)
+    titles: dict[int, str] = {}
+    if comic_ids:
+        result = await db.execute(select(Comic.id, Comic.title).where(Comic.id.in_(comic_ids)))
+        for row in result:
+            titles[row.id] = row.title
+
+    jobs = [
+        {
+            "comic_id": cid,
+            "title": titles.get(cid, f"Comic {cid}"),
+            "next_poll_at": poll_times.get(cid).isoformat() if poll_times.get(cid) else None,
+            "next_upgrade_at": upgrade_times.get(cid).isoformat() if upgrade_times.get(cid) else None,
+        }
+        for cid in sorted(comic_ids)
+    ]
+
+    return {"running": running, "uptime_seconds": uptime, "jobs": jobs}
 
 
 def register_comic_jobs(comic: Comic) -> None:

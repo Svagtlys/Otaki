@@ -240,6 +240,63 @@ Return the current user's profile.
 
 ---
 
+## Health
+
+### `GET /api/health`
+
+Returns overall system health plus detailed status for each component. **Unauthenticated** — safe for Docker health checks and external monitors.
+
+**Response `200`**
+
+```json
+{
+  "status": "healthy",
+  "database": "ok",
+  "suwayomi": {
+    "status": "ok",
+    "url": "https://suwayomi.example.com",
+    "sources": [
+      { "name": "MangaDex", "enabled": true, "reachable": true },
+      { "name": "BrokenSource", "enabled": true, "reachable": false }
+    ]
+  },
+  "workers": {
+    "download_listener": {
+      "running": true,
+      "uptime_seconds": 3600.0
+    },
+    "scheduler": {
+      "running": true,
+      "uptime_seconds": 3600.0,
+      "jobs": [
+        {
+          "comic_id": 1,
+          "title": "One Piece",
+          "next_poll_at": "2026-04-08T10:00:00+00:00",
+          "next_upgrade_at": "2026-04-08T10:00:00+00:00"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Overall `status` rules**
+
+| Condition | `status` |
+|---|---|
+| DB unreachable | `unhealthy` |
+| Suwayomi unreachable or a worker not running (DB ok) | `degraded` |
+| All components ok | `healthy` |
+
+**`suwayomi.status`** values: `"ok"` — reachable and responding; `"unreachable"` — ping failed or URL not configured; `"error"` — unexpected error during check.
+
+**`suwayomi.sources`** — cross-references enabled sources in the Otaki DB with the live Suwayomi source list. Only populated when Suwayomi is reachable.
+
+**Worker `uptime_seconds`** — seconds since the worker started; `null` if not yet started.
+
+---
+
 ## Search
 
 ### `GET /api/search`

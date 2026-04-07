@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch, streamFetch, extractDetail } from '../api/client'
@@ -43,6 +43,28 @@ interface ComicDetail {
   chapters: Chapter[]
 }
 
+interface SourcePin {
+  id: number
+  source_id: number
+  source_name: string
+  suwayomi_manga_id: string
+  pinned_at: string
+}
+
+interface Source {
+  id: number
+  name: string
+  enabled: boolean
+}
+
+interface PinSearchResult {
+  title: string
+  source_id: number
+  source_name: string
+  suwayomi_manga_id: string
+  url: string
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -61,6 +83,20 @@ export default function Comic() {
   const [reprocessError, setReprocessError] = useState<string | null>(null)
   const [reprocessResult, setReprocessResult] = useState<string | null>(null)
   const [reprocessLog, setReprocessLog] = useState<{ chapter_number: number; action: string }[]>([])
+
+  // Pin management state
+  const [pinsOpen, setPinsOpen] = useState(false)
+  const [removedPinIds, setRemovedPinIds] = useState<Set<number>>(new Set())
+  const [pendingPins, setPendingPins] = useState<{ source_id: number; source_name: string; suwayomi_manga_id: string }[]>([])
+  const [pinSaving, setPinSaving] = useState(false)
+  const [pinError, setPinError] = useState<string | null>(null)
+  const [pinResult, setPinResult] = useState<string | null>(null)
+  // Add-pin search sub-state
+  const [pinSearchSourceId, setPinSearchSourceId] = useState<number | ''>('')
+  const [pinSearchQuery, setPinSearchQuery] = useState('')
+  const [pinSearchResults, setPinSearchResults] = useState<PinSearchResult[]>([])
+  const [pinSearching, setPinSearching] = useState(false)
+  const pinAbortRef = useRef<AbortController | null>(null)
 
   const [coverFormOpen, setCoverFormOpen] = useState(false)
   const [coverTab, setCoverTab] = useState<'url' | 'file'>('url')
@@ -87,6 +123,18 @@ export default function Comic() {
     queryKey: ['comic', comicId],
     queryFn: () => apiFetch<ComicDetail>(`/api/requests/${comicId}`),
     enabled: comicId > 0,
+  })
+
+  const { data: pins = [] } = useQuery<SourcePin[]>({
+    queryKey: ['comic-pins', comicId],
+    queryFn: () => apiFetch<SourcePin[]>(`/api/requests/${comicId}/pins`),
+    enabled: comicId > 0 && pinsOpen,
+  })
+
+  const { data: sources = [] } = useQuery<Source[]>({
+    queryKey: ['sources'],
+    queryFn: () => apiFetch<Source[]>('/api/sources'),
+    enabled: pinsOpen,
   })
 
   async function handleReprocess() {
@@ -143,6 +191,104 @@ export default function Comic() {
       setDiscoverError(extractDetail(err))
     } finally {
       setDiscovering(false)
+    }
+  }
+
+  function openPins() {
+    setPinsOpen(true)
+    setRemovedPinIds(new Set())
+    setPendingPins([])
+    setPinError(null)
+    setPinResult(null)
+    setPinSearchSourceId('')
+    setPinSearchQuery('')
+    setPinSearchResults([])
+  }
+
+  function removeSavedPin(pinId: number) {
+    setRemovedPinIds(prev => new Set([...prev, pinId]))
+  }
+
+  function removePendingPin(idx: number) {
+    setPendingPins(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  async function handlePinSearch() {
+    if (!pinSearchSourceId || !pinSearchQuery.trim()) return
+    pinAbortRef.current?.abort()
+    const controller = new AbortController()
+    pinAbortRef.current = controller
+    setPinSearching(true)
+    setPinSearchResults([])
+    const results: PinSearchResult[] = []
+    try {
+      await streamFetch(
+        `/api/search/stream?q=${encodeURIComponent(pinSearchQuery.trim())}`,
+        { method: 'GET' },
+        (data) => {
+          if (data === '[DONE]') return
+          try {
+            const payload = JSON.parse(data)
+            if (payload.results) {
+              for (const r of payload.results) {
+                if (r.source_id === pinSearchSourceId) results.push(r)
+              }
+              setPinSearchResults([...results])
+            }
+          } catch { /* ignore */ }
+        },
+        controller.signal,
+      )
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') setPinError(extractDetail(err))
+    } finally {
+      setPinSearching(false)
+    }
+  }
+
+  function stagePinFromResult(r: PinSearchResult) {
+    const alreadyPinned = pins
+      .filter(p => !removedPinIds.has(p.id))
+      .some(p => p.source_id === r.source_id && p.suwayomi_manga_id === r.suwayomi_manga_id)
+    const alreadyPending = pendingPins.some(
+      p => p.source_id === r.source_id && p.suwayomi_manga_id === r.suwayomi_manga_id
+    )
+    if (!alreadyPinned && !alreadyPending) {
+      setPendingPins(prev => [...prev, {
+        source_id: r.source_id,
+        source_name: r.source_name,
+        suwayomi_manga_id: r.suwayomi_manga_id,
+      }])
+    }
+    setPinSearchResults([])
+    setPinSearchQuery('')
+  }
+
+  async function handleSavePins() {
+    setPinSaving(true)
+    setPinError(null)
+    setPinResult(null)
+    const kept = pins.filter(p => !removedPinIds.has(p.id)).map(p => ({
+      source_id: p.source_id,
+      suwayomi_manga_id: p.suwayomi_manga_id,
+    }))
+    const newPins = pendingPins.map(p => ({
+      source_id: p.source_id,
+      suwayomi_manga_id: p.suwayomi_manga_id,
+    }))
+    try {
+      await apiFetch(`/api/requests/${comicId}/pins`, {
+        method: 'PUT',
+        body: JSON.stringify({ pins: [...kept, ...newPins] }),
+      })
+      await queryClient.invalidateQueries({ queryKey: ['comic-pins', comicId] })
+      setRemovedPinIds(new Set())
+      setPendingPins([])
+      setPinResult('Pins saved. Run Re-discover to pick up any newly available chapters.')
+    } catch (err) {
+      setPinError(extractDetail(err))
+    } finally {
+      setPinSaving(false)
     }
   }
 
@@ -488,6 +634,110 @@ export default function Comic() {
             </div>
           )}
 
+          {/* Source pins */}
+          <div style={{ marginBottom: 24 }}>
+            <button
+              onClick={() => pinsOpen ? setPinsOpen(false) : openPins()}
+              style={{ ...linkButtonStyle, fontSize: 12 }}
+            >
+              {pinsOpen ? 'Close pin manager' : 'Manage source pins'}
+            </button>
+            {pinsOpen && (
+              <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
+                <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+                  Pins tell Otaki to fetch chapters directly by manga ID instead of searching by title.
+                  Useful when a title has an unusual name on a source.
+                </div>
+
+                {/* Current pins */}
+                <div style={{ marginBottom: 12 }}>
+                  {pins.filter(p => !removedPinIds.has(p.id)).length === 0 && pendingPins.length === 0 ? (
+                    <div style={{ fontSize: 12, color: '#888' }}>No pins set.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {pins.filter(p => !removedPinIds.has(p.id)).map(p => (
+                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <span style={pinChipStyle}>{p.source_name}</span>
+                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
+                          <button onClick={() => removeSavedPin(p.id)} style={removeBtnStyle} aria-label="Remove pin">✕</button>
+                        </div>
+                      ))}
+                      {pendingPins.map((p, i) => (
+                        <div key={`pending-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <span style={{ ...pinChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>{p.source_name}</span>
+                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
+                          <button onClick={() => removePendingPin(i)} style={removeBtnStyle} aria-label="Remove pending pin">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add pin search */}
+                <div style={{ marginBottom: 12, borderTop: '1px solid #eee', paddingTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 6 }}>Add a pin</div>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <select
+                      value={pinSearchSourceId}
+                      onChange={e => setPinSearchSourceId(e.target.value ? Number(e.target.value) : '')}
+                      style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
+                    >
+                      <option value="">Select source…</option>
+                      {sources.filter(s => s.enabled).map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Search title…"
+                      value={pinSearchQuery}
+                      onChange={e => setPinSearchQuery(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handlePinSearch()}
+                      style={{ flex: 1, minWidth: 140, padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
+                    />
+                    <button
+                      onClick={handlePinSearch}
+                      disabled={!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching}
+                      style={{ ...secondaryButtonStyle, fontSize: 12, padding: '5px 10px', opacity: (!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching) ? 0.6 : 1 }}
+                    >
+                      {pinSearching ? 'Searching…' : 'Search'}
+                    </button>
+                  </div>
+                  {pinSearchResults.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', border: '1px solid #eee', borderRadius: 4, padding: 6 }}>
+                      {pinSearchResults.map(r => (
+                        <button
+                          key={r.url}
+                          onClick={() => stagePinFromResult(r)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '4px 6px', borderRadius: 4, fontSize: 12, display: 'flex', flexDirection: 'column' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#f0f4ff' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
+                        >
+                          <span style={{ fontWeight: 500 }}>{r.title}</span>
+                          <span style={{ color: '#888', fontSize: 11 }}>ID: {r.suwayomi_manga_id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Save */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button
+                    onClick={handleSavePins}
+                    disabled={pinSaving}
+                    style={{ ...primaryButtonStyle, fontSize: 12, padding: '6px 12px', opacity: pinSaving ? 0.6 : 1 }}
+                  >
+                    {pinSaving ? 'Saving…' : 'Save pins'}
+                  </button>
+                  <button onClick={() => setPinsOpen(false)} style={{ ...linkButtonStyle, fontSize: 12 }}>Cancel</button>
+                </div>
+                {pinResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{pinResult}</p>}
+                {pinError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{pinError}</p>}
+              </div>
+            )}
+          </div>
+
           {/* Re-discover / Reprocess */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
             {comic.chapters.length === 0 && (
@@ -642,6 +892,27 @@ const aliasChipStyle: React.CSSProperties = {
   border: '1px solid #ddd',
   borderRadius: 12,
   color: '#555',
+}
+
+const pinChipStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 6px',
+  fontSize: 11,
+  background: '#f0f0f0',
+  border: '1px solid #ddd',
+  borderRadius: 10,
+  color: '#555',
+  flexShrink: 0,
+}
+
+const removeBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  color: '#aaa',
+  fontSize: 12,
+  padding: 0,
+  lineHeight: 1,
 }
 
 const reprocessLogStyle: React.CSSProperties = {

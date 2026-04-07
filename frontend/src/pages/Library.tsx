@@ -60,8 +60,8 @@ function HealthBadge() {
     retry: false,
   })
 
-  const status = error ? 'unhealthy' : (data?.status ?? 'degraded')
-  const color = STATUS_DOT[status] ?? '#94a3b8'
+  const status = error ? 'unhealthy' : (data?.status ?? null)
+  const color = status ? (STATUS_DOT[status] ?? '#94a3b8') : '#94a3b8'
 
   function fmt(s: number | null | undefined) {
     if (s == null) return '—'
@@ -74,11 +74,11 @@ function HealthBadge() {
     <div style={{ position: 'relative' }}>
       <button
         onClick={() => setExpanded(v => !v)}
-        title={`System status: ${status}`}
+        title={status ? `System status: ${status}` : 'Checking system status…'}
         style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}
       >
         <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
-        <span style={{ fontSize: 13, color: '#555' }}>{status}</span>
+        <span style={{ fontSize: 13, color: '#555' }}>{status ?? '…'}</span>
       </button>
       {expanded && (
         <div style={healthPanelStyle}>

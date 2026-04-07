@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { apiFetch, extractDetail } from '../api/client'
+import { apiFetch, streamFetch, extractDetail } from '../api/client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,16 +14,12 @@ interface SearchResult {
   source_id: number
   source_name: string
   url: string
+  suwayomi_manga_id: string
 }
 
 interface SourceError {
   source_name: string
   reason: string
-}
-
-interface SearchResponse {
-  results: SearchResult[]
-  source_errors: SourceError[]
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +33,13 @@ export default function Search() {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  // Stream state
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [sourceErrors, setSourceErrors] = useState<SourceError[]>([])
+  const [streamDone, setStreamDone] = useState(false)
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   // Step 2 state
   const [step, setStep] = useState<1 | 2>(1)
@@ -57,14 +59,55 @@ export default function Search() {
     return () => clearTimeout(id)
   }, [query])
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['search', debouncedQuery],
-    queryFn: () => apiFetch<SearchResponse>(`/api/search?q=${encodeURIComponent(debouncedQuery)}`),
-    enabled: debouncedQuery.length > 0,
-  })
+  // Stream search results per-source as query changes
+  useEffect(() => {
+    if (!debouncedQuery) {
+      setResults([])
+      setSourceErrors([])
+      setStreamDone(false)
+      setStreamError(null)
+      return
+    }
 
-  const results = data?.results ?? []
-  const sourceErrors = data?.source_errors ?? []
+    // Abort any in-flight stream
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    setResults([])
+    setSourceErrors([])
+    setStreamDone(false)
+    setStreamError(null)
+
+    streamFetch(
+      `/api/search/stream?q=${encodeURIComponent(debouncedQuery)}`,
+      { method: 'GET' },
+      (data) => {
+        if (data === '[DONE]') {
+          setStreamDone(true)
+          return
+        }
+        try {
+          const payload = JSON.parse(data)
+          if (payload.error) {
+            setSourceErrors(prev => [...prev, { source_name: payload.source_name, reason: payload.error }])
+          } else {
+            setResults(prev => [...prev, ...(payload.results as SearchResult[])])
+          }
+        } catch {
+          // ignore malformed SSE line
+        }
+      },
+      controller.signal,
+    ).catch((err) => {
+      if ((err as Error).name !== 'AbortError') {
+        setStreamError(extractDetail(err))
+        setStreamDone(true)
+      }
+    })
+
+    return () => controller.abort()
+  }, [debouncedQuery])
 
   function toggleSelect(url: string) {
     setSelected(prev => {
@@ -121,6 +164,9 @@ export default function Search() {
     selectedResults.map(r => r.title).filter(t => t !== displayName)
   )]
 
+  const isLoading = debouncedQuery.length > 0 && !streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError
+  const isLoadingMore = debouncedQuery.length > 0 && !streamDone && (results.length > 0 || sourceErrors.length > 0)
+
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
       {/* Header */}
@@ -142,11 +188,14 @@ export default function Search() {
           />
 
           {/* States */}
-          {debouncedQuery && isLoading && <p>Loading…</p>}
-          {debouncedQuery && error && (
-            <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>
+          {isLoading && <p>Loading…</p>}
+          {isLoadingMore && (
+            <div style={loadingMoreBadgeStyle}>Loading more sources…</div>
           )}
-          {debouncedQuery && !isLoading && !error && results.length === 0 && sourceErrors.length === 0 && (
+          {streamError && (
+            <p style={{ color: 'red', fontSize: 13 }}>{streamError}</p>
+          )}
+          {debouncedQuery && streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError && (
             <p style={{ color: '#666' }}>No results.</p>
           )}
 
@@ -396,4 +445,16 @@ const sourceErrorBannerStyle: React.CSSProperties = {
   borderRadius: 4,
   fontSize: 13,
   color: '#5d4037',
+}
+
+const loadingMoreBadgeStyle: React.CSSProperties = {
+  display: 'inline-block',
+  marginTop: 8,
+  marginBottom: 4,
+  padding: '3px 10px',
+  fontSize: 12,
+  background: '#e3f2fd',
+  border: '1px solid #90caf9',
+  borderRadius: 12,
+  color: '#1565c0',
 }

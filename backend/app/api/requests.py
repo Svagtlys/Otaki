@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -495,131 +496,197 @@ class ReprocessResponse(BaseModel):
     skipped: int
 
 
-@router.post("/{comic_id}/reprocess", response_model=ReprocessResponse)
+@router.post("/{comic_id}/reprocess")
 async def reprocess_chapters(
     comic_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
-) -> ReprocessResponse:
+) -> StreamingResponse:
     """Walk every active chapter through whatever pipeline stage it is stuck in.
 
-    - relocation_status=done, file exists → update_library_file (refreshes
-      ComicInfo.xml, cover, and moves to correct path if library_title changed)
-    - download_status=queued|downloading → skip (already in progress)
-    - download_status=failed → re-enqueue
-    - download_status=done, staging file exists → relocate / replace_in_library
-    - download_status=done, no staging, file at library_path → update_library_file
-    - no staging, no library file → re-enqueue
+    Streams SSE events as each chapter is processed:
+      data: {"type": "chapter", "chapter_number": 1.0, "action": "processed"|"queued"|"skipped"}
+      data: {"type": "done", "queued": N, "processed": N, "skipped": N}
+      data: {"type": "error", "detail": "..."}   # fatal error only (e.g. Suwayomi unreachable)
+
+    Per-chapter actions:
+    - relocation_status=done, file exists → update_library_file → "processed"
+    - download_status=queued|downloading, staging found → relocate → "processed"
+    - download_status=queued|downloading, still in live queue → "skipped"
+    - download_status=queued|downloading, absent from queue → re-enqueue → "queued"
+    - download_status=failed → re-enqueue → "queued"
+    - download_status=done, staging found → relocate → "processed"
+    - download_status=done, library file exists → update_library_file → "processed"
+    - no staging, no library file → re-enqueue → "queued"
 
     Idempotent — safe to call multiple times.
     """
-    comic_result = await db.execute(
-        select(Comic).where(Comic.id == comic_id)
-    )
-    comic = comic_result.scalar_one_or_none()
-    if comic is None:
-        raise HTTPException(status_code=404, detail="Comic not found")
-
-    assignments_result = await db.execute(
-        select(ChapterAssignment)
-        .where(
-            ChapterAssignment.comic_id == comic_id,
-            ChapterAssignment.is_active.is_(True),
+    async def generate():
+        comic_result = await db.execute(
+            select(Comic).where(Comic.id == comic_id)
         )
-        .options(selectinload(ChapterAssignment.source))
-    )
-    assignments = assignments_result.scalars().all()
+        comic = comic_result.scalar_one_or_none()
+        if comic is None:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Comic not found'})}\n\n"
+            return
 
-    # Fetch displayName once — download directories use displayName
-    # (e.g. "Webtoons.com (EN)"), not source.name ("Webtoons.com").
-    display_name_by_source_id: dict[str, str] = {}
-    try:
-        for s in await suwayomi.list_sources():
-            display_name_by_source_id[s["id"]] = s["display_name"]
-    except Exception as exc:
-        reason = suwayomi.classify_error(exc)
-        logger.warning("reprocess: could not fetch source display names (%s): %r", reason, exc)
-        raise HTTPException(
-            status_code=503,
-            detail=f"Suwayomi is unreachable ({reason}) — reprocess aborted.",
-        )
-
-    queued = processed = skipped = 0
-
-    for assignment in assignments:
-        chapter_name = assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
-        manga_title = assignment.source_manga_title or comic.title
-        source_display_name = display_name_by_source_id.get(
-            assignment.source.suwayomi_source_id, assignment.source.name
-        )
-
-        # Case 1: already fully relocated — refresh metadata/cover/path
-        if (
-            assignment.relocation_status == RelocationStatus.done
-            and assignment.library_path
-            and Path(assignment.library_path).exists()
-        ):
-            await file_relocator.update_library_file(assignment, comic, db)
-            processed += 1
-            continue
-
-        # Case 2: queued/downloading — check staging before skipping
-        if assignment.download_status in (DownloadStatus.queued, DownloadStatus.downloading):
-            staging = file_relocator.find_staging_path(
-                chapter_name, manga_title, source_display_name
+        assignments_result = await db.execute(
+            select(ChapterAssignment)
+            .where(
+                ChapterAssignment.comic_id == comic_id,
+                ChapterAssignment.is_active.is_(True),
             )
-            if staging is not None:
-                # File already downloaded — treat as done and relocate (same as Case 4)
-                existing_active = await db.scalar(
-                    select(ChapterAssignment).where(
-                        ChapterAssignment.comic_id == comic_id,
-                        ChapterAssignment.chapter_number == assignment.chapter_number,
-                        ChapterAssignment.is_active.is_(True),
-                        ChapterAssignment.id != assignment.id,
-                    )
-                )
-                assignment.download_status = DownloadStatus.done
-                assignment.downloaded_at = datetime.now(timezone.utc)
-                if existing_active is None:
-                    await file_relocator.relocate(
-                        assignment, comic, db,
-                        chapter_name=chapter_name,
-                        manga_title=manga_title,
-                        source_display_name=source_display_name,
-                    )
-                else:
-                    await file_relocator.replace_in_library(
-                        existing_active, assignment, comic, db,
-                        chapter_name=chapter_name,
-                        manga_title=manga_title,
-                        source_display_name=source_display_name,
-                    )
+            .options(selectinload(ChapterAssignment.source))
+        )
+        assignments = assignments_result.scalars().all()
+
+        # Fetch displayName once — download directories use displayName
+        # (e.g. "Webtoons.com (EN)"), not source.name ("Webtoons.com").
+        display_name_by_source_id: dict[str, str] = {}
+        try:
+            for s in await suwayomi.list_sources():
+                display_name_by_source_id[s["id"]] = s["display_name"]
+        except Exception as exc:
+            reason = suwayomi.classify_error(exc)
+            logger.warning("reprocess: could not fetch source display names (%s): %r", reason, exc)
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'Suwayomi is unreachable ({reason}) — reprocess aborted.'})}\n\n"
+            return
+
+        queued = processed = skipped = 0
+
+        for assignment in assignments:
+            chapter_name = assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+            manga_title = assignment.source_manga_title or comic.title
+            source_display_name = display_name_by_source_id.get(
+                assignment.source.suwayomi_source_id, assignment.source.name
+            )
+
+            # Case 1: already fully relocated — refresh metadata/cover/path
+            if (
+                assignment.relocation_status == RelocationStatus.done
+                and assignment.library_path
+                and Path(assignment.library_path).exists()
+            ):
+                await file_relocator.update_library_file(assignment, comic, db)
                 processed += 1
+                yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'processed'})}\n\n"
                 continue
 
-            # No staging file — check the live Suwayomi queue
-            current_queue_ids: set[str] = set()
-            try:
-                current_queue_ids = {
-                    item["chapter_id"] for item in await suwayomi.poll_downloads()
-                }
-            except Exception as exc:
-                logger.warning(
-                    "reprocess: could not poll Suwayomi queue for assignment id=%d: %r",
-                    assignment.id,
-                    exc,
+            # Case 2: queued/downloading — check staging before skipping
+            if assignment.download_status in (DownloadStatus.queued, DownloadStatus.downloading):
+                staging = file_relocator.find_staging_path(
+                    chapter_name, manga_title, source_display_name
                 )
+                if staging is not None:
+                    # File already downloaded — treat as done and relocate (same as Case 4)
+                    existing_active = await db.scalar(
+                        select(ChapterAssignment).where(
+                            ChapterAssignment.comic_id == comic_id,
+                            ChapterAssignment.chapter_number == assignment.chapter_number,
+                            ChapterAssignment.is_active.is_(True),
+                            ChapterAssignment.id != assignment.id,
+                        )
+                    )
+                    assignment.download_status = DownloadStatus.done
+                    assignment.downloaded_at = datetime.now(timezone.utc)
+                    if existing_active is None:
+                        await file_relocator.relocate(
+                            assignment, comic, db,
+                            chapter_name=chapter_name,
+                            manga_title=manga_title,
+                            source_display_name=source_display_name,
+                        )
+                    else:
+                        await file_relocator.replace_in_library(
+                            existing_active, assignment, comic, db,
+                            chapter_name=chapter_name,
+                            manga_title=manga_title,
+                            source_display_name=source_display_name,
+                        )
+                    processed += 1
+                    yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'processed'})}\n\n"
+                    continue
 
-            if assignment.suwayomi_chapter_id in current_queue_ids:
-                # Genuinely still in-flight
-                skipped += 1
+                # No staging file — check the live Suwayomi queue
+                current_queue_ids: set[str] = set()
+                try:
+                    current_queue_ids = {
+                        item["chapter_id"] for item in await suwayomi.poll_downloads()
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "reprocess: could not poll Suwayomi queue for assignment id=%d: %r",
+                        assignment.id,
+                        exc,
+                    )
+
+                if assignment.suwayomi_chapter_id in current_queue_ids:
+                    # Genuinely still in-flight
+                    skipped += 1
+                    yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'skipped'})}\n\n"
+                    continue
+
+                # Absent from queue with no staging file — missed FINISHED event; re-enqueue
+                # (fall through to Case 5 below)
+
+            # Case 3: failed download — re-enqueue
+            if assignment.download_status == DownloadStatus.failed:
+                assignment.download_status = DownloadStatus.queued
+                try:
+                    await suwayomi.enqueue_downloads([assignment.suwayomi_chapter_id])
+                except Exception as exc:
+                    logger.warning(
+                        "reprocess: enqueue_downloads failed for assignment id=%d: %r",
+                        assignment.id,
+                        exc,
+                    )
+                    assignment.download_status = DownloadStatus.failed
+                else:
+                    queued += 1
+                yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'queued'})}\n\n"
                 continue
 
-            # Absent from queue with no staging file — missed FINISHED event; re-enqueue
-            # (fall through to Case 5 below)
+            # Case 4: download done — check staging then library
+            if assignment.download_status == DownloadStatus.done:
+                staging = file_relocator.find_staging_path(
+                    chapter_name, manga_title, source_display_name
+                )
+                if staging is not None:
+                    # Staging file exists — run the normal relocation pipeline
+                    existing_active = await db.scalar(
+                        select(ChapterAssignment).where(
+                            ChapterAssignment.comic_id == comic_id,
+                            ChapterAssignment.chapter_number == assignment.chapter_number,
+                            ChapterAssignment.is_active.is_(True),
+                            ChapterAssignment.id != assignment.id,
+                        )
+                    )
+                    if existing_active is None:
+                        await file_relocator.relocate(
+                            assignment, comic, db,
+                            chapter_name=chapter_name,
+                            manga_title=manga_title,
+                            source_display_name=source_display_name,
+                        )
+                    else:
+                        await file_relocator.replace_in_library(
+                            existing_active, assignment, comic, db,
+                            chapter_name=chapter_name,
+                            manga_title=manga_title,
+                            source_display_name=source_display_name,
+                        )
+                    processed += 1
+                    yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'processed'})}\n\n"
+                    continue
 
-        # Case 3: failed download — re-enqueue
-        if assignment.download_status == DownloadStatus.failed:
+                # No staging — if library file exists, refresh it
+                if assignment.library_path and Path(assignment.library_path).exists():
+                    await file_relocator.update_library_file(assignment, comic, db)
+                    processed += 1
+                    yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'processed'})}\n\n"
+                    continue
+
+            # Case 5: no staging, no library file — re-enqueue
             assignment.download_status = DownloadStatus.queued
             try:
                 await suwayomi.enqueue_downloads([assignment.suwayomi_chapter_id])
@@ -632,62 +699,16 @@ async def reprocess_chapters(
                 assignment.download_status = DownloadStatus.failed
             else:
                 queued += 1
-            continue
+            yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'action': 'queued'})}\n\n"
 
-        # Case 4: download done — check staging then library
-        if assignment.download_status == DownloadStatus.done:
-            staging = file_relocator.find_staging_path(
-                chapter_name, manga_title, source_display_name
-            )
-            if staging is not None:
-                # Staging file exists — run the normal relocation pipeline
-                existing_active = await db.scalar(
-                    select(ChapterAssignment).where(
-                        ChapterAssignment.comic_id == comic_id,
-                        ChapterAssignment.chapter_number == assignment.chapter_number,
-                        ChapterAssignment.is_active.is_(True),
-                        ChapterAssignment.id != assignment.id,
-                    )
-                )
-                if existing_active is None:
-                    await file_relocator.relocate(
-                        assignment, comic, db,
-                        chapter_name=chapter_name,
-                        manga_title=manga_title,
-                        source_display_name=source_display_name,
-                    )
-                else:
-                    await file_relocator.replace_in_library(
-                        existing_active, assignment, comic, db,
-                        chapter_name=chapter_name,
-                        manga_title=manga_title,
-                        source_display_name=source_display_name,
-                    )
-                processed += 1
-                continue
+        await db.commit()
+        yield f"data: {json.dumps({'type': 'done', 'queued': queued, 'processed': processed, 'skipped': skipped})}\n\n"
 
-            # No staging — if library file exists, refresh it
-            if assignment.library_path and Path(assignment.library_path).exists():
-                await file_relocator.update_library_file(assignment, comic, db)
-                processed += 1
-                continue
-
-        # Case 5: no staging, no library file — re-enqueue
-        assignment.download_status = DownloadStatus.queued
-        try:
-            await suwayomi.enqueue_downloads([assignment.suwayomi_chapter_id])
-        except Exception as exc:
-            logger.warning(
-                "reprocess: enqueue_downloads failed for assignment id=%d: %r",
-                assignment.id,
-                exc,
-            )
-            assignment.download_status = DownloadStatus.failed
-        else:
-            queued += 1
-
-    await db.commit()
-    return ReprocessResponse(queued=queued, processed=processed, skipped=skipped)
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{comic_id}/cover")

@@ -52,3 +52,44 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
 
   return response.json() as Promise<T>
 }
+
+export async function streamFetch(
+  path: string,
+  options: RequestInit,
+  onEvent: (data: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const res = await fetch(path, { ...options, headers, signal })
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+      window.location.href = '/login'
+    }
+    const text = await res.text().catch(() => res.statusText)
+    throw new ApiError(res.status, text)
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop()!
+    for (const line of lines) {
+      if (line.startsWith('data: ')) onEvent(line.slice(6).trim())
+    }
+  }
+}

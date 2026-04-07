@@ -1,11 +1,12 @@
 import asyncio
 import base64
+import json
 import logging
 import urllib.parse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,3 +146,71 @@ async def search(
             )
 
     return SearchResponse(results=all_results, source_errors=source_errors)
+
+
+@router.get("/stream")
+async def search_stream(
+    q: str = Query(min_length=1),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> StreamingResponse:
+    """Stream search results per-source as SSE events.
+
+    Fires one search per enabled source concurrently; emits a JSON SSE event as
+    each source responds rather than waiting for all sources to finish.
+
+    Event shapes:
+      data: {"source_name": "...", "results": [...]}   # success
+      data: {"source_name": "...", "error": "..."}      # source failure
+      data: [DONE]                                       # all sources finished
+
+    Auth: Bearer token via Authorization header (use fetch + ReadableStream,
+    not EventSource, which cannot send custom headers).
+    """
+    result = await db.execute(
+        select(Source).where(Source.enabled == True).order_by(Source.priority)  # noqa: E712
+    )
+    sources = result.scalars().all()
+
+    async def generate():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _fetch(source: Source) -> None:
+            try:
+                raw = await suwayomi.search_source(source.suwayomi_source_id, q)
+                items = []
+                for r in raw:
+                    cover = _absolute_cover_url(r.get("cover_url"))
+                    items.append(
+                        SearchResult(
+                            title=r["title"],
+                            cover_url=cover,
+                            cover_display_url=_display_url(cover),
+                            synopsis=r.get("synopsis"),
+                            source_id=source.id,
+                            source_name=source.name,
+                            url=r.get("url"),
+                            suwayomi_manga_id=r.get("manga_id", ""),
+                        ).model_dump()
+                    )
+                await queue.put({"source_name": source.name, "results": items})
+            except Exception as e:
+                reason = suwayomi.classify_error(e)
+                logger.warning(
+                    "search/stream failed for source %s (%s): %r", source.name, reason, e
+                )
+                await queue.put({"source_name": source.name, "error": reason})
+
+        tasks = [asyncio.create_task(_fetch(s)) for s in sources]
+        remaining = len(tasks)
+        while remaining > 0:
+            payload = await queue.get()
+            yield f"data: {json.dumps(payload)}\n\n"
+            remaining -= 1
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

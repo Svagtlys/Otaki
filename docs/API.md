@@ -312,6 +312,38 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 
 ---
 
+### `GET /api/search/stream`
+
+Same as `GET /api/search` but streams results as SSE events — one event per source as it responds, rather than waiting for all sources to finish.
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource` (which cannot send custom headers).
+
+**Query Parameters**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `q` | string | yes | Title search query |
+
+**Response `200 text/event-stream`**
+
+Each SSE event has the shape `data: <JSON>\n\n`. There are three event types:
+
+```
+data: {"source_name": "MangaDex", "results": [...]}
+data: {"source_name": "BrokenSource", "error": "connection timed out"}
+data: [DONE]
+```
+
+- **result event** — `source_name` plus `results` array (same shape as `GET /api/search` results).
+- **error event** — `source_name` plus `error` string; emitted when a source fails. Other sources continue streaming.
+- **`[DONE]` sentinel** — literal string (not JSON); signals that all sources have responded.
+
+**Notes**
+- HTTP status is always `200` (headers are sent before any source responds). Errors are surfaced as error events, not HTTP error codes.
+- No deduplication — same semantics as `GET /api/search`.
+
+---
+
 ## Requests (Comics)
 
 ### `POST /api/requests`
@@ -571,11 +603,25 @@ For each active `ChapterAssignment`:
 |---|---|---|
 | `id` | int | Comic ID |
 
-**Response `200`**
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource`.
 
-```json
-{ "queued": 2, "processed": 5, "skipped": 1 }
+**Response `200 text/event-stream`**
+
+Streams SSE events as each chapter is processed. Three event types:
+
 ```
+data: {"type": "chapter", "chapter_number": 3, "action": "processed"}
+data: {"type": "chapter", "chapter_number": 4, "action": "queued"}
+data: {"type": "chapter", "chapter_number": 5, "action": "skipped"}
+data: {"type": "done", "queued": 2, "processed": 5, "skipped": 1}
+data: [DONE]
+```
+
+- **`chapter` event** — emitted for each active chapter as it is handled.
+  - `action` values: `"processed"` (ran pipeline), `"queued"` (re-enqueued download), `"skipped"` (in-progress).
+- **`done` event** — final summary with aggregate counts.
+- **`[DONE]` sentinel** — literal string (not JSON); signals stream end.
+- **`error` event** — `{"type": "error", "detail": "..."}` emitted instead of `done` if the comic is not found or Suwayomi is unreachable.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -583,8 +629,8 @@ For each active `ChapterAssignment`:
 | `processed` | int | Chapters that ran through the relocate / update pipeline |
 | `skipped` | int | Chapters already in progress (`queued`/`downloading`) |
 
-**Error Cases**
-- `404 Not Found` — no comic with this ID.
+**Notes**
+- HTTP status is always `200`. Errors (comic not found, Suwayomi unreachable) are surfaced as `{"type": "error"}` events.
 
 ---
 

@@ -4,6 +4,8 @@ Unit-style tests mock suwayomi.search_source and seed sources directly in the DB
 Integration tests require a configured Suwayomi instance via suwayomi_settings.
 """
 
+import json
+
 import pytest
 from datetime import datetime, timezone
 
@@ -233,7 +235,7 @@ async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_returns_list(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
     from app.config import settings
     from app.services.suwayomi import list_sources as _list_sources
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
@@ -254,7 +256,7 @@ async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, 
     assert isinstance(body["results"], list)
 
 
-async def test_search_live_result_has_required_fields(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_result_has_required_fields(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
     from app.config import settings
     from app.services.suwayomi import list_sources as _list_sources, search_source as _search_source
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
@@ -290,3 +292,88 @@ async def test_search_live_result_has_required_fields(suwayomi_credentials, logg
         assert "cover_url" in result
         assert "synopsis" in result
         assert "url" in result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/search/stream tests (issue #91)
+# ---------------------------------------------------------------------------
+
+
+def _parse_stream(text: str) -> list:
+    """Parse SSE response text into a list of parsed data payloads."""
+    events = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            raw = line[6:].strip()
+            if raw == "[DONE]":
+                events.append("[DONE]")
+            else:
+                events.append(json.loads(raw))
+    return events
+
+
+async def test_search_stream_requires_auth(auth_client):
+    r = await auth_client.get("/api/search/stream?q=test")
+    assert r.status_code == 401
+
+
+async def test_search_stream_rejects_empty_query(logged_in_client):
+    r = await logged_in_client.get("/api/search/stream?q=")
+    assert r.status_code == 422
+
+
+async def test_search_stream_emits_per_source_events(logged_in_client, monkeypatch):
+    """Two sources both succeed — two result events arrive, then [DONE]."""
+    from app.services import suwayomi
+    await _add_source(name="Source A", suwayomi_source_id="src-a", priority=1)
+    await _add_source(name="Source B", suwayomi_source_id="src-b", priority=2)
+
+    async def _mock_search(source_id, query):
+        return [{"manga_id": f"{source_id}-1", "title": f"Manga from {source_id}",
+                 "cover_url": None, "synopsis": None, "url": None}]
+
+    monkeypatch.setattr(suwayomi, "search_source", _mock_search)
+
+    r = await logged_in_client.get("/api/search/stream?q=test")
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers.get("content-type", "")
+
+    events = _parse_stream(r.text)
+    result_events = [e for e in events if e != "[DONE]"]
+    assert len(result_events) == 2
+    source_names = {e["source_name"] for e in result_events}
+    assert source_names == {"Source A", "Source B"}
+    for e in result_events:
+        assert "results" in e
+        assert len(e["results"]) == 1
+        assert e["results"][0]["title"].startswith("Manga from")
+    assert events[-1] == "[DONE]"
+
+
+async def test_search_stream_emits_error_for_failed_source(logged_in_client, monkeypatch):
+    """One source raises, other succeeds — error event for the bad source, result event for the good one, then [DONE]."""
+    from app.services import suwayomi
+    await _add_source(name="Good Source", suwayomi_source_id="src-good", priority=1)
+    await _add_source(name="Bad Source", suwayomi_source_id="src-bad", priority=2)
+
+    async def _mock_search(source_id, query):
+        if source_id == "src-bad":
+            raise Exception("source down")
+        return [{"manga_id": "1", "title": "Good Manga", "cover_url": None, "synopsis": None, "url": None}]
+
+    monkeypatch.setattr(suwayomi, "search_source", _mock_search)
+
+    r = await logged_in_client.get("/api/search/stream?q=test")
+    assert r.status_code == 200
+
+    events = _parse_stream(r.text)
+    assert events[-1] == "[DONE]"
+    data_events = [e for e in events if e != "[DONE]"]
+    assert len(data_events) == 2
+
+    error_events = [e for e in data_events if "error" in e]
+    result_events = [e for e in data_events if "results" in e]
+    assert len(error_events) == 1
+    assert len(result_events) == 1
+    assert error_events[0]["source_name"] == "Bad Source"
+    assert result_events[0]["source_name"] == "Good Source"

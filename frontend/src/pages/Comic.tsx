@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiFetch, extractDetail } from '../api/client'
+import { apiFetch, streamFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
 
 const TOKEN_KEY = 'otaki_token'
@@ -60,6 +60,7 @@ export default function Comic() {
   const [reprocessing, setReprocessing] = useState(false)
   const [reprocessError, setReprocessError] = useState<string | null>(null)
   const [reprocessResult, setReprocessResult] = useState<string | null>(null)
+  const [reprocessLog, setReprocessLog] = useState<{ chapter_number: number; action: string }[]>([])
 
   const [coverFormOpen, setCoverFormOpen] = useState(false)
   const [coverTab, setCoverTab] = useState<'url' | 'file'>('url')
@@ -92,14 +93,34 @@ export default function Comic() {
     setReprocessing(true)
     setReprocessError(null)
     setReprocessResult(null)
+    setReprocessLog([])
     try {
-      const res = await apiFetch<{ queued: number; processed: number; skipped: number }>(
-        `/api/requests/${comicId}/reprocess`, { method: 'POST' }
+      let queued = 0, processed = 0, skipped = 0
+      await streamFetch(
+        `/api/requests/${comicId}/reprocess`,
+        { method: 'POST' },
+        (data) => {
+          if (data === '[DONE]') return
+          try {
+            const ev = JSON.parse(data)
+            if (ev.type === 'error') {
+              setReprocessError(ev.detail)
+            } else if (ev.type === 'chapter') {
+              setReprocessLog(prev => [...prev, { chapter_number: ev.chapter_number, action: ev.action }])
+            } else if (ev.type === 'done') {
+              queued = ev.queued
+              processed = ev.processed
+              skipped = ev.skipped
+            }
+          } catch {
+            // ignore malformed SSE line
+          }
+        },
       )
       const parts = []
-      if (res.processed > 0) parts.push(`${res.processed} processed`)
-      if (res.queued > 0) parts.push(`${res.queued} queued for download`)
-      if (res.skipped > 0) parts.push(`${res.skipped} already in progress`)
+      if (processed > 0) parts.push(`${processed} processed`)
+      if (queued > 0) parts.push(`${queued} queued for download`)
+      if (skipped > 0) parts.push(`${skipped} already in progress`)
       setReprocessResult(parts.length > 0 ? parts.join(', ') + '.' : 'Nothing to do.')
       await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
     } catch (err) {
@@ -491,6 +512,17 @@ export default function Comic() {
                 >
                   {reprocessing ? 'Reprocessing…' : 'Reprocess chapters'}
                 </button>
+                {(reprocessing || reprocessLog.length > 0) && (
+                  <div style={reprocessLogStyle}>
+                    {reprocessLog.map((entry, i) => (
+                      <div key={i}>
+                        {entry.action === 'processed' ? '✓' : entry.action === 'queued' ? '⟳' : '—'}
+                        {' '}Ch {entry.chapter_number} — {entry.action}
+                      </div>
+                    ))}
+                    {reprocessing && <div style={{ color: '#999' }}>…</div>}
+                  </div>
+                )}
                 {reprocessResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{reprocessResult}</p>}
                 {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
               </div>
@@ -610,4 +642,16 @@ const aliasChipStyle: React.CSSProperties = {
   border: '1px solid #ddd',
   borderRadius: 12,
   color: '#555',
+}
+
+const reprocessLogStyle: React.CSSProperties = {
+  maxHeight: 120,
+  overflowY: 'auto',
+  fontSize: 12,
+  fontFamily: 'monospace',
+  background: '#f8f8f8',
+  border: '1px solid #eee',
+  borderRadius: 4,
+  padding: '6px 10px',
+  marginTop: 6,
 }

@@ -1,5 +1,6 @@
 """Tests for POST/GET/DELETE /api/requests (issue #13)."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -965,13 +966,29 @@ async def test_put_pins_404_for_unknown_comic(logged_in_client):
 # ---------------------------------------------------------------------------
 
 
+def _parse_sse(text: str) -> list[dict]:
+    """Parse SSE response body into a list of JSON event dicts (skips [DONE] sentinel)."""
+    events = []
+    for line in text.splitlines():
+        if line.startswith("data: ") and line[6:].strip() != "[DONE]":
+            events.append(json.loads(line[6:].strip()))
+    return events
+
+
+def _done_event(events: list[dict]) -> dict:
+    """Return the 'done' summary event from a parsed SSE event list."""
+    return next(e for e in events if e.get("type") == "done")
+
+
 async def test_reprocess_404_for_unknown_comic(logged_in_client):
     r = await logged_in_client.post("/api/requests/99999/reprocess")
-    assert r.status_code == 404
+    assert r.status_code == 200  # SSE always 200; error is in stream
+    events = _parse_sse(r.text)
+    assert any(e.get("type") == "error" for e in events)
 
 
 async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client, monkeypatch):
-    """If list_sources() fails (Suwayomi unreachable), reprocess returns 503 JSON."""
+    """If list_sources() fails (Suwayomi unreachable), reprocess emits an error SSE event."""
     from app.services import suwayomi
     import httpx
 
@@ -982,10 +999,11 @@ async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client,
     )
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
-    assert r.status_code == 503
-    data = r.json()
-    assert "detail" in data
-    assert "unreachable" in data["detail"].lower()
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert len(error_events) == 1
+    assert "unreachable" in error_events[0]["detail"].lower()
 
 
 async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypatch, tmp_path):
@@ -1021,10 +1039,10 @@ async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypa
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    data = r.json()
-    assert data["skipped"] == 2
-    assert data["queued"] == 0
-    assert data["processed"] == 0
+    done = _done_event(_parse_sse(r.text))
+    assert done["skipped"] == 2
+    assert done["queued"] == 0
+    assert done["processed"] == 0
 
 
 async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_path):
@@ -1052,9 +1070,9 @@ async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_pa
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    data = r.json()
-    assert data["queued"] == 1
-    assert data["processed"] == 0
+    done = _done_event(_parse_sse(r.text))
+    assert done["queued"] == 1
+    assert done["processed"] == 0
 
 
 async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypatch, tmp_path):
@@ -1086,7 +1104,7 @@ async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypat
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    assert r.json()["processed"] == 1
+    assert _done_event(_parse_sse(r.text))["processed"] == 1
     mock_relocate.assert_awaited_once()
 
 
@@ -1123,7 +1141,7 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    assert r.json()["processed"] == 1
+    assert _done_event(_parse_sse(r.text))["processed"] == 1
     mock_update.assert_awaited_once()
 
 
@@ -1160,10 +1178,10 @@ async def test_reprocess_queued_with_staging_file_relocates(logged_in_client, mo
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    data = r.json()
-    assert data["processed"] == 1
-    assert data["skipped"] == 0
-    assert data["queued"] == 0
+    done = _done_event(_parse_sse(r.text))
+    assert done["processed"] == 1
+    assert done["skipped"] == 0
+    assert done["queued"] == 0
     mock_relocate.assert_awaited_once()
 
     async with database.AsyncSessionLocal() as db:
@@ -1201,10 +1219,10 @@ async def test_reprocess_queued_absent_from_queue_reenqueues(logged_in_client, m
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    data = r.json()
-    assert data["queued"] == 1
-    assert data["processed"] == 0
-    assert data["skipped"] == 0
+    done = _done_event(_parse_sse(r.text))
+    assert done["queued"] == 1
+    assert done["processed"] == 0
+    assert done["skipped"] == 0
     mock_enqueue.assert_awaited_once_with(["ch-aq1"])
 
 
@@ -1236,6 +1254,6 @@ async def test_reprocess_queued_poll_fails_reenqueues(logged_in_client, monkeypa
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/reprocess")
     assert r.status_code == 200
-    data = r.json()
-    assert data["queued"] == 1
+    done = _done_event(_parse_sse(r.text))
+    assert done["queued"] == 1
     mock_enqueue.assert_awaited_once_with(["ch-pf1"])

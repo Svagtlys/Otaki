@@ -235,7 +235,7 @@ async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_returns_list(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
     from app.config import settings
     from app.services.suwayomi import list_sources as _list_sources
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
@@ -256,7 +256,7 @@ async def test_search_live_returns_list(suwayomi_credentials, logged_in_client, 
     assert isinstance(body["results"], list)
 
 
-async def test_search_live_result_has_required_fields(suwayomi_credentials, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_result_has_required_fields(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
     from app.config import settings
     from app.services.suwayomi import list_sources as _list_sources, search_source as _search_source
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])

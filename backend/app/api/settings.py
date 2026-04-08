@@ -1,10 +1,18 @@
-from typing import Literal
+import io
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+from ..database import get_db
 from ..models.user import User
+from ..services import backup as backup_svc
 from ..services.settings import validate_path, validate_suwayomi, write_env
 from .auth import require_auth
 
@@ -116,3 +124,144 @@ async def patch_settings(
                 write_env(env_key, value)
 
     return _build_response()
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export")
+async def export_backup(
+    format: Literal["otaki", "json", "csv"] = Query(default="otaki"),
+    include_all_assignments: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> Response:
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    if format == "otaki":
+        data = await backup_svc.build_backup_zip(db, include_all_assignments)
+        return Response(
+            content=data,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.zip"'},
+        )
+
+    if format == "json":
+        data = await backup_svc.build_backup_json(db, include_all_assignments)
+        return Response(
+            content=json.dumps(data, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.json"'},
+        )
+
+    # csv
+    data = await backup_svc.build_backup_csv(db)
+    return Response(
+        content=data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.csv"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Import — preview
+# ---------------------------------------------------------------------------
+
+
+@router.post("/import/preview")
+async def import_preview(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+    file: UploadFile | None = File(default=None),
+    path: str | None = Form(default=None),
+) -> dict:
+    """Parse a backup zip (or JSON) and return a conflict/new preview without writing to the DB."""
+    raw = await _load_backup_bytes(file, path)
+    try:
+        backup, zf = backup_svc.parse_backup_zip(raw)
+        if zf:
+            zf.close()
+    except ValueError:
+        try:
+            backup = backup_svc.parse_backup_json(raw)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    return await backup_svc.build_preview(backup, db)
+
+
+# ---------------------------------------------------------------------------
+# Import — apply
+# ---------------------------------------------------------------------------
+
+
+class SourceResolution(BaseModel):
+    backup_id: int
+    action: Literal["overwrite", "skip"]
+
+
+class ComicResolution(BaseModel):
+    backup_id: int
+    action: Literal["merge", "create", "skip"]
+    target_id: int | None = None
+    title_override: str | None = None
+    replace_cover: bool = False
+
+
+class ApplySummary(BaseModel):
+    comics: int
+    chapters: int
+    covers: int
+    skipped: int
+
+
+@router.post("/import/apply", response_model=ApplySummary)
+async def import_apply(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+    file: UploadFile | None = File(default=None),
+    path: str | None = Form(default=None),
+    source_resolutions: str = Form(default="[]"),
+    comic_resolutions: str = Form(default="[]"),
+) -> ApplySummary:
+    """Apply a backup zip with user-supplied conflict resolutions."""
+    raw = await _load_backup_bytes(file, path)
+
+    try:
+        src_res = [SourceResolution(**r).model_dump() for r in json.loads(source_resolutions)]
+        com_res = [ComicResolution(**r).model_dump() for r in json.loads(comic_resolutions)]
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid resolutions: {e}")
+
+    try:
+        backup, zf = backup_svc.parse_backup_zip(raw)
+        if zf:
+            zf.close()
+        zip_data: bytes | None = raw
+    except ValueError:
+        try:
+            backup = backup_svc.parse_backup_json(raw)
+            zip_data = None
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    result = await backup_svc.apply_backup(backup, zip_data, src_res, com_res, db)
+    return ApplySummary(**result)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _load_backup_bytes(file: UploadFile | None, path: str | None) -> bytes:
+    if file is not None:
+        return await file.read()
+    if path:
+        p = Path(path)
+        if not p.exists():
+            raise HTTPException(status_code=422, detail=f"File not found: {path}")
+        return p.read_bytes()
+    raise HTTPException(status_code=422, detail="Provide a file upload or a server path")

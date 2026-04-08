@@ -1004,6 +1004,149 @@ Update one or more settings. All fields are optional; omitted fields are left un
 
 ---
 
+### `GET /api/settings/export`
+
+Download a backup of the current Otaki state.
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `format` | `"otaki"` \| `"json"` \| `"csv"` | `"otaki"` | Export format |
+| `include_all_assignments` | bool | `false` | Include inactive assignments (upgrade candidates). Ignored for `csv`. |
+
+**Formats**
+
+- **`otaki`** — zip archive (`otaki-backup-<date>.zip`) containing `backup.json` (full DB snapshot) and `covers/` (cover image files). Fully re-importable.
+- **`json`** — `backup.json` only (no covers), returned inline as `application/json`. Useful for DB inspection or scripting.
+- **`csv`** — one row per active `ChapterAssignment`. Not re-importable. Columns: `comic_title`, `library_title`, `chapter_number`, `volume_number`, `source_name`, `download_status`, `relocation_status`, `library_path`, `chapter_published_at`.
+
+**`backup.json` structure**
+
+```json
+{
+  "version": 1,
+  "exported_at": "2026-04-08T12:00:00+00:00",
+  "include_all_assignments": false,
+  "sources": [{"_id": 1, "suwayomi_source_id": "en.mangadex", "name": "MangaDex", "priority": 1, "enabled": true}],
+  "comics": [{"_id": 1, "title": "One Piece", "library_title": "One Piece", "status": "tracking",
+              "poll_override_days": null, "upgrade_override_days": null, "inferred_cadence_days": 7.0,
+              "created_at": "...", "cover_file": "covers/1.jpg"}],
+  "comic_aliases": [{"comic_id": 1, "title": "ワンピース"}],
+  "comic_source_pins": [{"comic_id": 1, "source_id": 1, "suwayomi_manga_id": "abc123"}],
+  "chapter_assignments": [{"comic_id": 1, "source_id": 1, "chapter_number": 1.0, "volume_number": null,
+                            "suwayomi_manga_id": "abc123", "suwayomi_chapter_id": "ch-1",
+                            "download_status": "done", "is_active": true, "chapter_published_at": "...",
+                            "downloaded_at": "...", "library_path": "/library/...", "relocation_status": "done",
+                            "source_chapter_name": null, "source_manga_title": null, "retry_count": 0}]
+}
+```
+
+`_id` values are backup-internal sequential integers used to link child records. They are **not** DB surrogate keys and are discarded on import.
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + blob download in the browser (native `<a href>` cannot send `Authorization` headers).
+
+**Response** — `200` with appropriate content type and `Content-Disposition: attachment` header.
+
+**Error Cases**
+- `401 Unauthorized`
+
+---
+
+### `POST /api/settings/import/preview`
+
+Parse a backup file and return a diff against the current DB without writing anything.
+
+**Request** — `multipart/form-data`:
+
+| Field | Type | Description |
+|---|---|---|
+| `file` | file | Backup zip (or JSON) to upload |
+| `path` | string | Alternative: path on the server to load from |
+
+Exactly one of `file` or `path` must be provided.
+
+**Response `200`**
+
+```json
+{
+  "source_conflicts": [
+    {"backup_id": 1, "suwayomi_source_id": "en.mangadex", "name": "MangaDex",
+     "import_priority": 2, "import_enabled": true,
+     "existing_priority": 1, "existing_enabled": true}
+  ],
+  "comic_conflicts": [
+    {"backup_id": 1, "title": "Bleach", "existing_id": 7,
+     "import_chapters": 366, "import_aliases": 1, "import_pins": 2,
+     "existing_has_cover": true, "import_has_cover": true}
+  ],
+  "new_sources": [{"backup_id": 2, "suwayomi_source_id": "en.webtoons", "name": "Webtoons"}],
+  "new_comics": [{"backup_id": 3, "title": "Vinland Saga", "import_chapters": 200,
+                  "import_aliases": 0, "import_pins": 1, "import_has_cover": false}],
+  "totals": {"sources": 3, "comics": 12, "chapters": 1840, "covers": 8}
+}
+```
+
+- **`source_conflicts`** — sources where `suwayomi_source_id` already exists but `priority` or `enabled` differ.
+- **`comic_conflicts`** — comics whose `title` already exists in the DB. One entry per `(backup comic, existing comic)` pair (multiple matches possible if titles collide).
+- **`new_sources`** / **`new_comics`** — records that will be created without conflict.
+
+**Error Cases**
+- `401 Unauthorized`
+- `422 Unprocessable Entity` — not a valid zip or JSON file, or neither `file` nor `path` provided.
+
+---
+
+### `POST /api/settings/import/apply`
+
+Apply a backup with user-supplied conflict resolutions. All changes are committed in a single transaction.
+
+**Request** — `multipart/form-data`:
+
+| Field | Type | Description |
+|---|---|---|
+| `file` | file | Backup zip (re-upload from preview) |
+| `path` | string | Alternative: server-side path |
+| `source_resolutions` | JSON string | List of source resolution objects |
+| `comic_resolutions` | JSON string | List of comic resolution objects |
+
+**`source_resolutions`** — one entry per source in `source_conflicts`; new sources are always created:
+```json
+[{"backup_id": 1, "action": "overwrite"}]
+```
+`action`: `"overwrite"` (update priority/enabled from backup) or `"skip"` (keep existing).
+
+**`comic_resolutions`** — one entry per comic in both `comic_conflicts` and `new_comics`:
+```json
+[
+  {"backup_id": 1, "action": "merge", "target_id": 7, "replace_cover": false},
+  {"backup_id": 3, "action": "create", "title_override": null},
+  {"backup_id": 5, "action": "create", "title_override": "Bleach (Remaster)"},
+  {"backup_id": 9, "action": "skip"}
+]
+```
+
+| Field | Required for | Description |
+|---|---|---|
+| `action` | all | `"merge"` / `"create"` / `"skip"` |
+| `target_id` | `merge` | DB `id` of the existing comic to merge into |
+| `title_override` | `create` (optional) | Rename the imported comic on creation |
+| `replace_cover` | `merge` (optional) | If `true`, overwrite existing cover with imported cover. Default `false`. |
+
+**Merge behaviour**: adds any aliases, pins, and chapter assignments (by `suwayomi_chapter_id`) not already present on the target comic. Never duplicates. Cover: written only if target has none (unless `replace_cover=true`).
+
+**Response `200`**
+
+```json
+{"comics": 3, "chapters": 1840, "covers": 2, "skipped": 12}
+```
+
+**Error Cases**
+- `401 Unauthorized`
+- `422 Unprocessable Entity` — malformed zip/JSON or invalid resolution objects.
+
+---
+
 ## Sources
 
 ### `GET /api/sources`

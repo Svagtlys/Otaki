@@ -914,6 +914,160 @@ async def replace_pins(
     ]
 
 
+@router.post("/{comic_id}/force-upgrade")
+async def force_upgrade_comic(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> StreamingResponse:
+    """Force an upgrade check for all chapters of a comic.
+
+    Streams SSE events as each candidate is queued:
+      data: {"type": "chapter", "chapter_number": 1.0, "old_source": "...", "new_source": "..."}
+      data: {"type": "done", "queued": N}
+      data: {"type": "error", "detail": "..."}   # fatal error only
+    """
+    async def generate():
+        comic = await db.get(Comic, comic_id)
+        if comic is None:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Comic not found'})}\n\n"
+            return
+
+        try:
+            candidates = await source_selector.find_upgrade_candidates(comic, db)
+        except Exception as exc:
+            reason = suwayomi.classify_error(exc)
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'Suwayomi is unreachable ({reason})'})}\n\n"
+            return
+
+        queued = 0
+        enqueue_by_manga: dict[str, list[str]] = {}
+
+        for assignment, candidate_source, manga_id, ch_data in candidates:
+            upgrade = ChapterAssignment(
+                comic_id=comic_id,
+                chapter_number=assignment.chapter_number,
+                volume_number=ch_data.get("volume_number"),
+                source_id=candidate_source.id,
+                suwayomi_manga_id=manga_id,
+                suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+                download_status=DownloadStatus.queued,
+                is_active=False,
+                chapter_published_at=ch_data["chapter_published_at"],
+                source_chapter_name=ch_data.get("source_chapter_name"),
+                source_manga_title=ch_data.get("source_manga_title"),
+            )
+            db.add(upgrade)
+            enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+            queued += 1
+            yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'old_source': assignment.source.name, 'new_source': candidate_source.name})}\n\n"
+
+        for manga_id, chapter_ids in enqueue_by_manga.items():
+            try:
+                await suwayomi.enqueue_downloads(chapter_ids)
+            except Exception as exc:
+                logger.warning(
+                    "force_upgrade_comic: enqueue_downloads failed for manga_id=%s: %r",
+                    manga_id,
+                    exc,
+                )
+
+        await db.commit()
+        yield f"data: {json.dumps({'type': 'done', 'queued': queued})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{comic_id}/chapters/{assignment_id}/force-upgrade")
+async def force_upgrade_chapter(
+    comic_id: int,
+    assignment_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> StreamingResponse:
+    """Force an upgrade check for a single chapter assignment.
+
+    Streams SSE events:
+      data: {"type": "chapter", "chapter_number": 1.0, "old_source": "...", "new_source": "..."}
+      data: {"type": "done", "queued": 0|1}
+      data: {"type": "error", "detail": "..."}
+    """
+    async def generate():
+        comic = await db.get(Comic, comic_id)
+        if comic is None:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Comic not found'})}\n\n"
+            return
+
+        result = await db.execute(
+            select(ChapterAssignment)
+            .where(
+                ChapterAssignment.id == assignment_id,
+                ChapterAssignment.comic_id == comic_id,
+                ChapterAssignment.is_active.is_(True),
+            )
+            .options(selectinload(ChapterAssignment.source))
+        )
+        assignment = result.scalar_one_or_none()
+        if assignment is None:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Assignment not found'})}\n\n"
+            return
+
+        try:
+            candidates = await source_selector.find_upgrade_candidates(comic, db)
+        except Exception as exc:
+            reason = suwayomi.classify_error(exc)
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'Suwayomi is unreachable ({reason})'})}\n\n"
+            return
+
+        match = next(
+            (c for c in candidates if c[0].id == assignment_id),
+            None,
+        )
+
+        if match is None:
+            yield f"data: {json.dumps({'type': 'done', 'queued': 0})}\n\n"
+            return
+
+        _, candidate_source, manga_id, ch_data = match
+        upgrade = ChapterAssignment(
+            comic_id=comic_id,
+            chapter_number=assignment.chapter_number,
+            volume_number=ch_data.get("volume_number"),
+            source_id=candidate_source.id,
+            suwayomi_manga_id=manga_id,
+            suwayomi_chapter_id=ch_data["suwayomi_chapter_id"],
+            download_status=DownloadStatus.queued,
+            is_active=False,
+            chapter_published_at=ch_data["chapter_published_at"],
+            source_chapter_name=ch_data.get("source_chapter_name"),
+            source_manga_title=ch_data.get("source_manga_title"),
+        )
+        db.add(upgrade)
+
+        try:
+            await suwayomi.enqueue_downloads([ch_data["suwayomi_chapter_id"]])
+        except Exception as exc:
+            logger.warning(
+                "force_upgrade_chapter: enqueue_downloads failed for assignment id=%d: %r",
+                assignment_id,
+                exc,
+            )
+
+        await db.commit()
+        yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'old_source': assignment.source.name, 'new_source': candidate_source.name})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'queued': 1})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.delete("/{comic_id}", status_code=204)
 async def delete_request(
     comic_id: int,

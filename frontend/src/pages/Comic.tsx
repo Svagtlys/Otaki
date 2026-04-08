@@ -84,6 +84,13 @@ export default function Comic() {
   const [reprocessResult, setReprocessResult] = useState<string | null>(null)
   const [reprocessLog, setReprocessLog] = useState<{ chapter_number: number; action: string }[]>([])
 
+  const [forceUpgrading, setForceUpgrading] = useState(false)
+  const [forceUpgradeError, setForceUpgradeError] = useState<string | null>(null)
+  const [forceUpgradeResult, setForceUpgradeResult] = useState<string | null>(null)
+  const [forceUpgradeLog, setForceUpgradeLog] = useState<{ chapter_number: number; old_source: string; new_source: string }[]>([])
+  const [upgradingChapterId, setUpgradingChapterId] = useState<number | null>(null)
+  const [chapterUpgradeMsgs, setChapterUpgradeMsgs] = useState<Record<number, string>>({})
+
   // Pin management state
   const [pinsOpen, setPinsOpen] = useState(false)
   const [removedPinIds, setRemovedPinIds] = useState<Set<number>>(new Set())
@@ -175,6 +182,66 @@ export default function Comic() {
       setReprocessError(extractDetail(err))
     } finally {
       setReprocessing(false)
+    }
+  }
+
+  async function handleForceUpgrade() {
+    setForceUpgrading(true)
+    setForceUpgradeError(null)
+    setForceUpgradeResult(null)
+    setForceUpgradeLog([])
+    try {
+      let queued = 0
+      await streamFetch(
+        `/api/requests/${comicId}/force-upgrade`,
+        { method: 'POST' },
+        (data) => {
+          if (data === '[DONE]') return
+          try {
+            const ev = JSON.parse(data)
+            if (ev.type === 'error') {
+              setForceUpgradeError(ev.detail)
+            } else if (ev.type === 'chapter') {
+              setForceUpgradeLog(prev => [...prev, { chapter_number: ev.chapter_number, old_source: ev.old_source, new_source: ev.new_source }])
+            } else if (ev.type === 'done') {
+              queued = ev.queued
+            }
+          } catch {
+            // ignore malformed SSE line
+          }
+        },
+      )
+      setForceUpgradeResult(queued > 0 ? `${queued} upgrade(s) queued.` : 'No upgrades available.')
+      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
+    } catch (err) {
+      setForceUpgradeError(extractDetail(err))
+    } finally {
+      setForceUpgrading(false)
+    }
+  }
+
+  async function handleForceUpgradeChapter(assignmentId: number) {
+    setUpgradingChapterId(assignmentId)
+    setChapterUpgradeMsgs(prev => ({ ...prev, [assignmentId]: '' }))
+    try {
+      let queued = 0
+      await streamFetch(
+        `/api/requests/${comicId}/chapters/${assignmentId}/force-upgrade`,
+        { method: 'POST' },
+        (data) => {
+          if (data === '[DONE]') return
+          try {
+            const ev = JSON.parse(data)
+            if (ev.type === 'done') queued = ev.queued
+          } catch { /* ignore */ }
+        },
+      )
+      setChapterUpgradeMsgs(prev => ({ ...prev, [assignmentId]: queued > 0 ? 'Upgrade queued' : 'No upgrade available' }))
+      await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
+    } catch (err) {
+      setChapterUpgradeMsgs(prev => ({ ...prev, [assignmentId]: extractDetail(err) }))
+    } finally {
+      setUpgradingChapterId(null)
     }
   }
 
@@ -777,6 +844,27 @@ export default function Comic() {
                 {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
               </div>
             )}
+            {comic.chapters.length > 0 && (
+              <div>
+                <button
+                  onClick={handleForceUpgrade}
+                  disabled={forceUpgrading}
+                  style={{ ...secondaryButtonStyle, opacity: forceUpgrading ? 0.6 : 1 }}
+                >
+                  {forceUpgrading ? 'Checking upgrades…' : 'Force upgrade'}
+                </button>
+                {(forceUpgrading || forceUpgradeLog.length > 0) && (
+                  <div style={reprocessLogStyle}>
+                    {forceUpgradeLog.map((entry, i) => (
+                      <div key={i}>⟳ Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
+                    ))}
+                    {forceUpgrading && <div style={{ color: '#999' }}>…</div>}
+                  </div>
+                )}
+                {forceUpgradeResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{forceUpgradeResult}</p>}
+                {forceUpgradeError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{forceUpgradeError}</p>}
+              </div>
+            )}
           </div>
 
           {/* Chapter table */}
@@ -789,6 +877,7 @@ export default function Comic() {
                 <th style={thStyle}>Status</th>
                 <th style={thStyle}>Relocation</th>
                 <th style={thStyle}>Library path</th>
+                <th style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
@@ -801,6 +890,21 @@ export default function Comic() {
                   <td style={tdStyle}>{ch.relocation_status}</td>
                   <td style={{ ...tdStyle, maxWidth: 280, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                     {ch.library_path ?? '—'}
+                  </td>
+                  <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                    {chapterUpgradeMsgs[ch.assignment_id] ? (
+                      <span style={{ fontSize: 11, color: chapterUpgradeMsgs[ch.assignment_id] === 'Upgrade queued' ? '#22c55e' : '#888' }}>
+                        {chapterUpgradeMsgs[ch.assignment_id]}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleForceUpgradeChapter(ch.assignment_id)}
+                        disabled={upgradingChapterId === ch.assignment_id}
+                        style={{ ...linkButtonStyle, fontSize: 11, opacity: upgradingChapterId === ch.assignment_id ? 0.5 : 1 }}
+                      >
+                        {upgradingChapterId === ch.assignment_id ? '…' : 'Upgrade'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

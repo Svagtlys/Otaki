@@ -1257,3 +1257,229 @@ async def test_reprocess_queued_poll_fails_reenqueues(logged_in_client, monkeypa
     done = _done_event(_parse_sse(r.text))
     assert done["queued"] == 1
     mock_enqueue.assert_awaited_once_with(["ch-pf1"])
+
+
+# ---------------------------------------------------------------------------
+# POST /{id}/force-upgrade tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_404_for_unknown_comic(logged_in_client):
+    r = await logged_in_client.post("/api/requests/99999/force-upgrade")
+    assert r.status_code == 200  # SSE always 200; error in stream
+    events = _parse_sse(r.text)
+    assert any(e.get("type") == "error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_requires_auth(auth_client):
+    r = await auth_client.post("/api/requests/1/force-upgrade")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_emits_chapter_events_and_done(logged_in_client, monkeypatch):
+    """When a better source exists, force-upgrade queues an upgrade assignment and emits events."""
+    from app import database
+    from app.services import source_selector, suwayomi
+    from sqlalchemy.orm import selectinload
+
+    source_low = await _add_source(name="Low Priority", suwayomi_source_id="src-fu-lo", priority=2)
+    source_high = await _add_source(name="High Priority", suwayomi_source_id="src-fu-hi", priority=1)
+    comic = await _add_comic(title="Force Upgrade Comic")
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=1.0, source_id=source_low.id,
+            suwayomi_manga_id="m-fu1", suwayomi_chapter_id="ch-fu1",
+            download_status=DownloadStatus.done, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.done,
+        )
+        db.add(a)
+        await db.commit()
+        # Re-load with source eagerly so it remains accessible after session closes
+        result = await db.execute(
+            select(ChapterAssignment).where(ChapterAssignment.id == a.id)
+            .options(selectinload(ChapterAssignment.source))
+        )
+        assignment = result.scalar_one()
+
+    now = datetime.now(timezone.utc)
+    mock_candidates = AsyncMock(return_value=[(
+        assignment,
+        source_high,
+        "m-fu1",
+        {
+            "suwayomi_chapter_id": "ch-fu1-hi",
+            "chapter_published_at": now,
+            "volume_number": None,
+            "source_chapter_name": "Chapter 1",
+            "source_manga_title": "Force Upgrade Comic",
+        },
+    )])
+    monkeypatch.setattr(source_selector, "find_upgrade_candidates", mock_candidates)
+    mock_enqueue = AsyncMock()
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/force-upgrade")
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    chapter_events = [e for e in events if e.get("type") == "chapter"]
+    assert len(chapter_events) == 1
+    assert chapter_events[0]["chapter_number"] == 1.0
+    assert chapter_events[0]["old_source"] == "Low Priority"
+    assert chapter_events[0]["new_source"] == "High Priority"
+    done = _done_event(events)
+    assert done["queued"] == 1
+    mock_enqueue.assert_awaited_once_with(["ch-fu1-hi"])
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_no_candidates_emits_done_zero(logged_in_client, monkeypatch):
+    """When no better source is found, done event has queued=0 and no chapter events."""
+    from app.services import source_selector, suwayomi
+
+    source = await _add_source(name="Only Source", suwayomi_source_id="src-fu-only", priority=1)
+    comic = await _add_comic(title="Force Upgrade No Candidates")
+    await _add_assignment(comic.id, source.id)
+
+    monkeypatch.setattr(source_selector, "find_upgrade_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/force-upgrade")
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    assert not any(e.get("type") == "chapter" for e in events)
+    assert _done_event(events)["queued"] == 0
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_error_when_suwayomi_unreachable(logged_in_client, monkeypatch):
+    """If find_upgrade_candidates raises (Suwayomi down), emits an error event."""
+    import httpx
+    from app.services import source_selector
+
+    source = await _add_source(name="Src", suwayomi_source_id="src-fu-unr", priority=1)
+    comic = await _add_comic(title="Force Upgrade Unreachable")
+    await _add_assignment(comic.id, source.id)
+
+    monkeypatch.setattr(
+        source_selector,
+        "find_upgrade_candidates",
+        AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+    )
+
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/force-upgrade")
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert len(error_events) == 1
+    assert "unreachable" in error_events[0]["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /{id}/chapters/{assignment_id}/force-upgrade tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_chapter_404_unknown_comic(logged_in_client):
+    r = await logged_in_client.post("/api/requests/99999/chapters/1/force-upgrade")
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    assert any(e.get("type") == "error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_chapter_404_unknown_assignment(logged_in_client):
+    comic = await _add_comic(title="Force Upgrade Chapter 404")
+    r = await logged_in_client.post(f"/api/requests/{comic.id}/chapters/99999/force-upgrade")
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    assert any(e.get("type") == "error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_chapter_requires_auth(auth_client):
+    r = await auth_client.post("/api/requests/1/chapters/1/force-upgrade")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_chapter_queues_upgrade(logged_in_client, monkeypatch):
+    """When a better source exists for the specific chapter, queues an upgrade and emits done queued=1."""
+    from app import database
+    from app.services import source_selector, suwayomi
+    from sqlalchemy.orm import selectinload
+
+    source_low = await _add_source(name="Low", suwayomi_source_id="src-fuc-lo", priority=2)
+    source_high = await _add_source(name="High", suwayomi_source_id="src-fuc-hi", priority=1)
+    comic = await _add_comic(title="Force Upgrade Chapter Comic")
+
+    async with database.AsyncSessionLocal() as db:
+        a = ChapterAssignment(
+            comic_id=comic.id, chapter_number=2.0, source_id=source_low.id,
+            suwayomi_manga_id="m-fuc1", suwayomi_chapter_id="ch-fuc1",
+            download_status=DownloadStatus.done, is_active=True,
+            chapter_published_at=datetime.now(timezone.utc),
+            relocation_status=RelocationStatus.done,
+        )
+        db.add(a)
+        await db.commit()
+        result = await db.execute(
+            select(ChapterAssignment).where(ChapterAssignment.id == a.id)
+            .options(selectinload(ChapterAssignment.source))
+        )
+        assignment = result.scalar_one()
+
+    now = datetime.now(timezone.utc)
+    mock_candidates = AsyncMock(return_value=[(
+        assignment,
+        source_high,
+        "m-fuc1",
+        {
+            "suwayomi_chapter_id": "ch-fuc1-hi",
+            "chapter_published_at": now,
+            "volume_number": None,
+            "source_chapter_name": "Chapter 2",
+            "source_manga_title": "Force Upgrade Chapter Comic",
+        },
+    )])
+    monkeypatch.setattr(source_selector, "find_upgrade_candidates", mock_candidates)
+    mock_enqueue = AsyncMock()
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
+
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/chapters/{assignment.id}/force-upgrade"
+    )
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    chapter_events = [e for e in events if e.get("type") == "chapter"]
+    assert len(chapter_events) == 1
+    assert chapter_events[0]["chapter_number"] == 2.0
+    done = _done_event(events)
+    assert done["queued"] == 1
+    mock_enqueue.assert_awaited_once_with(["ch-fuc1-hi"])
+
+
+@pytest.mark.asyncio
+async def test_force_upgrade_chapter_no_candidate_done_zero(logged_in_client, monkeypatch):
+    """When this chapter has no upgrade candidate, done has queued=0."""
+    from app.services import source_selector, suwayomi
+
+    source = await _add_source(name="Only", suwayomi_source_id="src-fuc-only", priority=1)
+    comic = await _add_comic(title="Force Upgrade Chapter No Candidate")
+    assignment = await _add_assignment(comic.id, source.id, chapter_number=3.0)
+
+    monkeypatch.setattr(source_selector, "find_upgrade_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
+
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/chapters/{assignment.id}/force-upgrade"
+    )
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    assert _done_event(events)["queued"] == 0
+    assert not any(e.get("type") == "chapter" for e in events)

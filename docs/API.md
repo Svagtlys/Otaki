@@ -691,6 +691,54 @@ data: [DONE]
 
 ---
 
+### `POST /api/requests/{id}/force-upgrade`
+
+Immediately run an upgrade check for all active chapters of a comic, queuing a new `ChapterAssignment` (with `is_active=False`) for every chapter where a higher-priority source is now available. The actual swap happens when the upgrade download completes (handled by `chapter_event_handler`).
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource`.
+
+**Response `200 text/event-stream`**
+
+```
+data: {"type": "chapter", "chapter_number": 3, "old_source": "Source A", "new_source": "Source B"}
+data: {"type": "done", "queued": 1}
+data: [DONE]
+```
+
+- **`chapter` event** — emitted for each chapter where an upgrade was queued.
+- **`done` event** — final summary; `queued` is 0 if no better sources were found.
+- **`error` event** — `{"type": "error", "detail": "..."}` if the comic is not found or Suwayomi is unreachable.
+
+---
+
+### `POST /api/requests/{id}/chapters/{assignment_id}/force-upgrade`
+
+Same as the bulk force-upgrade above, but scoped to a single active `ChapterAssignment`. Returns `queued: 0` if no better source exists for that chapter.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+| `assignment_id` | int | Active `ChapterAssignment` ID |
+
+**Auth:** Bearer token via `Authorization` header.
+
+**Response `200 text/event-stream`**
+
+Same event shape as the bulk endpoint. At most one `chapter` event is emitted.
+
+**Error Cases (in-stream)**
+- `{"type": "error"}` — comic not found, assignment not found or not active, or Suwayomi unreachable.
+
+---
+
 ### `DELETE /api/requests/{id}`
 
 Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, and the `Comic` row. Optionally deletes library files.

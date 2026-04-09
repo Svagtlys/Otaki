@@ -209,6 +209,7 @@ export default function Settings() {
 
   // Import state
   const importFileRef = useRef<HTMLInputElement>(null)
+  const previewPanelRef = useRef<HTMLDivElement>(null)
   const [importServerPath, setImportServerPath] = useState('')
   const [previewing, setPreviewing] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -278,6 +279,7 @@ export default function Settings() {
       }
       const data: PreviewResult = await res.json()
       setPreview(data)
+      setTimeout(() => previewPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
       // Default resolutions
       const srcRes: Record<number, 'overwrite' | 'skip'> = {}
       for (const c of data.source_conflicts) srcRes[c.backup_id] = 'skip'
@@ -534,7 +536,7 @@ export default function Settings() {
 
             {/* Preview panel */}
             {preview && (
-              <div style={{ marginTop: 20, border: '1px solid #ddd', borderRadius: 6 }}>
+              <div ref={previewPanelRef} style={{ marginTop: 20, border: '1px solid #ddd', borderRadius: 6 }}>
                 {/* Tabs */}
                 <div style={{ display: 'flex', borderBottom: '1px solid #ddd' }}>
                   {(['conflicts', 'new', 'all'] as const).map(tab => {

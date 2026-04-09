@@ -222,27 +222,6 @@ export default function Settings() {
   const [applyError, setApplyError] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<{ comics: number; chapters: number; covers: number; skipped: number } | null>(null)
 
-  const [scanning, setScanning] = useState(false)
-  const [scanResult, setScanResult] = useState<{ scanned: number; found: number; relocated: number; failed: number } | null>(null)
-  const [scanError, setScanError] = useState<string | null>(null)
-
-  async function handleScanDownloads() {
-    setScanning(true)
-    setScanResult(null)
-    setScanError(null)
-    try {
-      const data = await apiFetch<{ scanned: number; found: number; relocated: number; failed: number }>(
-        '/api/requests/scan-downloads',
-        { method: 'POST' },
-      )
-      setScanResult(data)
-    } catch (err) {
-      setScanError(extractDetail(err))
-    } finally {
-      setScanning(false)
-    }
-  }
-
   async function handleExport() {
     setExporting(true)
     setExportError(null)
@@ -759,20 +738,12 @@ export default function Settings() {
           </section>
 
           <section>
-            <h2>Scan existing downloads</h2>
+            <h2>Suwayomi downloads</h2>
             <p style={{ fontSize: 14, color: '#555', marginBottom: 12 }}>
-              Scan Suwayomi's download directory for CBZ files that match pending chapter assignments
-              and relocate them into the library. Runs automatically on startup.
+              Browse Suwayomi's download directory, reconcile pending assignments, and add requests for unmatched titles.
+              Also runs automatically on startup.
             </p>
-            <button onClick={handleScanDownloads} disabled={scanning}>
-              {scanning ? 'Scanning…' : 'Scan now'}
-            </button>
-            {scanError && <p style={{ color: 'red', fontSize: 13, marginTop: 8 }}>{scanError}</p>}
-            {scanResult && (
-              <div style={{ marginTop: 12, padding: '10px 14px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 4, fontSize: 13 }}>
-                Scan complete: {scanResult.found} found, {scanResult.relocated} relocated, {scanResult.failed} failed out of {scanResult.scanned} scanned.
-              </div>
-            )}
+            <button onClick={() => navigate('/scan-downloads')}>Open scan page</button>
           </section>
         </>
       )}

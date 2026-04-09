@@ -8,6 +8,7 @@ import Search from './pages/Search'
 import Comic from './pages/Comic'
 import Sources from './pages/Sources'
 import Settings from './pages/Settings'
+import ScanDownloads from './pages/ScanDownloads'
 
 function RequireAuth() {
   const { isAuthenticated } = useAuth()
@@ -53,6 +54,7 @@ export default function App() {
           <Route path="/comics/:id" element={<Comic />} />
           <Route path="/sources" element={<Sources />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/scan-downloads" element={<ScanDownloads />} />
         </Route>
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>

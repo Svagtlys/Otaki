@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, streamFetch, extractDetail } from '../api/client'
 
 // ---------------------------------------------------------------------------
@@ -28,9 +28,10 @@ interface SourceError {
 
 export default function Search() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   // Step 1 state
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(searchParams.get('q') ?? '')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
 

@@ -1483,3 +1483,45 @@ async def test_force_upgrade_chapter_no_candidate_done_zero(logged_in_client, mo
     events = _parse_sse(r.text)
     assert _done_event(events)["queued"] == 0
     assert not any(e.get("type") == "chapter" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# POST /scan-downloads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_requires_auth(auth_client):
+    r = await auth_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_returns_summary(logged_in_client, monkeypatch):
+    from app.services import download_scanner
+
+    monkeypatch.setattr(
+        download_scanner,
+        "scan_existing_downloads",
+        AsyncMock(return_value={"scanned": 5, "found": 3, "relocated": 2, "failed": 1}),
+    )
+
+    r = await logged_in_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["scanned"] == 5
+    assert data["found"] == 3
+    assert data["relocated"] == 2
+    assert data["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_empty_when_no_pending(logged_in_client):
+    """With no pending assignments in the DB, scan returns all zeros."""
+    r = await logged_in_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["scanned"] == 0
+    assert data["found"] == 0
+    assert data["relocated"] == 0
+    assert data["failed"] == 0

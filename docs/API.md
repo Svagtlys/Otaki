@@ -739,6 +739,27 @@ Same event shape as the bulk endpoint. At most one `chapter` event is emitted.
 
 ---
 
+### `POST /api/requests/scan-downloads`
+
+Scan Suwayomi's download directory for CBZ files that match pending chapter assignments and run them through the relocate pipeline. Useful for bootstrapping an Otaki install against an existing Suwayomi instance that already has files on disk. Also runs automatically on Otaki startup.
+
+**Auth:** Authenticated user required.
+
+**Response `200`**
+
+```json
+{"scanned": 12, "found": 5, "relocated": 4, "failed": 1}
+```
+
+| Field | Description |
+|---|---|
+| `scanned` | Total pending assignments examined |
+| `found` | Assignments where a matching CBZ was found in the staging directory |
+| `relocated` | Files successfully moved to the library |
+| `failed` | Files found but relocation failed (logged server-side) |
+
+---
+
 ### `DELETE /api/requests/{id}`
 
 Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, and the `Comic` row. Optionally deletes library files.

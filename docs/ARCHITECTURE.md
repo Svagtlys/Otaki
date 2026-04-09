@@ -381,6 +381,15 @@ Modifies CBZ files to remove banners. **Mutates files** — always backs up firs
 
 - `crop_chapter(cbz_path, scan_result)` — renames original to `*.cbz.orig`, re-packs CBZ with first page top-cropped and/or last page bottom-cropped at the boundary detected by `scan_result`. Boundary detection uses pixel-row variance: the first row with high variance after the uniform banner region.
 
+#### `backend/app/services/download_scanner.py`
+Scans Suwayomi's download directory for CBZ files that arrived while Otaki was offline and reconciles them with known `ChapterAssignment` rows.
+
+- `scan_existing_downloads(db) → dict` — queries all `ChapterAssignment` rows where `relocation_status != done` and `source_chapter_name IS NOT NULL`. For each, calls `file_relocator.find_staging_path()`. If a file is found, marks `download_status=done`, then runs `file_relocator.relocate()` (first download) or `file_relocator.replace_in_library()` (upgrade). Returns `{"scanned", "found", "relocated", "failed"}`.
+
+Called at application startup (in `main.py` lifespan, guarded by `SUWAYOMI_DOWNLOAD_PATH` and `LIBRARY_PATH` being set) and by `POST /api/requests/scan-downloads`.
+
+---
+
 #### `backend/app/services/file_relocator.py`
 Moves settled chapters from Suwayomi's staging folder to the final library. Radarr/Sonarr-style.
 

@@ -739,6 +739,29 @@ Same event shape as the bulk endpoint. At most one `chapter` event is emitted.
 
 ---
 
+### `GET /api/requests/scan-downloads/all`
+
+Walk `SUWAYOMI_DOWNLOAD_PATH` and classify every manga directory as matched (a known comic request exists) or unmatched (no comic request found). No DB writes — safe to call repeatedly.
+
+**Auth:** Authenticated user required.
+
+**Response `200`**
+
+```json
+{
+  "matched": [
+    {"source_name": "MangaDex", "manga_dir": "One Piece", "chapter_count": 1100, "comic_id": 3, "comic_title": "One Piece"}
+  ],
+  "unmatched": [
+    {"source_name": "Webtoons", "manga_dir": "Tower of God", "chapter_count": 550}
+  ]
+}
+```
+
+Matching uses the same fuzzy title logic as `source_selector` (exact match → regex tolerating Suwayomi's special-character sanitization). Comic aliases are also checked.
+
+---
+
 ### `POST /api/requests/scan-downloads`
 
 Scan Suwayomi's download directory for CBZ files that match pending chapter assignments and run them through the relocate pipeline. Useful for bootstrapping an Otaki install against an existing Suwayomi instance that already has files on disk. Also runs automatically on Otaki startup.
@@ -748,7 +771,15 @@ Scan Suwayomi's download directory for CBZ files that match pending chapter assi
 **Response `200`**
 
 ```json
-{"scanned": 12, "found": 5, "relocated": 4, "failed": 1}
+{
+  "scanned": 12,
+  "found": 5,
+  "relocated": 4,
+  "failed": 1,
+  "results": [
+    {"comic_title": "One Piece", "chapter_number": 1, "source_name": "MangaDex", "chapter_name": "Chapter 001", "status": "relocated"}
+  ]
+}
 ```
 
 | Field | Description |
@@ -757,6 +788,7 @@ Scan Suwayomi's download directory for CBZ files that match pending chapter assi
 | `found` | Assignments where a matching CBZ was found in the staging directory |
 | `relocated` | Files successfully moved to the library |
 | `failed` | Files found but relocation failed (logged server-side) |
+| `results` | Per-file detail for each found file; `status` is `"relocated"` or `"failed"` |
 
 ---
 

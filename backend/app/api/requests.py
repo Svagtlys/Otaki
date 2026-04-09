@@ -211,6 +211,34 @@ async def _create_assignments_and_enqueue(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/scan-downloads/all")
+async def scan_all(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> dict:
+    """Walk SUWAYOMI_DOWNLOAD_PATH and classify every manga directory.
+
+    Returns matched (known comic) and unmatched (no comic request) entries.
+    No DB writes — safe to call repeatedly.
+    """
+    from ..services.download_scanner import scan_all_downloads
+    return await scan_all_downloads(db)
+
+
+@router.post("/scan-downloads")
+async def scan_downloads(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> dict:
+    """Scan Suwayomi's download directory for CBZ files matching pending assignments.
+
+    Finds files that arrived while Otaki was offline and runs them through the
+    relocate pipeline. Also triggered automatically on startup.
+    """
+    from ..services.download_scanner import scan_existing_downloads
+    return await scan_existing_downloads(db)
+
+
 @router.post("", status_code=201, response_model=CreateRequestResponse)
 async def create_request(
     body: RequestBody,

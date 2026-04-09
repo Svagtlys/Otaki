@@ -736,6 +736,15 @@ export default function Settings() {
               </div>
             )}
           </section>
+
+          <section>
+            <h2>Suwayomi downloads</h2>
+            <p style={{ fontSize: 14, color: '#555', marginBottom: 12 }}>
+              Browse Suwayomi's download directory, reconcile pending assignments, and add requests for unmatched titles.
+              Also runs automatically on startup.
+            </p>
+            <button onClick={() => navigate('/scan-downloads')}>Open scan page</button>
+          </section>
         </>
       )}
     </div>

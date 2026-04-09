@@ -1483,3 +1483,89 @@ async def test_force_upgrade_chapter_no_candidate_done_zero(logged_in_client, mo
     events = _parse_sse(r.text)
     assert _done_event(events)["queued"] == 0
     assert not any(e.get("type") == "chapter" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# POST /scan-downloads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_requires_auth(auth_client):
+    r = await auth_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_returns_summary(logged_in_client, monkeypatch):
+    from app.services import download_scanner
+
+    monkeypatch.setattr(
+        download_scanner,
+        "scan_existing_downloads",
+        AsyncMock(return_value={"scanned": 5, "found": 3, "relocated": 2, "failed": 1, "results": []}),
+    )
+
+    r = await logged_in_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["scanned"] == 5
+    assert data["found"] == 3
+    assert data["relocated"] == 2
+    assert data["failed"] == 1
+    assert "results" in data
+
+
+@pytest.mark.asyncio
+async def test_scan_downloads_empty_when_no_pending(logged_in_client):
+    """With no pending assignments in the DB, scan returns all zeros."""
+    r = await logged_in_client.post("/api/requests/scan-downloads")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["scanned"] == 0
+    assert data["found"] == 0
+    assert data["relocated"] == 0
+    assert data["failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /scan-downloads/all
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_all_requires_auth(auth_client):
+    r = await auth_client.get("/api/requests/scan-downloads/all")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_scan_all_returns_structure(logged_in_client, monkeypatch):
+    from app.services import download_scanner
+
+    monkeypatch.setattr(
+        download_scanner,
+        "scan_all_downloads",
+        AsyncMock(return_value={"matched": [], "unmatched": []}),
+    )
+
+    r = await logged_in_client.get("/api/requests/scan-downloads/all")
+    assert r.status_code == 200
+    data = r.json()
+    assert "matched" in data
+    assert "unmatched" in data
+
+
+@pytest.mark.asyncio
+async def test_scan_all_no_download_path_returns_empty(logged_in_client, monkeypatch):
+    """When SUWAYOMI_DOWNLOAD_PATH resolves to a nonexistent path, scan_all returns empty lists."""
+    from app.services import download_scanner
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "SUWAYOMI_DOWNLOAD_PATH", "/nonexistent/path/that/does/not/exist")
+
+    r = await logged_in_client.get("/api/requests/scan-downloads/all")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["matched"] == []
+    assert data["unmatched"] == []

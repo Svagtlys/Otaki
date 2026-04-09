@@ -43,6 +43,14 @@ interface ComicDetail {
   chapters: Chapter[]
 }
 
+interface SourceOverrideEntry {
+  source_id: number
+  source_name: string
+  global_priority: number
+  effective_priority: number
+  is_overridden: boolean
+}
+
 interface SourcePin {
   id: number
   source_id: number
@@ -90,6 +98,14 @@ export default function Comic() {
   const [forceUpgradeLog, setForceUpgradeLog] = useState<{ chapter_number: number; old_source: string; new_source: string }[]>([])
   const [upgradingChapterId, setUpgradingChapterId] = useState<number | null>(null)
   const [chapterUpgradeMsgs, setChapterUpgradeMsgs] = useState<Record<number, string>>({})
+
+  // Source overrides state
+  const [overridesOpen, setOverridesOpen] = useState(false)
+  const [overrideDraft, setOverrideDraft] = useState<SourceOverrideEntry[] | null>(null)
+  const [overrideSaving, setOverrideSaving] = useState(false)
+  const [overrideError, setOverrideError] = useState<string | null>(null)
+  const [overrideResult, setOverrideResult] = useState<string | null>(null)
+  const dragIndexRef = useRef<number | null>(null)
 
   // Pin management state
   const [pinsOpen, setPinsOpen] = useState(false)
@@ -141,7 +157,13 @@ export default function Comic() {
   const { data: sources = [] } = useQuery<Source[]>({
     queryKey: ['sources'],
     queryFn: () => apiFetch<Source[]>('/api/sources'),
-    enabled: pinsOpen,
+    enabled: pinsOpen || overridesOpen,
+  })
+
+  const { data: sourceOverrides = [] } = useQuery<SourceOverrideEntry[]>({
+    queryKey: ['comic-source-overrides', comicId],
+    queryFn: () => apiFetch<SourceOverrideEntry[]>(`/api/requests/${comicId}/source-overrides`),
+    enabled: comicId > 0 && overridesOpen,
   })
 
   async function handleReprocess() {
@@ -182,6 +204,73 @@ export default function Comic() {
       setReprocessError(extractDetail(err))
     } finally {
       setReprocessing(false)
+    }
+  }
+
+  function openOverrides() {
+    setOverridesOpen(true)
+    setOverrideDraft(null)
+    setOverrideError(null)
+    setOverrideResult(null)
+  }
+
+  // Called once sourceOverrides loads — initialise draft from server data
+  function initOverrideDraft(entries: SourceOverrideEntry[]) {
+    if (overrideDraft === null) setOverrideDraft([...entries])
+  }
+
+  function handleDragStart(index: number) {
+    dragIndexRef.current = index
+  }
+
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault()
+    const from = dragIndexRef.current
+    if (from === null || from === index || overrideDraft === null) return
+    const next = [...overrideDraft]
+    const [moved] = next.splice(from, 1)
+    next.splice(index, 0, moved)
+    dragIndexRef.current = index
+    setOverrideDraft(next)
+  }
+
+  function handleDragEnd() {
+    dragIndexRef.current = null
+  }
+
+  async function handleSaveOverrides() {
+    if (!overrideDraft) return
+    setOverrideSaving(true)
+    setOverrideError(null)
+    setOverrideResult(null)
+    try {
+      await apiFetch(`/api/requests/${comicId}/source-overrides`, {
+        method: 'PUT',
+        body: JSON.stringify({ source_ids: overrideDraft.map(e => e.source_id) }),
+      })
+      await queryClient.invalidateQueries({ queryKey: ['comic-source-overrides', comicId] })
+      setOverrideDraft(null)
+      setOverrideResult('Source order saved.')
+    } catch (err) {
+      setOverrideError(extractDetail(err))
+    } finally {
+      setOverrideSaving(false)
+    }
+  }
+
+  async function handleResetOverrides() {
+    setOverrideSaving(true)
+    setOverrideError(null)
+    setOverrideResult(null)
+    try {
+      await apiFetch(`/api/requests/${comicId}/source-overrides`, { method: 'DELETE' })
+      await queryClient.invalidateQueries({ queryKey: ['comic-source-overrides', comicId] })
+      setOverrideDraft(null)
+      setOverrideResult('Overrides removed — global priorities restored.')
+    } catch (err) {
+      setOverrideError(extractDetail(err))
+    } finally {
+      setOverrideSaving(false)
     }
   }
 
@@ -803,6 +892,77 @@ export default function Comic() {
                 {pinError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{pinError}</p>}
               </div>
             )}
+          </div>
+
+          {/* Source priority overrides */}
+          <div style={{ marginBottom: 24 }}>
+            <button
+              onClick={() => overridesOpen ? setOverridesOpen(false) : openOverrides()}
+              style={{ ...linkButtonStyle, fontSize: 12 }}
+            >
+              {overridesOpen ? 'Close source priorities' : 'Manage source priorities'}
+            </button>
+            {overridesOpen && (() => {
+              // Initialise draft once data arrives
+              if (overrideDraft === null && sourceOverrides.length > 0) initOverrideDraft(sourceOverrides)
+              const display = overrideDraft ?? sourceOverrides
+              return (
+                <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
+                  <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+                    Drag to reorder sources for this comic. Overridden positions are shown in blue.
+                    Changes take effect on the next upgrade check — use Force Upgrade to apply immediately.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
+                    {display.map((entry, index) => (
+                      <div
+                        key={entry.source_id}
+                        draggable
+                        onDragStart={() => handleDragStart(index)}
+                        onDragOver={e => handleDragOver(e, index)}
+                        onDragEnd={handleDragEnd}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '6px 10px', borderRadius: 4, fontSize: 13,
+                          background: '#fff', border: '1px solid #eee',
+                          cursor: 'grab', userSelect: 'none',
+                        }}
+                      >
+                        <span style={{ color: '#aaa', fontSize: 11 }}>⠿</span>
+                        <span style={{ width: 20, textAlign: 'right', fontSize: 12, color: '#888' }}>{index + 1}</span>
+                        <span style={{ flex: 1, fontWeight: entry.is_overridden || overrideDraft !== null ? 500 : 400 }}>
+                          {entry.source_name}
+                        </span>
+                        {entry.is_overridden && overrideDraft === null && (
+                          <span style={{ fontSize: 11, color: '#0070f3' }}>overridden</span>
+                        )}
+                        {overrideDraft === null && entry.is_overridden && (
+                          <span style={{ fontSize: 11, color: '#888' }}>global: {entry.global_priority}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={handleSaveOverrides}
+                      disabled={overrideSaving || overrideDraft === null}
+                      style={{ ...primaryButtonStyle, fontSize: 12, padding: '6px 12px', opacity: (overrideSaving || overrideDraft === null) ? 0.6 : 1 }}
+                    >
+                      {overrideSaving ? 'Saving…' : 'Save order'}
+                    </button>
+                    <button
+                      onClick={handleResetOverrides}
+                      disabled={overrideSaving}
+                      style={{ ...linkButtonStyle, fontSize: 12 }}
+                    >
+                      Reset to global defaults
+                    </button>
+                    <button onClick={() => setOverridesOpen(false)} style={{ ...linkButtonStyle, fontSize: 12, color: '#888' }}>Cancel</button>
+                  </div>
+                  {overrideResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{overrideResult}</p>}
+                  {overrideError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{overrideError}</p>}
+                </div>
+              )
+            })()}
           </div>
 
           {/* Re-discover / Reprocess */}

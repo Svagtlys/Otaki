@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from ..models.chapter_assignment import ChapterAssignment
 from ..models.comic import Comic
 from ..models.comic_alias import ComicAlias
+from ..models.comic_source_override import ComicSourceOverride
 from ..models.comic_source_pin import ComicSourcePin
 from ..models.source import Source
 from . import suwayomi
@@ -27,10 +28,16 @@ def _find_matching_result(results: list[dict], titles: list[str]) -> dict | None
 async def effective_priority(source: Source, comic: Comic, db: AsyncSession) -> int:
     """Return the effective priority of a source for a given comic.
 
-    Currently returns source.priority directly. Stubbed as async so callers
-    need no changes when 1.3 adds ComicSourceOverride lookup.
+    If a ComicSourceOverride row exists for (comic_id, source_id), returns
+    priority_override. Otherwise falls back to source.priority.
     """
-    return source.priority
+    override = await db.scalar(
+        select(ComicSourceOverride).where(
+            ComicSourceOverride.comic_id == comic.id,
+            ComicSourceOverride.source_id == source.id,
+        )
+    )
+    return override.priority_override if override is not None else source.priority
 
 
 async def build_chapter_source_map(

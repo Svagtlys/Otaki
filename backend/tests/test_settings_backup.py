@@ -634,3 +634,108 @@ async def test_apply_returns_summary(logged_in_client):
     assert "chapters" in result
     assert "covers" in result
     assert "skipped" in result
+
+
+# ---------------------------------------------------------------------------
+# Source overrides in backup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_includes_source_overrides(logged_in_client):
+    """Exported backup.json contains comic_source_overrides."""
+    from app import database
+    from app.models.comic_source_override import ComicSourceOverride
+
+    src = await _add_source(suwayomi_source_id="src-ov-exp-1", priority=1)
+    comic = await _add_comic(title="Override Export Comic")
+    async with database.AsyncSessionLocal() as db:
+        db.add(ComicSourceOverride(comic_id=comic.id, source_id=src.id, priority_override=99))
+        await db.commit()
+
+    r = await logged_in_client.get("/api/settings/export?format=json")
+    assert r.status_code == 200
+    data = r.json()
+    overrides = data.get("comic_source_overrides", [])
+    assert any(o["priority_override"] == 99 for o in overrides)
+
+
+@pytest.mark.asyncio
+async def test_apply_restores_source_overrides(logged_in_client):
+    """Importing a backup re-creates ComicSourceOverride rows."""
+    from app import database
+    from app.models.comic_source_override import ComicSourceOverride
+    from sqlalchemy import select
+
+    await _add_source(suwayomi_source_id="src-ov-imp-1", priority=1)
+    backup = {
+        "version": 1,
+        "sources": [{"_id": 1, "suwayomi_source_id": "src-ov-imp-1", "name": "Src", "priority": 1, "enabled": True}],
+        "comics": [{"_id": 1, "title": "Override Import Comic", "library_title": "Override Import Comic",
+                    "status": "tracking", "poll_override_days": None, "upgrade_override_days": None,
+                    "inferred_cadence_days": None, "created_at": None, "cover_file": None}],
+        "comic_aliases": [],
+        "comic_source_pins": [],
+        "comic_source_overrides": [{"comic_id": 1, "source_id": 1, "priority_override": 42}],
+        "chapter_assignments": [],
+    }
+    zdata = _make_zip(backup)
+    r = await logged_in_client.post(
+        "/api/settings/import/apply",
+        files={"file": ("backup.zip", zdata, "application/zip")},
+        data={"source_resolutions": "[]", "comic_resolutions": json.dumps([{"backup_id": 1, "action": "create"}])},
+    )
+    assert r.status_code == 200
+
+    async with database.AsyncSessionLocal() as db:
+        from app.models.comic import Comic as C
+        c = (await db.execute(select(C).where(C.title == "Override Import Comic"))).scalar_one()
+        rows = (await db.execute(
+            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == c.id)
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].priority_override == 42
+
+
+@pytest.mark.asyncio
+async def test_apply_skips_duplicate_source_overrides(logged_in_client):
+    """Merging into an existing comic does not duplicate override rows."""
+    from app import database
+    from app.models.comic_source_override import ComicSourceOverride
+    from sqlalchemy import select
+
+    src = await _add_source(suwayomi_source_id="src-ov-dup-1", priority=1)
+    comic = await _add_comic(title="Override Dup Comic")
+    async with database.AsyncSessionLocal() as db:
+        db.add(ComicSourceOverride(comic_id=comic.id, source_id=src.id, priority_override=5))
+        await db.commit()
+
+    backup = {
+        "version": 1,
+        "sources": [{"_id": 1, "suwayomi_source_id": "src-ov-dup-1", "name": "Src", "priority": 1, "enabled": True}],
+        "comics": [{"_id": 1, "title": "Override Dup Comic", "library_title": "Override Dup Comic",
+                    "status": "tracking", "poll_override_days": None, "upgrade_override_days": None,
+                    "inferred_cadence_days": None, "created_at": None, "cover_file": None}],
+        "comic_aliases": [],
+        "comic_source_pins": [],
+        "comic_source_overrides": [{"comic_id": 1, "source_id": 1, "priority_override": 99}],
+        "chapter_assignments": [],
+    }
+    zdata = _make_zip(backup)
+    r = await logged_in_client.post(
+        "/api/settings/import/apply",
+        files={"file": ("backup.zip", zdata, "application/zip")},
+        data={
+            "source_resolutions": "[]",
+            "comic_resolutions": json.dumps([{"backup_id": 1, "action": "merge", "target_id": comic.id}]),
+        },
+    )
+    assert r.status_code == 200
+
+    async with database.AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic.id)
+        )).scalars().all()
+    # Only the original row — import did not duplicate or overwrite
+    assert len(rows) == 1
+    assert rows[0].priority_override == 5

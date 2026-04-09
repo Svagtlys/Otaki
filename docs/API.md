@@ -923,6 +923,99 @@ A comic may have multiple pins for the same source (e.g. a series split across s
 
 ---
 
+### `GET /api/requests/{id}/source-overrides`
+
+List all enabled sources with their global priority and, if overridden for this comic, their effective (comic-local) priority.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+[
+  {
+    "source_id": 1,
+    "source_name": "MangaDex",
+    "global_priority": 1,
+    "effective_priority": 2,
+    "is_overridden": true
+  },
+  {
+    "source_id": 2,
+    "source_name": "Webtoons",
+    "global_priority": 2,
+    "effective_priority": 1,
+    "is_overridden": true
+  }
+]
+```
+
+Entries are sorted by `effective_priority` ascending. If no overrides exist for this comic, `effective_priority == global_priority` and `is_overridden == false` for all entries.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `PUT /api/requests/{id}/source-overrides`
+
+Replace the comic-local source priority order. The caller provides the full ordered list of all enabled source IDs; the backend assigns positions 1, 2, 3… in that order.
+
+Passing sources in a different order than the global ranking creates per-comic overrides. All existing overrides for this comic are deleted and replaced atomically.
+
+The list must contain every enabled source exactly once — passing a partial list or an unknown source ID returns `422`.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body**
+
+```json
+{ "source_ids": [2, 1, 3] }
+```
+
+`source_ids` must contain every enabled source ID exactly once, in the desired priority order (index 0 = highest priority).
+
+**Response `200`** — same shape as `GET /api/requests/{id}/source-overrides`, reflecting the new priorities.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+- `422 Unprocessable Entity` — list is incomplete, contains duplicates, or references an unknown source ID.
+
+---
+
+### `DELETE /api/requests/{id}/source-overrides`
+
+Remove all comic-local source priority overrides for this comic, reverting it to the global source priority order.
+
+Idempotent — returns `204` even if no overrides exist.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
 ## Settings
 
 ### `GET /api/settings`

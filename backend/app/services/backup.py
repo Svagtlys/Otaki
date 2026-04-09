@@ -23,6 +23,7 @@ from ..config import settings
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from ..models.comic import Comic
 from ..models.comic_alias import ComicAlias
+from ..models.comic_source_override import ComicSourceOverride
 from ..models.comic_source_pin import ComicSourcePin
 from ..models.source import Source
 
@@ -42,6 +43,7 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
     comics = (await db.execute(select(Comic).order_by(Comic.id))).scalars().all()
     aliases = (await db.execute(select(ComicAlias))).scalars().all()
     pins = (await db.execute(select(ComicSourcePin))).scalars().all()
+    overrides = (await db.execute(select(ComicSourceOverride))).scalars().all()
 
     q = select(ChapterAssignment)
     if not include_all_assignments:
@@ -101,6 +103,16 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
         if p.comic_id in comic_bid and p.source_id in source_bid
     ]
 
+    override_list = [
+        {
+            "comic_id": comic_bid[o.comic_id],
+            "source_id": source_bid[o.source_id],
+            "priority_override": o.priority_override,
+        }
+        for o in overrides
+        if o.comic_id in comic_bid and o.source_id in source_bid
+    ]
+
     assignment_list = [
         {
             "comic_id": comic_bid[a.comic_id],
@@ -131,6 +143,7 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
         "comics": comic_list,
         "comic_aliases": alias_list,
         "comic_source_pins": pin_list,
+        "comic_source_overrides": override_list,
         "chapter_assignments": assignment_list,
     }
 
@@ -454,6 +467,23 @@ async def apply_backup(
                 comic_id=target_comic_id,
                 source_id=target_source_id,
                 suwayomi_manga_id=p["suwayomi_manga_id"],
+            ))
+
+    # --- Source overrides ---
+    existing_override_pairs: set[tuple[int, int]] = {
+        (o.comic_id, o.source_id)
+        for o in (await db.execute(select(ComicSourceOverride))).scalars().all()
+    }
+    for o in backup.get("comic_source_overrides", []):
+        target_comic_id = comic_db_id.get(o["comic_id"])
+        target_source_id = source_db_id.get(o.get("source_id", 0))
+        if target_comic_id is None or target_source_id is None:
+            continue
+        if (target_comic_id, target_source_id) not in existing_override_pairs:
+            db.add(ComicSourceOverride(
+                comic_id=target_comic_id,
+                source_id=target_source_id,
+                priority_override=o["priority_override"],
             ))
 
     # --- Chapter assignments ---

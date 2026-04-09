@@ -28,6 +28,7 @@ from ..models.chapter_assignment import (
 )
 from ..models.comic import Comic, ComicStatus
 from ..models.comic_alias import ComicAlias
+from ..models.comic_source_override import ComicSourceOverride
 from ..models.comic_source_pin import ComicSourcePin
 from ..models.source import Source
 from ..models.user import User
@@ -1066,6 +1067,115 @@ async def force_upgrade_chapter(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class SourceOverrideEntry(BaseModel):
+    source_id: int
+    source_name: str
+    global_priority: int
+    effective_priority: int
+    is_overridden: bool
+
+
+class PutOverridesBody(BaseModel):
+    source_ids: list[int]
+
+
+@router.get("/{comic_id}/source-overrides", response_model=list[SourceOverrideEntry])
+async def list_source_overrides(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> list[SourceOverrideEntry]:
+    """Return all enabled sources in their effective priority order for this comic."""
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    sources = (await db.execute(select(Source).where(Source.enabled.is_(True)).order_by(Source.priority))).scalars().all()
+    overrides: dict[int, int] = {
+        row.source_id: row.priority_override
+        for row in (await db.execute(
+            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id)
+        )).scalars().all()
+    }
+
+    entries = [
+        SourceOverrideEntry(
+            source_id=s.id,
+            source_name=s.name,
+            global_priority=s.priority,
+            effective_priority=overrides.get(s.id, s.priority),
+            is_overridden=s.id in overrides,
+        )
+        for s in sources
+    ]
+    entries.sort(key=lambda e: (e.effective_priority, e.global_priority))
+    return entries
+
+
+@router.put("/{comic_id}/source-overrides", response_model=list[SourceOverrideEntry])
+async def put_source_overrides(
+    comic_id: int,
+    body: PutOverridesBody,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> list[SourceOverrideEntry]:
+    """Replace the per-comic source ordering with the supplied ranked list.
+
+    source_ids must be a complete ordered list of all enabled source IDs
+    (most preferred first). Priority values 1..N are assigned sequentially.
+    """
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    enabled_ids = {
+        s.id for s in (await db.execute(select(Source).where(Source.enabled.is_(True)))).scalars().all()
+    }
+    unknown = set(body.source_ids) - enabled_ids
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown or disabled source IDs: {sorted(unknown)}")
+    if sorted(body.source_ids) != sorted(enabled_ids):
+        raise HTTPException(status_code=422, detail="source_ids must contain every enabled source exactly once")
+
+    # Replace all overrides atomically
+    await db.execute(delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id))
+    for rank, source_id in enumerate(body.source_ids, start=1):
+        db.add(ComicSourceOverride(comic_id=comic_id, source_id=source_id, priority_override=rank))
+    await db.commit()
+
+    # Return the updated list (re-use the GET logic)
+    sources_by_id = {
+        s.id: s for s in (await db.execute(select(Source).where(Source.enabled.is_(True)))).scalars().all()
+    }
+    entries = [
+        SourceOverrideEntry(
+            source_id=source_id,
+            source_name=sources_by_id[source_id].name,
+            global_priority=sources_by_id[source_id].priority,
+            effective_priority=rank,
+            is_overridden=True,
+        )
+        for rank, source_id in enumerate(body.source_ids, start=1)
+    ]
+    return entries
+
+
+@router.delete("/{comic_id}/source-overrides", status_code=204)
+async def delete_source_overrides(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+) -> Response:
+    """Remove all per-comic source priority overrides, reverting to global priorities."""
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    await db.execute(delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id))
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.delete("/{comic_id}", status_code=204)

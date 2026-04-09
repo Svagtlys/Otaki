@@ -15,6 +15,7 @@ from .api import auth, health, requests, search, settings as settings_api, setup
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
+from .services import download_scanner
 from .workers import download_listener, scheduler
 
 LOGGING_CONFIG = {
@@ -102,6 +103,12 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting download listener...")
     task = asyncio.create_task(download_listener.run())
+
+    if settings.SUWAYOMI_DOWNLOAD_PATH and settings.LIBRARY_PATH:
+        logger.info("Scanning for existing downloads...")
+        async with AsyncSessionLocal() as db:
+            result = await download_scanner.scan_existing_downloads(db)
+            logger.info("Startup scan complete: %s", result)
 
     yield
 

@@ -111,10 +111,12 @@ def _effective_upgrade_days(comic: Comic) -> float:
 
 
 def _register_poll_job(comic: Comic) -> None:
+    now = datetime.now(timezone.utc)
+    run_date = comic.next_poll_at if comic.next_poll_at and comic.next_poll_at > now else now
     scheduler.add_job(
         func=_poll_comic,
         trigger="date",
-        run_date=comic.next_poll_at or datetime.now(timezone.utc),
+        run_date=run_date,
         id=f"poll_{comic.id}",
         args=[comic.id],
         replace_existing=True,
@@ -189,10 +191,12 @@ async def _poll_comic(comic_id: int) -> None:
 
 
 def _register_upgrade_job(comic: Comic) -> None:
+    now = datetime.now(timezone.utc)
+    run_date = comic.next_upgrade_check_at if comic.next_upgrade_check_at and comic.next_upgrade_check_at > now else now
     scheduler.add_job(
         func=_upgrade_comic,
         trigger="date",
-        run_date=comic.next_upgrade_check_at or datetime.now(timezone.utc),
+        run_date=run_date,
         id=f"upgrade_{comic.id}",
         args=[comic.id],
         replace_existing=True,

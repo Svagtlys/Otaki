@@ -57,20 +57,25 @@ async def _add_assignment(
     *,
     chapter_number: float = 1.0,
     library_path: str | None = None,
+    download_status: DownloadStatus = DownloadStatus.done,
+    relocation_status: RelocationStatus | None = None,
+    is_active: bool = True,
 ) -> ChapterAssignment:
     from app import database
     async with database.AsyncSessionLocal() as db:
+        if relocation_status is None:
+            relocation_status = RelocationStatus.done if library_path else RelocationStatus.pending
         assignment = ChapterAssignment(
             comic_id=comic_id,
             chapter_number=chapter_number,
             source_id=source_id,
             suwayomi_manga_id="manga-1",
             suwayomi_chapter_id=f"ch-{chapter_number}",
-            download_status=DownloadStatus.done,
-            is_active=True,
+            download_status=download_status,
+            is_active=is_active,
             chapter_published_at=datetime.now(timezone.utc),
             library_path=library_path,
-            relocation_status=RelocationStatus.done if library_path else RelocationStatus.pending,
+            relocation_status=relocation_status,
         )
         db.add(assignment)
         await db.commit()
@@ -201,7 +206,9 @@ async def test_post_sets_next_poll_at(logged_in_client, monkeypatch):
 async def test_get_list_empty(logged_in_client):
     r = await logged_in_client.get("/api/requests")
     assert r.status_code == 200
-    assert r.json() == []
+    data = r.json()
+    assert data["items"] == []
+    assert data["total"] == 0
 
 
 async def test_get_list_returns_comic(logged_in_client):
@@ -210,11 +217,11 @@ async def test_get_list_returns_comic(logged_in_client):
     await _add_assignment(comic.id, source.id, chapter_number=1.0)
     await _add_assignment(comic.id, source.id, chapter_number=2.0)
 
-    r = await logged_in_client.get("/api/requests")
+    r = await logged_in_client.get("/api/requests?search=Listed+Comic")
     assert r.status_code == 200
-    items = r.json()
-    assert len(items) == 1
-    item = items[0]
+    data = r.json()
+    assert data["total"] == 1
+    item = data["items"][0]
     assert item["title"] == "Listed Comic"
     assert item["chapter_counts"]["total"] == 2
     assert item["chapter_counts"]["done"] == 2
@@ -1483,3 +1490,208 @@ async def test_force_upgrade_chapter_no_candidate_done_zero(logged_in_client, mo
     events = _parse_sse(r.text)
     assert _done_event(events)["queued"] == 0
     assert not any(e.get("type") == "chapter" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Pagination / search / filter / sort tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_requests_pagination(logged_in_client):
+    """GET /api/requests returns correct page slice and total."""
+    source = await _add_source(name="Pg Source", suwayomi_source_id="src-pg-1")
+    for i in range(5):
+        await _add_comic(title=f"Pagination Comic {i:02d}")
+
+    r = await logged_in_client.get("/api/requests?page=1&per_page=3&sort_by=title")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["per_page"] == 3
+    assert data["page"] == 1
+    assert data["total"] >= 5
+    assert len(data["items"]) == 3
+
+    r2 = await logged_in_client.get("/api/requests?page=2&per_page=3&sort_by=title")
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert data2["page"] == 2
+    titles_p1 = {c["title"] for c in data["items"]}
+    titles_p2 = {c["title"] for c in data2["items"]}
+    assert titles_p1.isdisjoint(titles_p2)
+
+
+@pytest.mark.asyncio
+async def test_list_requests_search(logged_in_client):
+    """search= filters by case-insensitive title substring."""
+    await _add_comic(title="Naruto Shippuden")
+    await _add_comic(title="One Piece Adventure")
+
+    r = await logged_in_client.get("/api/requests?search=naruto")
+    assert r.status_code == 200
+    data = r.json()
+    titles = [c["title"] for c in data["items"]]
+    assert any("Naruto" in t for t in titles)
+    assert all("Naruto" in t or "naruto" in t.lower() for t in titles)
+
+
+@pytest.mark.asyncio
+async def test_list_requests_status_filter(logged_in_client):
+    """status= returns only comics with that status."""
+    from app import database
+    from app.models.comic import ComicStatus
+
+    c_tracking = await _add_comic(title="Status Filter Tracking")
+    c_complete = await _add_comic(title="Status Filter Complete")
+
+    async with database.AsyncSessionLocal() as db:
+        comic = await db.get(type(c_complete), c_complete.id)
+        comic.status = ComicStatus.complete
+        await db.commit()
+
+    r = await logged_in_client.get("/api/requests?status=complete")
+    assert r.status_code == 200
+    data = r.json()
+    statuses = {c["status"] for c in data["items"]}
+    assert statuses == {"complete"}
+
+    r2 = await logged_in_client.get("/api/requests?status=tracking")
+    assert r2.status_code == 200
+    data2 = r2.json()
+    statuses2 = {c["status"] for c in data2["items"]}
+    assert statuses2 == {"tracking"}
+
+
+@pytest.mark.asyncio
+async def test_list_requests_source_filter(logged_in_client):
+    """source_id= returns only comics that have a chapter from that source."""
+    src_a = await _add_source(name="Filter Source A", suwayomi_source_id="src-fa")
+    src_b = await _add_source(name="Filter Source B", suwayomi_source_id="src-fb")
+    comic_a = await _add_comic(title="Source Filter Comic A")
+    comic_b = await _add_comic(title="Source Filter Comic B")
+    await _add_assignment(comic_a.id, src_a.id)
+    await _add_assignment(comic_b.id, src_b.id)
+
+    r = await logged_in_client.get(f"/api/requests?source_id={src_a.id}")
+    assert r.status_code == 200
+    data = r.json()
+    ids = {c["id"] for c in data["items"]}
+    assert comic_a.id in ids
+    assert comic_b.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_list_requests_sort_library_title_strips_articles(logged_in_client):
+    """sort_by=library_title ignores leading 'A'/'An'/'The' when ordering."""
+    await _add_comic(title="The Zebra Comic Article", library_title="The Zebra Comic Article")
+    await _add_comic(title="An Apple Comic Article", library_title="An Apple Comic Article")
+    await _add_comic(title="A Flame Comic Article", library_title="A Flame Comic Article")
+    await _add_comic(title="Mango Comic Article", library_title="Mango Comic Article")
+
+    r = await logged_in_client.get(
+        "/api/requests?sort_by=library_title&sort_dir=asc&per_page=100&search=Comic+Article"
+    )
+    assert r.status_code == 200
+    titles = [c["library_title"] for c in r.json()["items"]]
+    # Strip articles for expected order: Apple, Flame, Mango, Zebra
+    assert titles.index("An Apple Comic Article") < titles.index("A Flame Comic Article")
+    assert titles.index("A Flame Comic Article") < titles.index("Mango Comic Article")
+    assert titles.index("Mango Comic Article") < titles.index("The Zebra Comic Article")
+
+
+@pytest.mark.asyncio
+async def test_list_requests_sort(logged_in_client):
+    """sort_by=title returns comics in alphabetical order; sort_dir=desc reverses."""
+    await _add_comic(title="Zebra Comic Sort")
+    await _add_comic(title="Apple Comic Sort")
+    await _add_comic(title="Mango Comic Sort")
+
+    r = await logged_in_client.get("/api/requests?sort_by=title&sort_dir=asc&per_page=100")
+    assert r.status_code == 200
+    titles = [c["title"] for c in r.json()["items"]]
+    assert titles == sorted(titles)
+
+    r2 = await logged_in_client.get("/api/requests?sort_by=title&sort_dir=desc&per_page=100")
+    assert r2.status_code == 200
+    titles2 = [c["title"] for c in r2.json()["items"]]
+    assert titles2 == sorted(titles2, reverse=True)
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_pagination(logged_in_client):
+    """GET /api/requests/{id}/chapters pages chapter assignments."""
+    source = await _add_source(name="Ch Pg Source", suwayomi_source_id="src-ch-pg")
+    comic = await _add_comic(title="Chapter Pagination Comic")
+    for i in range(1, 8):
+        await _add_assignment(comic.id, source.id, chapter_number=float(i))
+
+    r = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?page=1&per_page=3")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 7
+    assert data["per_page"] == 3
+    assert data["page"] == 1
+    assert len(data["items"]) == 3
+    assert data["items"][0]["chapter_number"] == 1.0
+
+    r2 = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?page=3&per_page=3")
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert len(data2["items"]) == 1
+    assert data2["items"][0]["chapter_number"] == 7.0
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_status_filter(logged_in_client):
+    """status= filter on GET /{id}/chapters returns correct subset."""
+    source = await _add_source(name="Ch Status Source", suwayomi_source_id="src-ch-st")
+    comic = await _add_comic(title="Chapter Status Filter Comic")
+
+    # available: download done + relocation done
+    await _add_assignment(
+        comic.id, source.id, chapter_number=1.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        library_path="/lib/ch1.cbz",
+    )
+    # queued
+    await _add_assignment(
+        comic.id, source.id, chapter_number=2.0,
+        download_status=DownloadStatus.queued,
+        relocation_status=RelocationStatus.pending,
+    )
+    # relocating: download done but relocation pending
+    await _add_assignment(
+        comic.id, source.id, chapter_number=3.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.pending,
+    )
+    # failed download
+    await _add_assignment(
+        comic.id, source.id, chapter_number=4.0,
+        download_status=DownloadStatus.failed,
+        relocation_status=RelocationStatus.pending,
+    )
+
+    r_avail = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=available")
+    assert r_avail.status_code == 200
+    assert r_avail.json()["total"] == 1
+    assert r_avail.json()["items"][0]["chapter_number"] == 1.0
+
+    r_queued = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=queued")
+    assert r_queued.status_code == 200
+    assert r_queued.json()["total"] == 1
+    assert r_queued.json()["items"][0]["chapter_number"] == 2.0
+
+    r_reloc = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=relocating")
+    assert r_reloc.status_code == 200
+    assert r_reloc.json()["total"] == 1
+    assert r_reloc.json()["items"][0]["chapter_number"] == 3.0
+
+    r_failed = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=failed")
+    assert r_failed.status_code == 200
+    assert r_failed.json()["total"] == 1
+    assert r_failed.json()["items"][0]["chapter_number"] == 4.0
+
+    r_all = await logged_in_client.get(f"/api/requests/{comic.id}/chapters")
+    assert r_all.json()["total"] == 4

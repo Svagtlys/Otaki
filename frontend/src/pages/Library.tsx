@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
 
@@ -37,12 +37,26 @@ interface ChapterCounts {
 interface ComicListItem {
   id: number
   title: string
+  status: string
   chapter_counts: ChapterCounts
   next_poll_at: string | null
 }
 
+interface ComicListPage {
+  items: ComicListItem[]
+  total: number
+  page: number
+  per_page: number
+}
+
+interface Source {
+  id: number
+  name: string
+  enabled: boolean
+}
+
 // ---------------------------------------------------------------------------
-// Component
+// HealthBadge (unchanged)
 // ---------------------------------------------------------------------------
 
 const STATUS_DOT: Record<string, string> = {
@@ -111,15 +125,113 @@ function Row({ label, value, ok, indent }: { label: string; value: string; ok: b
   )
 }
 
+// ---------------------------------------------------------------------------
+// Pagination control
+// ---------------------------------------------------------------------------
+
+function Pagination({ page, total, perPage, onChange }: { page: number; total: number; perPage: number; onChange: (p: number) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / perPage))
+  if (totalPages <= 1) return null
+
+  const pages: (number | '…')[] = []
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pages.push(i)
+  } else {
+    pages.push(1)
+    if (page > 3) pages.push('…')
+    for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
+    if (page < totalPages - 2) pages.push('…')
+    pages.push(totalPages)
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 16 }}>
+      <button disabled={page <= 1} onClick={() => onChange(page - 1)} style={pgBtnStyle(false)}>← Prev</button>
+      {pages.map((p, i) =>
+        p === '…'
+          ? <span key={`e${i}`} style={{ padding: '4px 6px', fontSize: 13, color: '#888' }}>…</span>
+          : <button key={p} onClick={() => onChange(p as number)} style={pgBtnStyle(p === page)}>{p}</button>
+      )}
+      <button disabled={page >= totalPages} onClick={() => onChange(page + 1)} style={pgBtnStyle(false)}>Next →</button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+const SORT_OPTIONS = [
+  { value: 'id', label: 'ID' },
+  { value: 'title', label: 'Title' },
+  { value: 'library_title', label: 'Sort Title' },
+  { value: 'status', label: 'Status' },
+  { value: 'source', label: 'Source' },
+]
+
 export default function Library() {
   const navigate = useNavigate()
-  const { data: comics, isLoading, error } = useQuery({
-    queryKey: ['comics'],
-    queryFn: () => apiFetch<ComicListItem[]>('/api/requests'),
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const page = parseInt(searchParams.get('page') ?? '1', 10) || 1
+  const perPage = parseInt(searchParams.get('per_page') ?? '25', 10) || 25
+  const status = searchParams.get('status') ?? ''
+  const sourceId = searchParams.get('source_id') ? parseInt(searchParams.get('source_id')!, 10) : null
+  const sortBy = searchParams.get('sort_by') ?? 'id'
+  const sortDir = searchParams.get('sort_dir') ?? 'asc'
+
+  // Debounced search
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') ?? '')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const search = searchParams.get('search') ?? ''
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        if (searchInput) next.set('search', searchInput); else next.delete('search')
+        next.set('page', '1')
+        return next
+      })
+    }, 300)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [searchInput])
+
+  function set(key: string, value: string | null) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (value) next.set(key, value); else next.delete(key)
+      if (key !== 'page') next.set('page', '1')
+      return next
+    })
+  }
+
+  const url = new URL('/api/requests', window.location.origin)
+  url.searchParams.set('page', String(page))
+  url.searchParams.set('per_page', String(perPage))
+  if (search) url.searchParams.set('search', search)
+  if (status) url.searchParams.set('status', status)
+  if (sourceId != null) url.searchParams.set('source_id', String(sourceId))
+  url.searchParams.set('sort_by', sortBy)
+  url.searchParams.set('sort_dir', sortDir)
+
+  const { data, isLoading, error } = useQuery<ComicListPage>({
+    queryKey: ['comics', page, perPage, search, status, sourceId, sortBy, sortDir],
+    queryFn: () => apiFetch<ComicListPage>(url.pathname + url.search),
   })
+
+  const { data: sources = [] } = useQuery<Source[]>({
+    queryKey: ['sources'],
+    queryFn: () => apiFetch<Source[]>('/api/sources'),
+  })
+
+  const comics = data?.items ?? []
+  const total = data?.total ?? 0
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ margin: 0 }}>Library</h1>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -130,68 +242,138 @@ export default function Library() {
         </div>
       </div>
 
+      {/* Filter / sort bar */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16, alignItems: 'center' }}>
+        <input
+          type="search"
+          placeholder="Search titles…"
+          value={searchInput}
+          onChange={e => setSearchInput(e.target.value)}
+          style={inputStyle}
+        />
+
+        <div style={{ display: 'flex', gap: 4 }}>
+          {(['', 'tracking', 'complete'] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => set('status', s || null)}
+              style={filterBtnStyle(status === s)}
+            >
+              {s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        <select
+          value={sourceId ?? ''}
+          onChange={e => set('source_id', e.target.value || null)}
+          style={selectStyle}
+        >
+          <option value="">All sources</option>
+          {sources.map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+
+        <select
+          value={sortBy}
+          onChange={e => set('sort_by', e.target.value)}
+          style={selectStyle}
+        >
+          {SORT_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        <button
+          onClick={() => set('sort_dir', sortDir === 'asc' ? 'desc' : 'asc')}
+          style={filterBtnStyle(false)}
+          title="Toggle sort direction"
+        >
+          {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
+        </button>
+
+        <select
+          value={perPage}
+          onChange={e => { set('per_page', e.target.value); set('page', '1') }}
+          style={selectStyle}
+        >
+          {[25, 50, 100].map(n => <option key={n} value={n}>{n} / page</option>)}
+        </select>
+      </div>
+
       {isLoading && <p>Loading…</p>}
 
       {error && (
         <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>
       )}
 
-      {!isLoading && !error && comics?.length === 0 && (
+      {!isLoading && !error && comics.length === 0 && (
         <p style={{ color: '#666' }}>
-          No comics yet. Use Search to add your first.
+          {search || status || sourceId ? 'No comics match your filters.' : 'No comics yet. Use Search to add your first.'}
         </p>
       )}
 
-      {comics && comics.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
-              <th style={thStyle}>Cover</th>
-              <th style={thStyle}>Title</th>
-              <th style={thStyle}>Progress</th>
-              <th style={thStyle}>Next poll</th>
-            </tr>
-          </thead>
-          <tbody>
-            {comics.map(comic => (
-              <tr
-                key={comic.id}
-                onClick={() => navigate(`/comics/${comic.id}`)}
-                style={rowStyle}
-                onMouseEnter={e => {
-                  ;(e.currentTarget as HTMLTableRowElement).style.background = '#f5f5f5'
-                }}
-                onMouseLeave={e => {
-                  ;(e.currentTarget as HTMLTableRowElement).style.background = ''
-                }}
-              >
-                <td style={tdStyle}>
-                  <img
-                    src={`/api/requests/${comic.id}/cover`}
-                    alt=""
-                    width={48}
-                    height={64}
-                    style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
-                    onError={e => {
-                      e.currentTarget.style.display = 'none'
-                    }}
-                  />
-                </td>
-                <td style={tdStyle}>{comic.title}</td>
-                <td style={{ ...tdStyle, color: '#555' }}>
-                  {comic.chapter_counts.done} / {comic.chapter_counts.total} chapters
-                </td>
-                <td style={{ ...tdStyle, color: '#555' }}>
-                  {formatRelative(comic.next_poll_at)}
-                </td>
+      {comics.length > 0 && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
+                <th style={thStyle}>Cover</th>
+                <th style={thStyle}>Title</th>
+                <th style={thStyle}>Progress</th>
+                <th style={thStyle}>Next poll</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {comics.map(comic => (
+                <tr
+                  key={comic.id}
+                  onClick={() => navigate(`/comics/${comic.id}`)}
+                  style={rowStyle}
+                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = '#f5f5f5' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = '' }}
+                >
+                  <td style={tdStyle}>
+                    <img
+                      src={`/api/requests/${comic.id}/cover`}
+                      alt=""
+                      width={48}
+                      height={64}
+                      style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
+                      onError={e => { e.currentTarget.style.display = 'none' }}
+                    />
+                  </td>
+                  <td style={tdStyle}>{comic.title}</td>
+                  <td style={{ ...tdStyle, color: '#555' }}>
+                    {comic.chapter_counts.done} / {comic.chapter_counts.total} chapters
+                  </td>
+                  <td style={{ ...tdStyle, color: '#555' }}>
+                    {formatRelative(comic.next_poll_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+            <span style={{ fontSize: 13, color: '#888' }}>{total} comic{total !== 1 ? 's' : ''}</span>
+            <Pagination
+              page={page}
+              total={total}
+              perPage={perPage}
+              onChange={p => set('page', String(p))}
+            />
+          </div>
+        </>
       )}
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 
 const thStyle: React.CSSProperties = {
   padding: '8px 12px',
@@ -231,4 +413,45 @@ const healthPanelStyle: React.CSSProperties = {
   minWidth: 240,
   boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
   zIndex: 100,
+}
+
+const inputStyle: React.CSSProperties = {
+  padding: '5px 10px',
+  border: '1px solid #ddd',
+  borderRadius: 4,
+  fontSize: 13,
+  width: 180,
+}
+
+const selectStyle: React.CSSProperties = {
+  padding: '5px 8px',
+  border: '1px solid #ddd',
+  borderRadius: 4,
+  fontSize: 13,
+  background: '#fff',
+}
+
+function filterBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '5px 10px',
+    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
+    borderRadius: 4,
+    background: active ? '#eff6ff' : '#fff',
+    color: active ? '#0070f3' : '#444',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: active ? 600 : 400,
+  }
+}
+
+function pgBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '4px 8px',
+    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
+    borderRadius: 4,
+    background: active ? '#0070f3' : '#fff',
+    color: active ? '#fff' : '#444',
+    cursor: 'pointer',
+    fontSize: 13,
+  }
 }

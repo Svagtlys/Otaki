@@ -40,7 +40,13 @@ interface ComicDetail {
   next_upgrade_check_at: string | null
   last_upgrade_check_at: string | null
   aliases: Alias[]
-  chapters: Chapter[]
+}
+
+interface ChapterPage {
+  items: Chapter[]
+  total: number
+  page: number
+  per_page: number
 }
 
 interface SourceOverrideEntry {
@@ -98,6 +104,11 @@ export default function Comic() {
   const [forceUpgradeLog, setForceUpgradeLog] = useState<{ chapter_number: number; old_source: string; new_source: string }[]>([])
   const [upgradingChapterId, setUpgradingChapterId] = useState<number | null>(null)
   const [chapterUpgradeMsgs, setChapterUpgradeMsgs] = useState<Record<number, string>>({})
+
+  // Chapter pagination / filter state
+  const [chapterPage, setChapterPage] = useState(1)
+  const [chapterPerPage] = useState(50)
+  const [chapterStatus, setChapterStatus] = useState('')
 
   // Source overrides state
   const [overridesOpen, setOverridesOpen] = useState(false)
@@ -165,6 +176,24 @@ export default function Comic() {
     queryFn: () => apiFetch<SourceOverrideEntry[]>(`/api/requests/${comicId}/source-overrides`),
     enabled: comicId > 0 && overridesOpen,
   })
+
+  const chapterQueryUrl = (() => {
+    const u = new URL(`/api/requests/${comicId}/chapters`, window.location.origin)
+    u.searchParams.set('page', String(chapterPage))
+    u.searchParams.set('per_page', String(chapterPerPage))
+    if (chapterStatus) u.searchParams.set('status', chapterStatus)
+    return u.pathname + u.search
+  })()
+
+  const { data: chaptersData } = useQuery<ChapterPage>({
+    queryKey: ['comic-chapters', comicId, chapterPage, chapterPerPage, chapterStatus],
+    queryFn: () => apiFetch<ChapterPage>(chapterQueryUrl),
+    enabled: comicId > 0,
+  })
+
+  const chapters = chaptersData?.items ?? []
+  const chaptersTotal = chaptersData?.total ?? 0
+  const chapterTotalPages = Math.max(1, Math.ceil(chaptersTotal / chapterPerPage))
 
   async function handleReprocess() {
     setReprocessing(true)
@@ -967,7 +996,7 @@ export default function Comic() {
 
           {/* Re-discover / Reprocess */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            {comic.chapters.length === 0 && (
+            {chaptersTotal === 0 && (
               <div>
                 <button
                   onClick={handleDiscover}
@@ -980,7 +1009,7 @@ export default function Comic() {
                 {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
               </div>
             )}
-            {comic.chapters.length > 0 && (
+            {chaptersTotal > 0 && (
               <div>
                 <button
                   onClick={handleReprocess}
@@ -1004,7 +1033,7 @@ export default function Comic() {
                 {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
               </div>
             )}
-            {comic.chapters.length > 0 && (
+            {chaptersTotal > 0 && (
               <div>
                 <button
                   onClick={handleForceUpgrade}
@@ -1027,6 +1056,20 @@ export default function Comic() {
             )}
           </div>
 
+          {/* Chapter filter bar */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+            {(['', 'queued', 'downloading', 'relocating', 'available', 'failed'] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => { setChapterStatus(s); setChapterPage(1) }}
+                style={chapterFilterBtnStyle(chapterStatus === s)}
+              >
+                {s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+            <span style={{ marginLeft: 8, fontSize: 12, color: '#888' }}>{chaptersTotal} chapter{chaptersTotal !== 1 ? 's' : ''}</span>
+          </div>
+
           {/* Chapter table */}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -1041,7 +1084,7 @@ export default function Comic() {
               </tr>
             </thead>
             <tbody>
-              {comic.chapters.map(ch => (
+              {chapters.map(ch => (
                 <tr key={ch.assignment_id} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={tdStyle}>{ch.chapter_number}</td>
                   <td style={tdStyle}>{ch.volume_number ?? '—'}</td>
@@ -1070,6 +1113,25 @@ export default function Comic() {
               ))}
             </tbody>
           </table>
+
+          {/* Chapter pagination */}
+          {chapterTotalPages > 1 && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+              <button
+                disabled={chapterPage <= 1}
+                onClick={() => setChapterPage(p => p - 1)}
+                style={chapterFilterBtnStyle(false)}
+              >← Prev</button>
+              <span style={{ fontSize: 13, color: '#555' }}>
+                Page {chapterPage} / {chapterTotalPages}
+              </span>
+              <button
+                disabled={chapterPage >= chapterTotalPages}
+                onClick={() => setChapterPage(p => p + 1)}
+                style={chapterFilterBtnStyle(false)}
+              >Next →</button>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1189,4 +1251,17 @@ const reprocessLogStyle: React.CSSProperties = {
   borderRadius: 4,
   padding: '6px 10px',
   marginTop: 6,
+}
+
+function chapterFilterBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '4px 10px',
+    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
+    borderRadius: 4,
+    background: active ? '#eff6ff' : '#fff',
+    color: active ? '#0070f3' : '#444',
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+  }
 }

@@ -476,36 +476,57 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 
 ### `GET /api/requests`
 
-List all tracked comics with a summary of download progress.
+List tracked comics with pagination, search, filter, and sort.
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `page` | int | 1 | Page number (≥ 1) |
+| `per_page` | int | 25 | Items per page (1–100) |
+| `search` | string | — | Case-insensitive substring match on `title` |
+| `status` | string | — | Filter by comic status (`tracking` or `complete`) |
+| `source_id` | int | — | Filter to comics that have at least one chapter assignment from this source |
+| `sort_by` | string | `id` | Sort column: `id`, `title`, `library_title`, `status`, `source` |
+| `sort_dir` | string | `asc` | Sort direction: `asc` or `desc` |
 
 **Response `200`**
 
 ```json
-[
-  {
-    "id": 1,
-    "title": "One Piece",
-    "library_title": "One Piece",
-    "status": "tracking",
-    "chapter_counts": {
-      "total": 120,
-      "done": 118,
-      "downloading": 1,
-      "queued": 1,
-      "failed": 0
-    },
-    "poll_override_days": null,
-    "upgrade_override_days": null,
-    "inferred_cadence_days": 6.5,
-    "next_poll_at": "2025-03-22T09:00:00Z",
-    "next_upgrade_check_at": "2025-03-22T09:00:00Z",
-    "last_upgrade_check_at": null
-  }
-]
+{
+  "items": [
+    {
+      "id": 1,
+      "title": "One Piece",
+      "library_title": "One Piece",
+      "status": "tracking",
+      "chapter_counts": {
+        "total": 120,
+        "done": 118,
+        "downloading": 1,
+        "queued": 1,
+        "failed": 0
+      },
+      "poll_override_days": null,
+      "upgrade_override_days": null,
+      "inferred_cadence_days": 6.5,
+      "next_poll_at": "2025-03-22T09:00:00Z",
+      "next_upgrade_check_at": "2025-03-22T09:00:00Z",
+      "last_upgrade_check_at": null
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "per_page": 25
+}
 ```
 
 | Field | Type | Notes |
 |---|---|---|
+| `items` | array | Comics for this page |
+| `total` | int | Total matching comics (before pagination) |
+| `page` | int | Current page number |
+| `per_page` | int | Items per page |
 | `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
 | `poll_override_days` | float \| null | User override for poll interval; `null` = use inferred cadence / `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
@@ -544,27 +565,12 @@ Full detail for one comic: all chapter assignments with download and relocation 
   "created_at": "2025-03-15T09:00:00Z",
   "aliases": [
     { "id": 1, "title": "ワンピース" }
-  ],
-  "chapters": [
-    {
-      "assignment_id": 55,
-      "chapter_number": 12.5,
-      "volume_number": 2,
-      "source_id": 2,
-      "source_name": "MangaDex",
-      "download_status": "done",
-      "is_active": true,
-      "downloaded_at": "2025-03-15T09:30:00Z",
-      "library_path": "/library/One Piece/One Piece - Ch.0012.5.cbz",
-      "relocation_status": "done"
-    }
   ]
 }
 ```
 
 **Notes**
-- `chapters` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
-- `library_path` is `null` until relocation completes.
+- Chapters are no longer embedded in this response. Use `GET /api/requests/{id}/chapters` for paginated chapter data.
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.
@@ -756,6 +762,63 @@ Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, a
 | `delete_files` | bool | `false` | If `true`, deletes any files referenced by `library_path` on assignments |
 
 **Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `GET /api/requests/{id}/chapters`
+
+Paginated list of chapter assignments for one comic, with optional status filter.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `page` | int | 1 | Page number (≥ 1) |
+| `per_page` | int | 50 | Items per page (1–200) |
+| `status` | string | — | High-level status filter: `available`, `queued`, `downloading`, `relocating`, `failed` |
+
+Status mapping:
+- `available` — `relocation_status == done`
+- `queued` — `download_status == queued`
+- `downloading` — `download_status == downloading`
+- `relocating` — `download_status == done` AND `relocation_status != done`
+- `failed` — `download_status == failed` OR `relocation_status == failed`
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "assignment_id": 55,
+      "chapter_number": 12.5,
+      "volume_number": 2,
+      "source_id": 2,
+      "source_name": "MangaDex",
+      "download_status": "done",
+      "is_active": true,
+      "downloaded_at": "2025-03-15T09:30:00Z",
+      "library_path": "/library/One Piece/One Piece - Ch.0012.5.cbz",
+      "relocation_status": "done"
+    }
+  ],
+  "total": 203,
+  "page": 1,
+  "per_page": 50
+}
+```
+
+**Notes**
+- `items` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.

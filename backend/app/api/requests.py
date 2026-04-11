@@ -15,7 +15,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -141,6 +141,20 @@ class ComicListItem(BaseModel):
     last_upgrade_check_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class ComicListPage(BaseModel):
+    items: list[ComicListItem]
+    total: int
+    page: int
+    per_page: int
+
+
+class ChapterPage(BaseModel):
+    items: list[ChapterSummary]
+    total: int
+    page: int
+    per_page: int
 
 
 # ---------------------------------------------------------------------------
@@ -294,20 +308,84 @@ async def create_request(
     )
 
 
-@router.get("", response_model=list[ComicListItem])
+_VALID_SORT_COLS = {"id", "title", "library_title", "status", "source"}
+
+
+@router.get("", response_model=ComicListPage)
 async def list_requests(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
-) -> list[ComicListItem]:
-    comics_result = await db.execute(select(Comic))
-    comics = comics_result.scalars().all()
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+    search: str | None = Query(None),
+    status: str | None = Query(None),
+    source_id: int | None = Query(None),
+    sort_by: str = Query("id"),
+    sort_dir: str = Query("asc"),
+) -> ComicListPage:
+    # Build base query
+    base_q = select(Comic)
+
+    if search:
+        base_q = base_q.where(func.lower(Comic.title).contains(search.lower()))
+    if status:
+        base_q = base_q.where(Comic.status == status)
+    if source_id is not None:
+        source_sub = (
+            select(ChapterAssignment.comic_id)
+            .where(ChapterAssignment.source_id == source_id)
+            .distinct()
+            .scalar_subquery()
+        )
+        base_q = base_q.where(Comic.id.in_(source_sub))
+
+    # Sorting
+    if sort_by not in _VALID_SORT_COLS:
+        sort_by = "id"
+
+    if sort_by == "source":
+        sort_expr = (
+            select(Source.name)
+            .join(ChapterAssignment, ChapterAssignment.source_id == Source.id)
+            .where(
+                ChapterAssignment.comic_id == Comic.id,
+                ChapterAssignment.is_active.is_(True),
+            )
+            .order_by(ChapterAssignment.chapter_number.desc())
+            .limit(1)
+            .correlate(Comic)
+            .scalar_subquery()
+        )
+    elif sort_by == "library_title":
+        # Strip leading articles so "A Flame Reborn" sorts under F, "The One" under O
+        lt = Comic.library_title
+        sort_expr = case(
+            (func.lower(lt).like("the _%"), func.substr(lt, 5)),
+            (func.lower(lt).like("an _%"), func.substr(lt, 4)),
+            (func.lower(lt).like("a _%"), func.substr(lt, 3)),
+            else_=lt,
+        )
+    else:
+        sort_expr = getattr(Comic, sort_by)
+
+    base_q = base_q.order_by(
+        sort_expr.asc() if sort_dir != "desc" else sort_expr.desc()
+    )
+
+    # Count total
+    count_q = select(func.count()).select_from(base_q.subquery())
+    total: int = (await db.execute(count_q)).scalar_one()
+
+    # Fetch page
+    page_q = base_q.offset((page - 1) * per_page).limit(per_page)
+    comics = (await db.execute(page_q)).scalars().all()
 
     if not comics:
-        return []
+        return ComicListPage(items=[], total=total, page=page, per_page=per_page)
 
     comic_ids = [c.id for c in comics]
 
-    # Single query: count assignments grouped by (comic_id, download_status)
+    # Chapter counts only for this page
     counts_result = await db.execute(
         select(
             ChapterAssignment.comic_id,
@@ -318,17 +396,16 @@ async def list_requests(
         .group_by(ChapterAssignment.comic_id, ChapterAssignment.download_status)
     )
 
-    # Build {comic_id: {status: count}}
     counts: dict[int, dict[str, int]] = {c.id: {} for c in comics}
-    for comic_id, status, n in counts_result.all():
-        counts[comic_id][status] = n
+    for row_comic_id, row_status, n in counts_result.all():
+        counts[row_comic_id][row_status] = n
 
     items = []
     for comic in comics:
         status_counts = counts[comic.id]
-        total = sum(status_counts.values())
+        ch_total = sum(status_counts.values())
         chapter_counts = {
-            "total": total,
+            "total": ch_total,
             "done": status_counts.get(DownloadStatus.done, 0),
             "downloading": status_counts.get(DownloadStatus.downloading, 0),
             "queued": status_counts.get(DownloadStatus.queued, 0),
@@ -349,7 +426,7 @@ async def list_requests(
                 last_upgrade_check_at=comic.last_upgrade_check_at,
             )
         )
-    return items
+    return ComicListPage(items=items, total=total, page=page, per_page=per_page)
 
 
 @router.get("/{comic_id}", response_model=ComicDetail)
@@ -709,6 +786,62 @@ async def reprocess_chapters(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/{comic_id}/chapters", response_model=ChapterPage)
+async def list_chapters(
+    comic_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_auth),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    status: str | None = Query(None),
+) -> ChapterPage:
+    comic = await db.get(Comic, comic_id)
+    if comic is None:
+        raise HTTPException(status_code=404, detail="Comic not found")
+
+    base_filters = [ChapterAssignment.comic_id == comic_id]
+
+    if status == "available":
+        base_filters.append(ChapterAssignment.relocation_status == RelocationStatus.done)
+    elif status == "queued":
+        base_filters.append(ChapterAssignment.download_status == DownloadStatus.queued)
+    elif status == "downloading":
+        base_filters.append(ChapterAssignment.download_status == DownloadStatus.downloading)
+    elif status == "relocating":
+        base_filters.append(ChapterAssignment.download_status == DownloadStatus.done)
+        base_filters.append(ChapterAssignment.relocation_status != RelocationStatus.done)
+    elif status == "failed":
+        from sqlalchemy import or_
+        base_filters.append(
+            or_(
+                ChapterAssignment.download_status == DownloadStatus.failed,
+                ChapterAssignment.relocation_status == RelocationStatus.failed,
+            )
+        )
+
+    total: int = (
+        await db.execute(select(func.count()).where(*base_filters))
+    ).scalar_one()
+
+    assignments = (
+        await db.execute(
+            select(ChapterAssignment)
+            .where(*base_filters)
+            .order_by(ChapterAssignment.chapter_number)
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .options(selectinload(ChapterAssignment.source))
+        )
+    ).scalars().all()
+
+    return ChapterPage(
+        items=[_chapter_summary(a) for a in assignments],
+        total=total,
+        page=page,
+        per_page=per_page,
     )
 
 

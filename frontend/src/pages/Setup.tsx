@@ -22,20 +22,39 @@ const fieldStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
-  marginBottom: 12,
+  marginBottom: 14,
 }
 
 const inputStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: 14,
+  padding: '7px 10px',
+  fontSize: 13,
   width: '100%',
   boxSizing: 'border-box',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--surface)',
+  color: 'var(--text)',
+  fontFamily: 'inherit',
+  outline: 'none',
 }
 
 const errorStyle: React.CSSProperties = {
-  color: 'red',
+  color: 'var(--danger)',
   fontSize: 13,
   marginTop: 8,
+}
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--text)',
+}
+
+const stepHeadingStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 700,
+  color: 'var(--text)',
+  margin: '0 0 20px',
 }
 
 // ---------------------------------------------------------------------------
@@ -109,9 +128,9 @@ function Step1({ onAdvance }: { onAdvance: (username: string, status: SetupStatu
 
   return (
     <form onSubmit={handleSubmit}>
-      <h2>Create admin account</h2>
+      <h2 style={stepHeadingStyle}>Create admin account</h2>
       <div style={fieldStyle}>
-        <label htmlFor="username">Username</label>
+        <label style={labelStyle} htmlFor="username">Username</label>
         <input
           id="username"
           type="text"
@@ -123,7 +142,7 @@ function Step1({ onAdvance }: { onAdvance: (username: string, status: SetupStatu
         />
       </div>
       <div style={fieldStyle}>
-        <label htmlFor="password">Password</label>
+        <label style={labelStyle} htmlFor="password">Password</label>
         <input
           id="password"
           type="password"
@@ -134,7 +153,8 @@ function Step1({ onAdvance }: { onAdvance: (username: string, status: SetupStatu
         />
       </div>
       {error && <p style={errorStyle}>{error}</p>}
-      <button type="submit" disabled={loading}>
+      <button className="btn primary" type="submit" disabled={loading}
+        style={{ width: '100%', opacity: loading ? 0.6 : 1, marginTop: 4 }}>
         {loading ? 'Creating…' : 'Create account'}
       </button>
     </form>
@@ -183,18 +203,20 @@ function Step2({
   if (connected) {
     return (
       <div>
-        <h2>Connect to Suwayomi</h2>
-        <p style={{ color: 'green' }}>Connected to Suwayomi successfully.</p>
-        <button onClick={onAdvance}>{isConfirm ? 'Confirm' : 'Continue'}</button>
+        <h2 style={stepHeadingStyle}>Connect to Suwayomi</h2>
+        <p style={{ color: 'var(--success)', marginBottom: 16 }}>Connected to Suwayomi successfully.</p>
+        <button className="btn primary" onClick={onAdvance} style={{ width: '100%' }}>
+          {isConfirm ? 'Confirm' : 'Continue'}
+        </button>
       </div>
     )
   }
 
   return (
     <form onSubmit={handleSubmit}>
-      <h2>Connect to Suwayomi</h2>
+      <h2 style={stepHeadingStyle}>Connect to Suwayomi</h2>
       <div style={fieldStyle}>
-        <label htmlFor="suwayomi-url">Suwayomi URL</label>
+        <label style={labelStyle} htmlFor="suwayomi-url">Suwayomi URL</label>
         <input
           id="suwayomi-url"
           type="url"
@@ -207,7 +229,7 @@ function Step2({
         />
       </div>
       <div style={fieldStyle}>
-        <label htmlFor="suwayomi-username">Username (optional)</label>
+        <label style={labelStyle} htmlFor="suwayomi-username">Username (optional)</label>
         <input
           id="suwayomi-username"
           type="text"
@@ -217,7 +239,7 @@ function Step2({
         />
       </div>
       <div style={fieldStyle}>
-        <label htmlFor="suwayomi-password">Password (optional)</label>
+        <label style={labelStyle} htmlFor="suwayomi-password">Password (optional)</label>
         <input
           id="suwayomi-password"
           type="password"
@@ -228,7 +250,8 @@ function Step2({
         />
       </div>
       {error && <p style={errorStyle}>{error}</p>}
-      <button type="submit" disabled={loading}>
+      <button className="btn primary" type="submit" disabled={loading}
+        style={{ width: '100%', opacity: loading ? 0.6 : 1, marginTop: 4 }}>
         {loading ? 'Connecting…' : 'Connect'}
       </button>
     </form>
@@ -319,36 +342,36 @@ function Step3({ onAdvance }: { onAdvance: () => void }) {
     }
   }
 
-  if (loadingFetch) return <p>Loading sources…</p>
+  if (loadingFetch) return <p style={{ color: 'var(--text-2)' }}>Loading sources…</p>
   if (fetchError) return <p style={errorStyle}>{fetchError}</p>
 
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '5px 0',
-    borderBottom: '1px solid #eee',
+  const srcRowStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+    border: `1px solid var(--border)`, background: 'var(--surface)', marginBottom: 6,
   }
 
   return (
     <form onSubmit={handleSubmit}>
-      <h2>Select sources</h2>
+      <h2 style={stepHeadingStyle}>Select sources</h2>
 
       {selected.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>
             Selected — position 1 is highest priority
           </p>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {selected.map((src, i) => (
-              <li key={src.id} style={rowStyle}>
-                <span style={{ minWidth: 20, color: '#999', fontSize: 13 }}>{i + 1}.</span>
+              <li key={src.id} style={srcRowStyle}>
+                <span style={{ minWidth: 20, color: 'var(--accent)', fontSize: 12, fontWeight: 700 }}>{i + 1}</span>
                 <SourceIcon src={src} />
-                <span style={{ flex: 1 }}>{src.name}</span>
-                <span style={{ fontSize: 12, color: '#999' }}>{src.lang}</span>
-                <button type="button" onClick={() => moveUp(i)} disabled={i === 0} aria-label={`Move ${src.name} up`}>↑</button>
-                <button type="button" onClick={() => moveDown(i)} disabled={i === selected.length - 1} aria-label={`Move ${src.name} down`}>↓</button>
-                <button type="button" onClick={() => remove(src)} aria-label={`Remove ${src.name}`}>×</button>
+                <span style={{ flex: 1, color: 'var(--text)', fontSize: 13 }}>{src.name}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{src.lang}</span>
+                <button className="btn icon" type="button" onClick={() => moveUp(i)} disabled={i === 0}
+                  style={{ opacity: i === 0 ? 0.3 : 1 }} aria-label={`Move ${src.name} up`}><i className="bx bx-chevron-up" /></button>
+                <button className="btn icon" type="button" onClick={() => moveDown(i)} disabled={i === selected.length - 1}
+                  style={{ opacity: i === selected.length - 1 ? 0.3 : 1 }} aria-label={`Move ${src.name} down`}><i className="bx bx-chevron-down" /></button>
+                <button className="btn icon" type="button" onClick={() => remove(src)} aria-label={`Remove ${src.name}`}><i className="bx bx-x" /></button>
               </li>
             ))}
           </ul>
@@ -357,17 +380,18 @@ function Step3({ onAdvance }: { onAdvance: () => void }) {
 
       {available.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>
             {selected.length > 0 ? 'Add more sources' : 'Available sources'}
           </p>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {available.map(src => (
-              <li key={src.id} style={{ ...rowStyle, color: '#555' }}>
+              <li key={src.id} style={{ ...srcRowStyle, opacity: 0.7 }}>
                 <span style={{ minWidth: 20 }} />
                 <SourceIcon src={src} />
-                <span style={{ flex: 1 }}>{src.name}</span>
-                <span style={{ fontSize: 12, color: '#999' }}>{src.lang}</span>
-                <button type="button" onClick={() => add(src)} aria-label={`Add ${src.name}`}>+ Add</button>
+                <span style={{ flex: 1, color: 'var(--text)', fontSize: 13 }}>{src.name}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{src.lang}</span>
+                <button className="btn" type="button" onClick={() => add(src)}
+                  style={{ fontSize: 12 }} aria-label={`Add ${src.name}`}>+ Add</button>
               </li>
             ))}
           </ul>
@@ -375,7 +399,8 @@ function Step3({ onAdvance }: { onAdvance: () => void }) {
       )}
 
       {saveError && <p style={errorStyle}>{saveError}</p>}
-      <button type="submit" disabled={loadingSave || selected.length === 0}>
+      <button className="btn primary" type="submit" disabled={loadingSave || selected.length === 0}
+        style={{ width: '100%', opacity: (loadingSave || selected.length === 0) ? 0.6 : 1, marginTop: 4 }}>
         {loadingSave ? 'Saving…' : 'Save order'}
       </button>
     </form>
@@ -442,22 +467,27 @@ function Step4({
   if (missingDirs) {
     return (
       <div>
-        <h2>Set paths</h2>
-        <p>The following {missingDirs.length === 1 ? 'directory does' : 'directories do'} not exist yet:</p>
-        <ul style={{ margin: '8px 0 16px', paddingLeft: 20 }}>
+        <h2 style={stepHeadingStyle}>Set paths</h2>
+        <p style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8 }}>
+          The following {missingDirs.length === 1 ? 'directory does' : 'directories do'} not exist yet:
+        </p>
+        <ul style={{ margin: '0 0 16px', paddingLeft: 20 }}>
           {missingDirs.map(({ field, path }) => (
-            <li key={field} style={{ marginBottom: 4 }}>
+            <li key={field} style={{ marginBottom: 6, fontSize: 13, color: 'var(--text)' }}>
               <strong>{FIELD_LABELS[field] ?? field}</strong>:{' '}
-              <code style={{ fontSize: 13 }}>{path}</code>
+              <code style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--surface-2)', padding: '1px 4px', borderRadius: 3 }}>{path}</code>
             </li>
           ))}
         </ul>
-        <p>Create {missingDirs.length === 1 ? 'it' : 'them'} now?</p>
+        <p style={{ fontSize: 13, color: 'var(--text)', marginBottom: 16 }}>
+          Create {missingDirs.length === 1 ? 'it' : 'them'} now?
+        </p>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => submit(true)} disabled={loading}>
+          <button className="btn primary" onClick={() => submit(true)} disabled={loading}
+            style={{ opacity: loading ? 0.6 : 1 }}>
             {loading ? 'Creating…' : 'Yes, create'}
           </button>
-          <button type="button" onClick={() => setMissingDirs(null)} disabled={loading}>
+          <button className="btn" type="button" onClick={() => setMissingDirs(null)} disabled={loading}>
             Go back
           </button>
         </div>
@@ -468,9 +498,9 @@ function Step4({
 
   return (
     <form onSubmit={e => { e.preventDefault(); submit(false) }}>
-      <h2>Set paths</h2>
+      <h2 style={stepHeadingStyle}>Set paths</h2>
       <div style={fieldStyle}>
-        <label htmlFor="download-path">Suwayomi download path</label>
+        <label style={labelStyle} htmlFor="download-path">Suwayomi download path</label>
         <input
           id="download-path"
           type="text"
@@ -483,7 +513,7 @@ function Step4({
         />
       </div>
       <div style={fieldStyle}>
-        <label htmlFor="library-path">Library path</label>
+        <label style={labelStyle} htmlFor="library-path">Library path</label>
         <input
           id="library-path"
           type="text"
@@ -494,11 +524,12 @@ function Step4({
           style={inputStyle}
         />
       </div>
-      <small style={{ display: 'block', color: '#555', marginBottom: 12 }}>
-        Docker users: use <code>/app/suwayomi_data/downloads</code> and <code>/app/library</code>
+      <small style={{ display: 'block', fontSize: 12, color: 'var(--text-2)', marginBottom: 12 }}>
+        Docker users: use <code style={{ background: 'var(--surface-2)', padding: '1px 4px', borderRadius: 3 }}>/app/suwayomi_data/downloads</code> and <code style={{ background: 'var(--surface-2)', padding: '1px 4px', borderRadius: 3 }}>/app/library</code>
       </small>
       {error && <p style={errorStyle}>{error}</p>}
-      <button type="submit" disabled={loading}>
+      <button className="btn primary" type="submit" disabled={loading}
+        style={{ width: '100%', opacity: loading ? 0.6 : 1, marginTop: 4 }}>
         {loading ? 'Saving…' : isConfirm ? 'Confirm' : 'Save paths'}
       </button>
     </form>
@@ -525,37 +556,73 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
     setCurrentStep(s => (s < 4 ? ((s + 1) as 1 | 2 | 3 | 4) : s))
   }
 
+  const STEP_LABELS = ['Account', 'Suwayomi', 'Sources', 'Paths']
+
   return (
-    <main
-      style={{
-        maxWidth: 480,
-        margin: '60px auto',
-        padding: '0 16px',
-        fontFamily: 'sans-serif',
-        position: 'relative',
-      }}
-    >
-      {loggedInUser && (
-        <div style={{ position: 'absolute', top: -40, right: 0, fontSize: 14, color: '#666' }}>
-          {loggedInUser}
-        </div>
-      )}
-      <h1 style={{ marginBottom: 4 }}>Otaki setup</h1>
-      <p style={{ color: '#666', marginBottom: 24 }}>Step {currentStep} of 4</p>
-      {currentStep === 1 && <Step1 onAdvance={handleStep1Advance} />}
-      {currentStep === 2 && status && (
-        <Step2 status={status} onAdvance={advance} />
-      )}
-      {currentStep === 3 && <Step3 onAdvance={advance} />}
-      {currentStep === 4 && status && (
-        <Step4
-          status={status}
-          onDone={() => {
-            onComplete()
-            navigate('/login', { replace: true })
-          }}
-        />
-      )}
-    </main>
+    <div style={{
+      display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
+      minHeight: '100vh', background: 'var(--bg)', padding: '24px 16px',
+    }}>
+      {/* Logo */}
+      <div style={{ marginBottom: 24, textAlign: 'center' }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 10, margin: '0 auto 10px',
+          background: 'linear-gradient(135deg, #007aff 0%, #5856d6 100%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 20, fontWeight: 700, color: '#fff',
+        }}>O</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>Otaki setup</div>
+        {loggedInUser && (
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>Signed in as {loggedInUser}</div>
+        )}
+      </div>
+
+      {/* Step dots */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 24 }}>
+        {STEP_LABELS.map((label, i) => {
+          const stepNum = i + 1
+          const done = currentStep > stepNum
+          const active = currentStep === stepNum
+          return (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: '50%',
+                  background: done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--surface-2)',
+                  color: (done || active) ? '#fff' : 'var(--text-3)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 12, fontWeight: 700,
+                  border: `2px solid ${done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--border)'}`,
+                }}>{done ? <i className="bx bx-check" style={{ fontSize: 16 }} /> : stepNum}</div>
+                <span style={{ fontSize: 10, color: active ? 'var(--accent)' : 'var(--text-3)', fontWeight: active ? 600 : 400 }}>
+                  {label}
+                </span>
+              </div>
+              {i < STEP_LABELS.length - 1 && (
+                <div style={{ width: 32, height: 2, background: done ? 'var(--success)' : 'var(--border)', marginBottom: 18 }} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Card */}
+      <div className="card" style={{ width: '100%', maxWidth: 480, padding: 32 }}>
+        {currentStep === 1 && <Step1 onAdvance={handleStep1Advance} />}
+        {currentStep === 2 && status && (
+          <Step2 status={status} onAdvance={advance} />
+        )}
+        {currentStep === 3 && <Step3 onAdvance={advance} />}
+        {currentStep === 4 && status && (
+          <Step4
+            status={status}
+            onDone={() => {
+              onComplete()
+              navigate('/login', { replace: true })
+            }}
+          />
+        )}
+      </div>
+    </div>
   )
 }

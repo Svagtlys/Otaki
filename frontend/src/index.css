@@ -1,0 +1,595 @@
+/* ------------------------------------------------------------------ */
+/* Reset                                                                 */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ------------------------------------------------------------------ */
+/* Design tokens — light mode defaults                                   */
+/* ------------------------------------------------------------------ */
+:root {
+  --sidebar-w: 220px;
+  --radius: 8px;
+  --radius-sm: 5px;
+  --transition: 0.18s ease;
+
+  --bg:                  #f5f5f7;
+  --surface:             #ffffff;
+  --surface-2:           #f0f0f3;
+  --sidebar-bg:          #1c1c1e;
+  --sidebar-text:        #ebebf5cc;
+  --sidebar-active-bg:   rgba(255, 255, 255, 0.1);
+  --sidebar-active-text: #ffffff;
+  --border:              #e2e2e7;
+  --text:                #1c1c1e;
+  --text-2:              #6e6e7a;
+  --text-3:              #aeaeb2;
+  --accent:              #1dabb3;
+  --accent-soft:         #e0f6f7;
+  --accent-complement:   #b3551d;
+  --success:             #34c759;
+  --warning:             #ff9f0a;
+  --danger:              #ff3b30;
+  --shadow:              0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-md:           0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* ------------------------------------------------------------------ */
+/* Dark mode token overrides                                             */
+/* ------------------------------------------------------------------ */
+html.dark {
+  --bg:        #161618;
+  --surface:   #1c1c1e;
+  --surface-2: #2c2c2e;
+  --sidebar-bg: #111113;
+  --border:    #38383a;
+  --text:      #f5f5f7;
+  --text-2:    #98989f;
+  --text-3:    #636366;
+  --accent-soft: #0e2a2b;
+  --shadow:    0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* ------------------------------------------------------------------ */
+/* Base                                                                  */
+/* ------------------------------------------------------------------ */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background var(--transition), color var(--transition);
+}
+
+/* ------------------------------------------------------------------ */
+/* App shell                                                             */
+/* ------------------------------------------------------------------ */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 50;
+  transition: background var(--transition);
+}
+
+.main {
+  margin-left: var(--sidebar-w);
+  min-height: 100vh;
+  background: var(--bg);
+  transition: background var(--transition);
+  flex: 1;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sidebar nav items                                                     */
+/* ------------------------------------------------------------------ */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--sidebar-text);
+  font-size: 13.5px;
+  font-weight: 450;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  transition: background var(--transition), color var(--transition);
+  user-select: none;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.nav-item.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+  font-weight: 550;
+}
+
+.nav-item .nav-icon {
+  font-size: 15px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.nav-item .nav-badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 20px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cards                                                                 */
+/* ------------------------------------------------------------------ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+/* ------------------------------------------------------------------ */
+/* Filter chips / status pills                                           */
+/* ------------------------------------------------------------------ */
+.chip {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+  white-space: nowrap;
+}
+
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.chip:hover:not(.active) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons                                                               */
+/* ------------------------------------------------------------------ */
+.btn {
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.btn:hover {
+  background: var(--surface-2);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  opacity: 0.88;
+}
+
+.btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn.danger:hover {
+  opacity: 0.88;
+}
+
+/* Icon-only button */
+.btn.icon {
+  padding: 6px 8px;
+  line-height: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dark mode toggle                                                      */
+/* ------------------------------------------------------------------ */
+.toggle-track {
+  width: 28px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--transition);
+  cursor: pointer;
+}
+
+.toggle-track.on {
+  background: var(--accent);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left var(--transition);
+}
+
+.toggle-track.on .toggle-thumb {
+  left: 14px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Inputs / selects                                                      */
+/* ------------------------------------------------------------------ */
+.input {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+  width: 100%;
+}
+
+.input:focus {
+  border-color: var(--accent);
+}
+
+/* Hide browser number spinners — they don't match themed backgrounds */
+.input[type="number"]::-webkit-inner-spin-button,
+.input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.select:focus {
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Radio buttons & checkboxes                                            */
+/* ------------------------------------------------------------------ */
+input[type="radio"],
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color var(--transition), background var(--transition);
+  position: relative;
+  vertical-align: middle;
+}
+
+input[type="radio"] { border-radius: 50%; }
+
+input[type="checkbox"] { border-radius: 3px; }
+
+input[type="radio"]:checked,
+input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+input[type="radio"]:checked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  width: 5px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}
+
+/* ------------------------------------------------------------------ */
+/* Cover grid (Library)                                                  */
+/* ------------------------------------------------------------------ */
+.cover-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.cover-card {
+  width: 110px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transition: box-shadow var(--transition), transform var(--transition);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cover-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.cover-card .cover-image {
+  position: relative;
+  height: 150px;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 28px;
+}
+
+.cover-card .cover-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cover-card .cover-title {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-card .cover-sub {
+  padding: 0 8px 6px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* ------------------------------------------------------------------ */
+/* Settings left nav                                                     */
+/* ------------------------------------------------------------------ */
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: var(--text-2);
+  font-size: 13.5px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition), color var(--transition);
+}
+
+.settings-nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.settings-nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Search result cards                                                   */
+/* ------------------------------------------------------------------ */
+.search-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition), color var(--transition);
+}
+
+.search-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.search-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------------ */
+/* Source priority rows                                                  */
+/* ------------------------------------------------------------------ */
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: box-shadow var(--transition), opacity var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.source-row:hover {
+  box-shadow: var(--shadow);
+}
+
+.source-row.dragging {
+  opacity: 0.4;
+}
+
+.source-row.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.source-row .drag-handle {
+  color: var(--text-3);
+  font-size: 18px;
+  cursor: grab;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.source-row .drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ------------------------------------------------------------------ */
+/* Relocation strategy radio cards                                       */
+/* ------------------------------------------------------------------ */
+.relocation-card {
+  padding: 14px 16px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.relocation-card:hover {
+  border-color: var(--accent);
+}
+
+.relocation-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.relocation-card strong,
+.relocation-card p {
+  transition: color var(--transition);
+}
+
+/* ------------------------------------------------------------------ */
+/* Drop zone (Settings backup import)                                    */
+/* ------------------------------------------------------------------ */
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------------ */
+/* Page header                                                           */
+/* ------------------------------------------------------------------ */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Utility                                                               */
+/* ------------------------------------------------------------------ */
+.text-muted { color: var(--text-2); }
+.text-sm    { font-size: 12px; }
+.flex       { display: flex; }
+.flex-col   { display: flex; flex-direction: column; }
+.items-center { align-items: center; }
+.gap-2      { gap: 8px; }
+.gap-3      { gap: 12px; }
+.gap-4      { gap: 16px; }

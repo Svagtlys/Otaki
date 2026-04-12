@@ -124,7 +124,7 @@ export default function Sources() {
 
   const sourcesHeaderActions = isDirty ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      {saveError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{saveError}</span>}
+      {saveError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{saveError}</span>}
       <button
         className="btn primary"
         type="button"
@@ -140,7 +140,7 @@ export default function Sources() {
   return (
     <PageLayout title="Sources" headerActions={sourcesHeaderActions}>
       {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
-      {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
+      {error && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
       {!isLoading && !error && localSources.length === 0 && (
         <p style={{ color: 'var(--text-2)' }}>No sources configured.</p>
       )}
@@ -151,10 +151,11 @@ export default function Sources() {
             Position 1 is highest priority. Drag rows or use arrows to reorder.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div role="list" aria-label="Source priority order" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {localSources.map((source, i) => (
               <div
                 key={source.id}
+                role="listitem"
                 className={`source-row${dragIndexRef.current === i ? ' dragging' : ''}${dragOverIndex === i ? ' drag-over' : ''}`}
                 draggable
                 onDragStart={() => handleDragStart(i)}
@@ -211,7 +212,7 @@ export default function Sources() {
             ))}
           </div>
 
-          {toggleError && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 12 }}>{toggleError}</p>}
+          {toggleError && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13, marginTop: 12 }}>{toggleError}</p>}
         </>
       )}
     </PageLayout>

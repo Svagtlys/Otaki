@@ -396,7 +396,7 @@ export default function Settings() {
   return (
     <PageLayout title="Settings" actionBar={settingsActionBar}>
       {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
-      {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
+      {error && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
 
       {settings && (
         <>
@@ -422,7 +422,7 @@ export default function Settings() {
                       <span style={{ color: 'var(--text-2)', fontSize: 13 }}>days</span>
                     </div>
                   </div>
-                  {pollError && <p style={errorStyle}>{pollError}</p>}
+                  {pollError && <p role="alert" style={errorStyle}>{pollError}</p>}
                   <button className="btn primary" type="submit" disabled={pollSaving}
                     style={{ opacity: pollSaving ? 0.6 : 1 }}>
                     {pollSaving ? 'Saving…' : 'Save'}
@@ -465,7 +465,7 @@ export default function Settings() {
                       style={{ opacity: pathsSaving ? 0.6 : 1 }}>
                       {pathsSaving ? 'Saving…' : 'Save'}
                     </button>
-                    {pathsError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{pathsError}</span>}
+                    {pathsError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{pathsError}</span>}
                   </div>
                 </form>
 
@@ -511,7 +511,7 @@ export default function Settings() {
                         style={{ opacity: namingSaving ? 0.6 : 1 }}>
                         {namingSaving ? 'Saving…' : 'Save'}
                       </button>
-                      {namingError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{namingError}</span>}
+                      {namingError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{namingError}</span>}
                     </div>
                   </form>
                 </div>
@@ -557,7 +557,7 @@ export default function Settings() {
                 </div>
 
                 {relocationSaving && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>Saving…</p>}
-                {relocationError && <p style={errorStyle}>{relocationError}</p>}
+                {relocationError && <p role="alert" style={errorStyle}>{relocationError}</p>}
               </div>
             )}
 
@@ -606,7 +606,7 @@ export default function Settings() {
                       style={{ opacity: connSaving ? 0.6 : 1 }}>
                       {connSaving ? 'Saving…' : 'Save & Test'}
                     </button>
-                    {connError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{connError}</span>}
+                    {connError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{connError}</span>}
                     {connSuccess && <span style={{ color: 'var(--success)', fontSize: 13 }}>Connected successfully.</span>}
                   </div>
                 </form>
@@ -620,22 +620,24 @@ export default function Settings() {
                 <div className="card" style={{ padding: 24 }}>
                   <h2 style={panelHeadingStyle}>Export backup</h2>
                   <div style={fieldStyle}>
-                    <label style={labelStyle}>Format</label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                      {(['otaki', 'json', 'csv'] as const).map(f => (
-                        <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                          <input type="radio" checked={exportFormat === f} onChange={() => setExportFormat(f)} />
-                          <span>
-                            <strong style={{ color: 'var(--text)' }}>
-                              {f === 'otaki' ? 'Otaki zip (full)' : f === 'json' ? 'JSON (no assets)' : 'CSV (read-only)'}
-                            </strong>
-                            <span style={{ color: 'var(--text-2)', marginLeft: 6 }}>
-                              {f === 'otaki' ? '— includes covers, chapter assignments, all settings' : f === 'json' ? '— structured data only, no cover images' : '— spreadsheet view, no import support'}
+                    <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+                      <legend style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>Export format</legend>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {(['otaki', 'json', 'csv'] as const).map(f => (
+                          <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                            <input type="radio" checked={exportFormat === f} onChange={() => setExportFormat(f)} />
+                            <span>
+                              <strong style={{ color: 'var(--text)' }}>
+                                {f === 'otaki' ? 'Otaki zip (full)' : f === 'json' ? 'JSON (no assets)' : 'CSV (read-only)'}
+                              </strong>
+                              <span style={{ color: 'var(--text-2)', marginLeft: 6 }}>
+                                {f === 'otaki' ? '— includes covers, chapter assignments, all settings' : f === 'json' ? '— structured data only, no cover images' : '— spreadsheet view, no import support'}
+                              </span>
                             </span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
                   </div>
                   <div style={{ marginBottom: 16, opacity: exportFormat === 'csv' ? 0.4 : 1 }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: exportFormat === 'csv' ? 'not-allowed' : 'pointer' }}>
@@ -649,7 +651,7 @@ export default function Settings() {
                     </label>
                     <p style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4, marginLeft: 24, visibility: exportFormat === 'csv' ? 'visible' : 'hidden' }}>Not available for CSV exports.</p>
                   </div>
-                  {exportError && <p style={errorStyle}>{exportError}</p>}
+                  {exportError && <p role="alert" style={errorStyle}>{exportError}</p>}
                   <button className="btn primary" onClick={handleExport} disabled={exporting}
                     style={{ opacity: exporting ? 0.6 : 1 }}>
                     {exporting ? 'Preparing…' : 'Download backup'}
@@ -662,6 +664,7 @@ export default function Settings() {
                   <div style={fieldStyle}>
                     <label style={labelStyle}>Backup file (.zip or .json)</label>
                     <input ref={importFileRef} type="file" accept=".zip,.json"
+                      aria-label="Import backup file"
                       style={{ fontSize: 13, marginTop: 6, color: 'var(--text)' }} />
                   </div>
                   <div style={fieldStyle}>
@@ -676,7 +679,7 @@ export default function Settings() {
                       style={{ marginTop: 4 }}
                     />
                   </div>
-                  {previewError && <p style={errorStyle}>{previewError}</p>}
+                  {previewError && <p role="alert" style={errorStyle}>{previewError}</p>}
                   <button className="btn" onClick={handlePreview} disabled={previewing}
                     style={{ opacity: previewing ? 0.6 : 1 }}>
                     {previewing ? 'Analysing…' : 'Preview import'}
@@ -698,7 +701,7 @@ export default function Settings() {
                           }}
                           style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}
                         >New</button>
-                        {applyError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{applyError}</span>}
+                        {applyError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{applyError}</span>}
                       </div>
 
                       {/* Tabs */}

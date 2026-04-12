@@ -288,18 +288,20 @@ export default function Search() {
       {step === 1 && (
         <>
           {/* States */}
-          {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
-          {isLoadingMore && (
-            <div style={{
-              display: 'inline-block', marginBottom: 8, padding: '3px 10px',
-              fontSize: 12, background: 'var(--accent-soft)', border: `1px solid var(--accent)`,
-              borderRadius: 12, color: 'var(--accent)',
-            }}>Loading more sources…</div>
-          )}
-          {streamError && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{streamError}</p>}
-          {debouncedQuery && streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError && (
-            <p style={{ color: 'var(--text-2)' }}>No results.</p>
-          )}
+          <div aria-live="polite" aria-atomic="false">
+            {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
+            {isLoadingMore && (
+              <div style={{
+                display: 'inline-block', marginBottom: 8, padding: '3px 10px',
+                fontSize: 12, background: 'var(--accent-soft)', border: `1px solid var(--accent)`,
+                borderRadius: 12, color: 'var(--accent)',
+              }}>Loading more sources…</div>
+            )}
+            {streamError && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{streamError}</p>}
+            {debouncedQuery && streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError && (
+              <p style={{ color: 'var(--text-2)' }}>No results.</p>
+            )}
+          </div>
 
           {/* Result grid */}
           {visibleResults.length > 0 && (
@@ -367,9 +369,10 @@ export default function Search() {
 
           {/* Display name */}
           <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>
+            <label htmlFor="display-name" style={labelStyle}>
               Display name
               <input
+                id="display-name"
                 type="text"
                 value={displayName}
                 onChange={e => handleDisplayNameChange(e.target.value)}
@@ -381,9 +384,10 @@ export default function Search() {
 
           {/* Library title */}
           <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>
+            <label htmlFor="library-title" style={labelStyle}>
               Library title
               <input
+                id="library-title"
                 type="text"
                 value={libraryTitle}
                 onChange={e => handleLibraryTitleChange(e.target.value)}
@@ -411,10 +415,20 @@ export default function Search() {
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>Cover</div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 {selectedResults.filter(r => r.cover_display_url).map(r => (
-                  <div key={r.url} style={{ cursor: 'pointer' }} onClick={() => setChosenCoverUrl(r.cover_url)}>
+                  <button
+                    key={r.url}
+                    onClick={() => setChosenCoverUrl(r.cover_url)}
+                    aria-label={`Select cover from ${r.source_name}`}
+                    aria-pressed={chosenCoverUrl === r.cover_url}
+                    style={{
+                      appearance: 'none', WebkitAppearance: 'none',
+                      background: 'none', border: 'none', padding: 0,
+                      cursor: 'pointer', font: 'inherit', color: 'inherit',
+                    }}
+                  >
                     <img
                       src={r.cover_display_url!}
-                      alt={r.source_name}
+                      alt=""
                       style={{
                         width: 100, height: 140, objectFit: 'cover', borderRadius: 6, display: 'block',
                         border: `3px solid ${chosenCoverUrl === r.cover_url ? 'var(--accent)' : 'transparent'}`,
@@ -423,7 +437,7 @@ export default function Search() {
                       onError={e => { e.currentTarget.style.display = 'none' }}
                     />
                     <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4, textAlign: 'center' }}>{r.source_name}</div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

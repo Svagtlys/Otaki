@@ -99,7 +99,24 @@ function CoverCard({ comic, onClick }: { comic: ComicListItem; onClick: () => vo
   const placeholder = imgState === 'error' ? 'bx-image-alt' : 'bx-book-open'
 
   return (
-    <div className="cover-card" onClick={onClick}>
+    <button
+      className="cover-card"
+      onClick={onClick}
+      aria-label={`View ${comic.title}`}
+      style={{
+        appearance: 'none',
+        WebkitAppearance: 'none',
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        margin: 0,
+        font: 'inherit',
+        cursor: 'pointer',
+        textAlign: 'left',
+        color: 'inherit',
+        display: 'block',
+      }}
+    >
       <div className="cover-image">
         {imgState !== 'ok' && <i className={`bx ${placeholder}`} />}
         <img
@@ -112,7 +129,7 @@ function CoverCard({ comic, onClick }: { comic: ComicListItem; onClick: () => vo
       </div>
       <div className="cover-title">{comic.title}</div>
       <div className="cover-sub">{comic.chapter_counts.done} / {comic.chapter_counts.total} ch</div>
-    </div>
+    </button>
   )
 }
 
@@ -241,7 +258,7 @@ export default function Library() {
         value={searchInput}
         onChange={e => setSearchInput(e.target.value)}
         style={{ fontSize: 15, width: '100%' }}
-        aria-label="Search"
+        aria-label="Search comics"
       />
 
       {/* Row 2: filters + navigation + view */}
@@ -263,6 +280,7 @@ export default function Library() {
             className="select"
             value={sourceId}
             onChange={e => set({ source_id: e.target.value, page: '1' })}
+            aria-label="Filter by source"
           >
             <option value="">All sources</option>
             {sources.map(s => (
@@ -277,6 +295,7 @@ export default function Library() {
             className="select"
             value={sortBy}
             onChange={e => set({ sort_by: e.target.value, page: '1' })}
+            aria-label="Sort by"
           >
             {SORT_OPTIONS.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -286,6 +305,7 @@ export default function Library() {
             className="btn"
             onClick={() => set({ sort_dir: sortDir === 'asc' ? 'desc' : 'asc', page: '1' })}
             title="Toggle sort direction"
+            aria-label="Toggle sort direction"
           ><i className={`bx bx-${sortDir === 'asc' ? 'up' : 'down'}-arrow-alt`} /></button>
         </div>
 
@@ -308,10 +328,10 @@ export default function Library() {
         )}
 
         {/* View toggle */}
-        <button className={`btn icon${gridView ? ' primary' : ''}`} onClick={() => setGridView(true)} title="Grid view">
+        <button className={`btn icon${gridView ? ' primary' : ''}`} onClick={() => setGridView(true)} title="Grid view" aria-label="Grid view">
           <i className="bx bx-grid-alt" />
         </button>
-        <button className={`btn icon${!gridView ? ' primary' : ''}`} onClick={() => setGridView(false)} title="List view">
+        <button className={`btn icon${!gridView ? ' primary' : ''}`} onClick={() => setGridView(false)} title="List view" aria-label="List view">
           <i className="bx bx-list-ul" />
         </button>
 
@@ -363,6 +383,14 @@ export default function Library() {
               <tr
                 key={comic.id}
                 onClick={() => navigate(`/comics/${comic.id}`)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    navigate(`/comics/${comic.id}`)
+                  }
+                }}
+                tabIndex={0}
+                aria-label={comic.title}
                 style={{ cursor: 'pointer', borderBottom: `1px solid var(--border)` }}
                 onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--surface-2)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = '' }}

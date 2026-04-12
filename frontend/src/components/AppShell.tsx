@@ -74,12 +74,18 @@ function HealthBadge() {
         className="nav-item"
         onClick={() => setExpanded(v => !v)}
         title={status ? `System: ${status}` : 'Checking status…'}
+        aria-label={status ? `System status: ${status}` : 'System status: checking…'}
+        aria-expanded={expanded}
+        aria-controls="health-panel"
       >
         <span style={dotStyle} />
         <span style={{ fontSize: 12 }}>{status ?? '…'}</span>
       </button>
-      {expanded && (
-        <div style={{
+      <div
+        id="health-panel"
+        aria-live="polite"
+        hidden={!expanded}
+        style={{
           position: 'absolute',
           bottom: '100%',
           left: 10,
@@ -92,30 +98,29 @@ function HealthBadge() {
           boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
           zIndex: 200,
         }}>
-          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13, color: '#f5f5f7' }}>System status</div>
-          {error || !data ? (
-            <div style={{ fontSize: 12, color: '#ff3b30' }}>Health check unreachable</div>
-          ) : (
-            <>
-              <HealthRow label="Database" value={data.database} ok={data.database === 'ok'} />
-              <HealthRow label="Suwayomi" value={data.suwayomi.status} ok={data.suwayomi.status === 'ok'} />
-              {data.suwayomi.sources.map(s => (
-                <HealthRow key={s.name} label={`  ${s.name}`} value={s.reachable ? 'reachable' : 'unreachable'} ok={s.reachable} indent />
-              ))}
-              <HealthRow
-                label="Download listener"
-                value={data.workers.download_listener.running ? `up ${fmt(data.workers.download_listener.uptime_seconds)}` : 'down'}
-                ok={data.workers.download_listener.running}
-              />
-              <HealthRow
-                label="Scheduler"
-                value={data.workers.scheduler.running ? `up ${fmt(data.workers.scheduler.uptime_seconds)}` : 'down'}
-                ok={data.workers.scheduler.running}
-              />
-            </>
-          )}
-        </div>
-      )}
+        <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13, color: '#f5f5f7' }}>System status</div>
+        {error || !data ? (
+          <div style={{ fontSize: 12, color: '#ff3b30' }}>Health check unreachable</div>
+        ) : (
+          <>
+            <HealthRow label="Database" value={data.database} ok={data.database === 'ok'} />
+            <HealthRow label="Suwayomi" value={data.suwayomi.status} ok={data.suwayomi.status === 'ok'} />
+            {data.suwayomi.sources.map(s => (
+              <HealthRow key={s.name} label={`  ${s.name}`} value={s.reachable ? 'reachable' : 'unreachable'} ok={s.reachable} indent />
+            ))}
+            <HealthRow
+              label="Download listener"
+              value={data.workers.download_listener.running ? `up ${fmt(data.workers.download_listener.uptime_seconds)}` : 'down'}
+              ok={data.workers.download_listener.running}
+            />
+            <HealthRow
+              label="Scheduler"
+              value={data.workers.scheduler.running ? `up ${fmt(data.workers.scheduler.uptime_seconds)}` : 'down'}
+              ok={data.workers.scheduler.running}
+            />
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -144,10 +149,11 @@ export default function AppShell() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       {/* ---------------------------------------------------------------- */}
       {/* Sidebar                                                           */}
       {/* ---------------------------------------------------------------- */}
-      <nav className="sidebar">
+      <nav className="sidebar" aria-label="Site navigation">
         {/* Logo */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
@@ -199,6 +205,7 @@ export default function AppShell() {
             className="nav-item"
             onClick={toggle}
             style={{ marginTop: 2 }}
+            aria-pressed={dark}
           >
             <i className={`bx ${dark ? 'bx-sun' : 'bx-moon'} nav-icon`} />
             <span style={{ fontSize: 12 }}>{dark ? 'Light mode' : 'Dark mode'}</span>
@@ -212,7 +219,7 @@ export default function AppShell() {
       {/* ---------------------------------------------------------------- */}
       {/* Main content                                                      */}
       {/* ---------------------------------------------------------------- */}
-      <main className="main">
+      <main id="main-content" className="main">
         <Outlet />
       </main>
     </div>

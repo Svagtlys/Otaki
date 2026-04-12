@@ -607,7 +607,7 @@ export default function Comic() {
 
       {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
 
-      {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
+      {error && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
 
       {comic && (
         <>
@@ -616,7 +616,7 @@ export default function Comic() {
             <div style={{ flexShrink: 0 }}>
               <img
                 src={`/api/requests/${comic.id}/cover`}
-                alt=""
+                alt={comic.title}
                 width={120}
                 height={160}
                 style={{ objectFit: 'cover', borderRadius: 8, display: 'block', boxShadow: 'var(--shadow-md)' }}
@@ -659,7 +659,7 @@ export default function Comic() {
                       </button>
                     </div>
                   )}
-                  {coverError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 6 }}>{coverError}</p>}
+                  {coverError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 6 }}>{coverError}</p>}
                 </div>
               )}
             </div>
@@ -828,7 +828,7 @@ export default function Comic() {
                     Add
                   </button>
                 </div>
-                {aliasError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{aliasError}</p>}
+                {aliasError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{aliasError}</p>}
               </div>
 
               <button
@@ -838,7 +838,7 @@ export default function Comic() {
               >
                 {editSubmitting ? 'Saving…' : 'Save changes'}
               </button>
-              {editError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{editError}</p>}
+              {editError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{editError}</p>}
             </div>
           )}
 
@@ -942,8 +942,8 @@ export default function Comic() {
                   </button>
                   <button onClick={() => setPinsOpen(false)} style={{ ...linkButtonStyle, fontSize: 12 }}>Cancel</button>
                 </div>
-                {pinResult && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{pinResult}</p>}
-                {pinError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{pinError}</p>}
+                {pinResult && <p role="status" style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{pinResult}</p>}
+                {pinError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{pinError}</p>}
               </div>
             )}
           </div>
@@ -981,7 +981,7 @@ export default function Comic() {
                           cursor: 'grab', userSelect: 'none',
                         }}
                       >
-                        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>⠿</span>
+                        <span aria-hidden="true" style={{ color: 'var(--text-3)', fontSize: 11 }}>⠿</span>
                         <span style={{ width: 20, textAlign: 'right', fontSize: 12, color: 'var(--text-3)' }}>{index + 1}</span>
                         <span style={{ flex: 1, fontWeight: entry.is_overridden || overrideDraft !== null ? 500 : 400 }}>
                           {entry.source_name}
@@ -1012,8 +1012,8 @@ export default function Comic() {
                     </button>
                     <button onClick={() => setOverridesOpen(false)} style={{ ...linkButtonStyle, fontSize: 12, color: 'var(--text-3)' }}>Cancel</button>
                   </div>
-                  {overrideResult && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{overrideResult}</p>}
-                  {overrideError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{overrideError}</p>}
+                  {overrideResult && <p role="status" style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{overrideResult}</p>}
+                  {overrideError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{overrideError}</p>}
                 </div>
               )
             })()}
@@ -1030,8 +1030,8 @@ export default function Comic() {
                 >
                   {discovering ? 'Searching sources…' : 'Re-discover chapters'}
                 </button>
-                {discoverResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{discoverResult}</p>}
-                {discoverError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{discoverError}</p>}
+                {discoverResult && <p role="status" style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{discoverResult}</p>}
+                {discoverError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{discoverError}</p>}
               </div>
             )}
             {chaptersTotal > 0 && (
@@ -1044,7 +1044,7 @@ export default function Comic() {
                   {reprocessing ? 'Reprocessing…' : 'Reprocess chapters'}
                 </button>
                 {(reprocessing || reprocessLog.length > 0) && (
-                  <div style={reprocessLogStyle}>
+                  <div aria-live="polite" aria-atomic="false" role="log" style={reprocessLogStyle}>
                     {reprocessLog.map((entry, i) => (
                       <div key={i}>
                         {entry.action === 'processed' ? <i className="bx bx-check" style={{ color: 'var(--success)' }} /> : entry.action === 'queued' ? <i className="bx bx-refresh" /> : '—'}
@@ -1054,8 +1054,8 @@ export default function Comic() {
                     {reprocessing && <div style={{ color: 'var(--text-3)' }}>…</div>}
                   </div>
                 )}
-                {reprocessResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{reprocessResult}</p>}
-                {reprocessError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{reprocessError}</p>}
+                {reprocessResult && <p role="status" style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{reprocessResult}</p>}
+                {reprocessError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{reprocessError}</p>}
               </div>
             )}
             {chaptersTotal > 0 && (
@@ -1068,15 +1068,15 @@ export default function Comic() {
                   {forceUpgrading ? 'Checking upgrades…' : 'Force upgrade'}
                 </button>
                 {(forceUpgrading || forceUpgradeLog.length > 0) && (
-                  <div style={reprocessLogStyle}>
+                  <div aria-live="polite" aria-atomic="false" role="log" style={reprocessLogStyle}>
                     {forceUpgradeLog.map((entry, i) => (
                       <div key={i}><i className="bx bx-refresh" /> Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
                     ))}
                     {forceUpgrading && <div style={{ color: 'var(--text-3)' }}>…</div>}
                   </div>
                 )}
-                {forceUpgradeResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{forceUpgradeResult}</p>}
-                {forceUpgradeError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{forceUpgradeError}</p>}
+                {forceUpgradeResult && <p role="status" style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{forceUpgradeResult}</p>}
+                {forceUpgradeError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{forceUpgradeError}</p>}
               </div>
             )}
           </div>

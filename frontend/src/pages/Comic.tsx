@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch, streamFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
+import PageLayout from '../components/PageLayout'
 
 const TOKEN_KEY = 'otaki_token'
 
@@ -598,30 +599,30 @@ export default function Comic() {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>{comic?.title ?? 'Comic'}</h1>
-        <button onClick={() => navigate('/library')} style={linkButtonStyle}>← Library</button>
-      </div>
+    <PageLayout title={comic?.title ?? 'Comic'}>
+      <button onClick={() => navigate('/library')}
+        style={{ ...backLinkStyle, marginBottom: 16, display: 'inline-block' }}>
+        <i className="bx bx-chevron-left" /> Library
+      </button>
 
-      {isLoading && <p>Loading…</p>}
+      {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
 
-      {error && <p style={{ color: 'red' }}>{extractDetail(error)}</p>}
+      {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
 
       {comic && (
         <>
-          {/* Header: cover + metadata */}
-          <div style={{ display: 'flex', gap: 24, marginBottom: 32 }}>
+          {/* Hero: cover + metadata */}
+          <div className="card" style={{ display: 'flex', gap: 24, padding: 24, marginBottom: 24 }}>
             <div style={{ flexShrink: 0 }}>
               <img
                 src={`/api/requests/${comic.id}/cover`}
                 alt=""
-                width={160}
-                height={220}
-                style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
+                width={120}
+                height={160}
+                style={{ objectFit: 'cover', borderRadius: 8, display: 'block', boxShadow: 'var(--shadow-md)' }}
                 onError={e => { e.currentTarget.style.display = 'none' }}
               />
-              <button onClick={() => { setCoverFormOpen(v => !v); setCoverError(null) }} style={{ ...linkButtonStyle, marginTop: 4, fontSize: 12 }}>
+              <button onClick={() => { setCoverFormOpen(v => !v); setCoverError(null) }} style={{ ...linkButtonStyle, marginTop: 6, fontSize: 12 }}>
                 {coverFormOpen ? 'Cancel' : 'Change cover'}
               </button>
               {coverFormOpen && (
@@ -637,7 +638,8 @@ export default function Comic() {
                         value={coverUrl}
                         onChange={e => setCoverUrl(e.target.value)}
                         placeholder="https://..."
-                        style={{ flex: 1, padding: '6px 10px', fontSize: 13, border: '1px solid #ccc', borderRadius: 4 }}
+                        className="input"
+                        style={{ flex: 1, fontSize: 13 }}
                       />
                       <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverUrl} style={{ ...primaryButtonStyle, opacity: (coverSubmitting || !coverUrl) ? 0.6 : 1 }}>
                         {coverSubmitting ? 'Saving…' : 'Save'}
@@ -657,18 +659,41 @@ export default function Comic() {
                       </button>
                     </div>
                   )}
-                  {coverError && <p style={{ fontSize: 13, color: 'red', marginTop: 6 }}>{coverError}</p>}
+                  {coverError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 6 }}>{coverError}</p>}
                 </div>
               )}
             </div>
-            <div>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Library title</span>{comic.library_title}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Status</span>
-                {comic.status}
-                <button onClick={handleStatusToggle} style={{ ...linkButtonStyle, marginLeft: 8, fontSize: 12 }}>
+            <div style={{ flex: 1 }}>
+              {/* Status badge + title row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 12,
+                  background: comic.status === 'tracking' ? 'var(--accent-soft)' : 'var(--surface-2)',
+                  color: comic.status === 'tracking' ? 'var(--accent)' : 'var(--text-2)',
+                  border: `1px solid ${comic.status === 'tracking' ? 'var(--accent)' : 'var(--border)'}`,
+                  textTransform: 'uppercase', letterSpacing: '0.05em',
+                }}>{comic.status}</span>
+                <button onClick={handleStatusToggle} style={{ ...linkButtonStyle, fontSize: 12 }}>
                   {comic.status === 'tracking' ? 'Mark complete' : 'Resume tracking'}
                 </button>
-              </p>
+              </div>
+
+              {/* Stat grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+                {[
+                  { label: 'Chapters', value: String(chaptersTotal) },
+                  { label: 'Next poll', value: formatRelative(comic.next_poll_at) },
+                  { label: 'Last upgrade', value: formatRelative(comic.last_upgrade_check_at) },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Meta rows */}
+              <p style={metaRowStyle}><span style={metaLabelStyle}>Library title</span>{comic.library_title}</p>
               <p style={metaRowStyle}>
                 <span style={metaLabelStyle}>Poll interval</span>
                 {comic.poll_override_days != null
@@ -678,17 +703,15 @@ export default function Comic() {
                     : '7d (default)'}
               </p>
               <p style={metaRowStyle}><span style={metaLabelStyle}>Upgrade interval</span>{comic.upgrade_override_days != null ? `${comic.upgrade_override_days}d` : '(use poll interval)'}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Next poll</span>{formatRelative(comic.next_poll_at)}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Last upgrade check</span>{formatRelative(comic.last_upgrade_check_at)}</p>
-              <button onClick={openEdit} style={{ ...linkButtonStyle, fontSize: 12, marginTop: 4 }}>Edit settings</button>
+              <button onClick={openEdit} className="btn" style={{ fontSize: 12, marginTop: 8 }}>Edit settings</button>
             </div>
           </div>
 
           {/* Edit form */}
           {editOpen && (
-            <div style={{ marginBottom: 24, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <strong style={{ fontSize: 14 }}>Edit settings</strong>
+            <div className="card" style={{ marginBottom: 24, padding: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <strong style={{ fontSize: 14, color: 'var(--text)' }}>Edit settings</strong>
                 <button onClick={() => setEditOpen(false)} style={linkButtonStyle}>Cancel</button>
               </div>
 
@@ -702,7 +725,7 @@ export default function Comic() {
                     style={editInputStyle}
                   />
                 </label>
-                <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
+                <p style={{ fontSize: 11, color: 'var(--text-3)', margin: '2px 0 0' }}>
                   Changing this will not rename existing library files.
                 </p>
               </div>
@@ -759,7 +782,7 @@ export default function Comic() {
 
               {/* Aliases */}
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#444', marginBottom: 6 }}>Aliases</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Aliases</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                   {(comic.aliases ?? [])
                     .filter(a => !pendingAliasDeletes.has(a.id))
@@ -768,24 +791,24 @@ export default function Comic() {
                         {a.title}
                         <button
                           onClick={() => handleStagedDeleteAlias(a.id)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: 'var(--text-3)', fontSize: 12, padding: 0 }}
                           aria-label={`Remove alias ${a.title}`}
-                        >×</button>
+                        ><i className="bx bx-x" /></button>
                       </span>
                     ))}
                   {pendingAliasAdds.map(title => (
-                    <span key={title} style={{ ...aliasChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>
+                    <span key={title} style={{ ...aliasChipStyle, borderStyle: 'dashed', color: 'var(--accent)' }}>
                       {title}
                       <button
                         onClick={() => handleRemoveStagedAdd(title)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: 'var(--text-3)', fontSize: 12, padding: 0 }}
                         aria-label={`Remove pending alias ${title}`}
-                      >×</button>
+                      ><i className="bx bx-x" /></button>
                     </span>
                   ))}
                   {(comic.aliases ?? []).filter(a => !pendingAliasDeletes.has(a.id)).length === 0 &&
                     pendingAliasAdds.length === 0 && (
-                      <span style={{ fontSize: 12, color: '#888' }}>None</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>None</span>
                     )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -805,7 +828,7 @@ export default function Comic() {
                     Add
                   </button>
                 </div>
-                {aliasError && <p style={{ fontSize: 12, color: 'red', marginTop: 4 }}>{aliasError}</p>}
+                {aliasError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{aliasError}</p>}
               </div>
 
               <button
@@ -815,7 +838,7 @@ export default function Comic() {
               >
                 {editSubmitting ? 'Saving…' : 'Save changes'}
               </button>
-              {editError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{editError}</p>}
+              {editError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{editError}</p>}
             </div>
           )}
 
@@ -828,8 +851,8 @@ export default function Comic() {
               {pinsOpen ? 'Close pin manager' : 'Manage source pins'}
             </button>
             {pinsOpen && (
-              <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-                <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+              <div className="card" style={{ marginTop: 12, padding: 16 }}>
+                <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 12 }}>
                   Pins tell Otaki to fetch chapters directly by manga ID instead of searching by title.
                   Useful when different comics have the same title.
                 </div>
@@ -837,20 +860,20 @@ export default function Comic() {
                 {/* Current pins */}
                 <div style={{ marginBottom: 12 }}>
                   {pins.filter(p => !removedPinIds.has(p.id)).length === 0 && pendingPins.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#888' }}>No pins set.</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No pins set.</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {pins.filter(p => !removedPinIds.has(p.id)).map(p => (
                         <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                           <span style={pinChipStyle}>{p.source_name}</span>
-                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{p.suwayomi_manga_id}</span>
                           <button onClick={() => removeSavedPin(p.id)} style={removeBtnStyle} aria-label="Remove pin">✕</button>
                         </div>
                       ))}
                       {pendingPins.map((p, i) => (
                         <div key={`pending-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                          <span style={{ ...pinChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>{p.source_name}</span>
-                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
+                          <span style={{ ...pinChipStyle, borderStyle: 'dashed', color: 'var(--accent)' }}>{p.source_name}</span>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{p.suwayomi_manga_id}</span>
                           <button onClick={() => removePendingPin(i)} style={removeBtnStyle} aria-label="Remove pending pin">✕</button>
                         </div>
                       ))}
@@ -859,13 +882,14 @@ export default function Comic() {
                 </div>
 
                 {/* Add pin search */}
-                <div style={{ marginBottom: 12, borderTop: '1px solid #eee', paddingTop: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 6 }}>Add a pin</div>
+                <div style={{ marginBottom: 12, borderTop: `1px solid var(--border)`, paddingTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Add a pin</div>
                   <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
                     <select
                       value={pinSearchSourceId}
                       onChange={e => setPinSearchSourceId(e.target.value ? Number(e.target.value) : '')}
-                      style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
+                      className="select"
+                      style={{ fontSize: 12 }}
                     >
                       <option value="">Select source…</option>
                       {sources.filter(s => s.enabled).map(s => (
@@ -878,7 +902,8 @@ export default function Comic() {
                       value={pinSearchQuery}
                       onChange={e => setPinSearchQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handlePinSearch()}
-                      style={{ flex: 1, minWidth: 140, padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
+                      className="input"
+                      style={{ flex: 1, minWidth: 140, fontSize: 12 }}
                     />
                     <button
                       onClick={handlePinSearch}
@@ -889,17 +914,17 @@ export default function Comic() {
                     </button>
                   </div>
                   {pinSearchResults.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', border: '1px solid #eee', borderRadius: 4, padding: 6 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', border: `1px solid var(--border)`, borderRadius: 4, padding: 6, background: 'var(--surface)' }}>
                       {pinSearchResults.map(r => (
                         <button
                           key={r.url}
                           onClick={() => stagePinFromResult(r)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '4px 6px', borderRadius: 4, fontSize: 12, display: 'flex', flexDirection: 'column' }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#f0f4ff' }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '4px 6px', borderRadius: 4, fontSize: 12, display: 'flex', flexDirection: 'column', color: 'var(--text)', fontFamily: 'inherit' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--surface-2)' }}
                           onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
                         >
                           <span style={{ fontWeight: 500 }}>{r.title}</span>
-                          <span style={{ color: '#888', fontSize: 11 }}>ID: {r.suwayomi_manga_id}</span>
+                          <span style={{ color: 'var(--text-2)', fontSize: 11 }}>ID: {r.suwayomi_manga_id}</span>
                         </button>
                       ))}
                     </div>
@@ -917,8 +942,8 @@ export default function Comic() {
                   </button>
                   <button onClick={() => setPinsOpen(false)} style={{ ...linkButtonStyle, fontSize: 12 }}>Cancel</button>
                 </div>
-                {pinResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{pinResult}</p>}
-                {pinError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{pinError}</p>}
+                {pinResult && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{pinResult}</p>}
+                {pinError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{pinError}</p>}
               </div>
             )}
           </div>
@@ -936,8 +961,8 @@ export default function Comic() {
               if (overrideDraft === null && sourceOverrides.length > 0) initOverrideDraft(sourceOverrides)
               const display = overrideDraft ?? sourceOverrides
               return (
-                <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-                  <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+                <div className="card" style={{ marginTop: 12, padding: 16 }}>
+                  <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 12 }}>
                     Drag to reorder sources for this comic. Overridden positions are shown in blue.
                     Changes take effect on the next upgrade check — use Force Upgrade to apply immediately.
                   </div>
@@ -952,20 +977,20 @@ export default function Comic() {
                         style={{
                           display: 'flex', alignItems: 'center', gap: 10,
                           padding: '6px 10px', borderRadius: 4, fontSize: 13,
-                          background: '#fff', border: '1px solid #eee',
+                          background: 'var(--surface-2)', border: `1px solid var(--border)`,
                           cursor: 'grab', userSelect: 'none',
                         }}
                       >
-                        <span style={{ color: '#aaa', fontSize: 11 }}>⠿</span>
-                        <span style={{ width: 20, textAlign: 'right', fontSize: 12, color: '#888' }}>{index + 1}</span>
+                        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>⠿</span>
+                        <span style={{ width: 20, textAlign: 'right', fontSize: 12, color: 'var(--text-3)' }}>{index + 1}</span>
                         <span style={{ flex: 1, fontWeight: entry.is_overridden || overrideDraft !== null ? 500 : 400 }}>
                           {entry.source_name}
                         </span>
                         {entry.is_overridden && overrideDraft === null && (
-                          <span style={{ fontSize: 11, color: '#0070f3' }}>overridden</span>
+                          <span style={{ fontSize: 11, color: 'var(--accent)' }}>overridden</span>
                         )}
                         {overrideDraft === null && entry.is_overridden && (
-                          <span style={{ fontSize: 11, color: '#888' }}>global: {entry.global_priority}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>global: {entry.global_priority}</span>
                         )}
                       </div>
                     ))}
@@ -985,10 +1010,10 @@ export default function Comic() {
                     >
                       Reset to global defaults
                     </button>
-                    <button onClick={() => setOverridesOpen(false)} style={{ ...linkButtonStyle, fontSize: 12, color: '#888' }}>Cancel</button>
+                    <button onClick={() => setOverridesOpen(false)} style={{ ...linkButtonStyle, fontSize: 12, color: 'var(--text-3)' }}>Cancel</button>
                   </div>
-                  {overrideResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{overrideResult}</p>}
-                  {overrideError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{overrideError}</p>}
+                  {overrideResult && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{overrideResult}</p>}
+                  {overrideError && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{overrideError}</p>}
                 </div>
               )
             })()}
@@ -1005,8 +1030,8 @@ export default function Comic() {
                 >
                   {discovering ? 'Searching sources…' : 'Re-discover chapters'}
                 </button>
-                {discoverResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{discoverResult}</p>}
-                {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
+                {discoverResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{discoverResult}</p>}
+                {discoverError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{discoverError}</p>}
               </div>
             )}
             {chaptersTotal > 0 && (
@@ -1022,15 +1047,15 @@ export default function Comic() {
                   <div style={reprocessLogStyle}>
                     {reprocessLog.map((entry, i) => (
                       <div key={i}>
-                        {entry.action === 'processed' ? '✓' : entry.action === 'queued' ? '⟳' : '—'}
+                        {entry.action === 'processed' ? <i className="bx bx-check" style={{ color: 'var(--success)' }} /> : entry.action === 'queued' ? <i className="bx bx-refresh" /> : '—'}
                         {' '}Ch {entry.chapter_number} — {entry.action}
                       </div>
                     ))}
-                    {reprocessing && <div style={{ color: '#999' }}>…</div>}
+                    {reprocessing && <div style={{ color: 'var(--text-3)' }}>…</div>}
                   </div>
                 )}
-                {reprocessResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{reprocessResult}</p>}
-                {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
+                {reprocessResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{reprocessResult}</p>}
+                {reprocessError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{reprocessError}</p>}
               </div>
             )}
             {chaptersTotal > 0 && (
@@ -1045,13 +1070,13 @@ export default function Comic() {
                 {(forceUpgrading || forceUpgradeLog.length > 0) && (
                   <div style={reprocessLogStyle}>
                     {forceUpgradeLog.map((entry, i) => (
-                      <div key={i}>⟳ Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
+                      <div key={i}><i className="bx bx-refresh" /> Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
                     ))}
-                    {forceUpgrading && <div style={{ color: '#999' }}>…</div>}
+                    {forceUpgrading && <div style={{ color: 'var(--text-3)' }}>…</div>}
                   </div>
                 )}
-                {forceUpgradeResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{forceUpgradeResult}</p>}
-                {forceUpgradeError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{forceUpgradeError}</p>}
+                {forceUpgradeResult && <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8 }}>{forceUpgradeResult}</p>}
+                {forceUpgradeError && <p style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{forceUpgradeError}</p>}
               </div>
             )}
           </div>
@@ -1073,7 +1098,7 @@ export default function Comic() {
           {/* Chapter table */}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
+              <tr style={{ textAlign: 'left', borderBottom: `2px solid var(--border)` }}>
                 <th style={thStyle}>Chapter</th>
                 <th style={thStyle}>Volume</th>
                 <th style={thStyle}>Source</th>
@@ -1085,7 +1110,7 @@ export default function Comic() {
             </thead>
             <tbody>
               {chapters.map(ch => (
-                <tr key={ch.assignment_id} style={{ borderBottom: '1px solid #eee' }}>
+                <tr key={ch.assignment_id} style={{ borderBottom: `1px solid var(--border)` }}>
                   <td style={tdStyle}>{ch.chapter_number}</td>
                   <td style={tdStyle}>{ch.volume_number ?? '—'}</td>
                   <td style={tdStyle}>{ch.source_name}</td>
@@ -1096,7 +1121,7 @@ export default function Comic() {
                   </td>
                   <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                     {chapterUpgradeMsgs[ch.assignment_id] ? (
-                      <span style={{ fontSize: 11, color: chapterUpgradeMsgs[ch.assignment_id] === 'Upgrade queued' ? '#22c55e' : '#888' }}>
+                      <span style={{ fontSize: 11, color: chapterUpgradeMsgs[ch.assignment_id] === 'Upgrade queued' ? 'var(--success)' : 'var(--text-3)' }}>
                         {chapterUpgradeMsgs[ch.assignment_id]}
                       </span>
                     ) : (
@@ -1121,7 +1146,7 @@ export default function Comic() {
                 disabled={chapterPage <= 1}
                 onClick={() => setChapterPage(p => p - 1)}
                 style={chapterFilterBtnStyle(false)}
-              >← Prev</button>
+              ><i className="bx bx-chevron-left" /> Prev</button>
               <span style={{ fontSize: 13, color: '#555' }}>
                 Page {chapterPage} / {chapterTotalPages}
               </span>
@@ -1129,73 +1154,88 @@ export default function Comic() {
                 disabled={chapterPage >= chapterTotalPages}
                 onClick={() => setChapterPage(p => p + 1)}
                 style={chapterFilterBtnStyle(false)}
-              >Next →</button>
+              >Next <i className="bx bx-chevron-right" /></button>
             </div>
           )}
         </>
       )}
-    </div>
+    </PageLayout>
   )
+}
+
+const backLinkStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: 'var(--accent)',
+  cursor: 'pointer',
+  fontSize: 13,
+  padding: 0,
+  fontFamily: 'inherit',
 }
 
 const linkButtonStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#0070f3',
+  color: 'var(--accent)',
   cursor: 'pointer',
   fontSize: 14,
   padding: 0,
+  fontFamily: 'inherit',
 }
 
 const metaRowStyle: React.CSSProperties = {
   margin: '0 0 6px 0',
-  fontSize: 14,
+  fontSize: 13,
+  color: 'var(--text)',
 }
 
 const metaLabelStyle: React.CSSProperties = {
   fontWeight: 600,
   marginRight: 8,
-  color: '#444',
+  color: 'var(--text-2)',
 }
 
 const primaryButtonStyle: React.CSSProperties = {
   padding: '8px 16px',
-  fontSize: 14,
-  background: '#0070f3',
+  fontSize: 13,
+  background: 'var(--accent)',
   color: '#fff',
   border: 'none',
-  borderRadius: 4,
+  borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const secondaryButtonStyle: React.CSSProperties = {
   padding: '8px 16px',
-  fontSize: 14,
-  background: '#f0f0f0',
-  color: '#333',
-  border: '1px solid #ccc',
-  borderRadius: 4,
+  fontSize: 13,
+  background: 'var(--surface-2)',
+  color: 'var(--text)',
+  border: `1px solid var(--border)`,
+  borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const thStyle: React.CSSProperties = {
   padding: '8px 12px',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
+  color: 'var(--text-2)',
 }
 
 const tdStyle: React.CSSProperties = {
   padding: '10px 12px',
   verticalAlign: 'middle',
   fontSize: 13,
+  color: 'var(--text)',
 }
 
 const editLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
+  color: 'var(--text)',
 }
 
 const editInputStyle: React.CSSProperties = {
@@ -1203,10 +1243,13 @@ const editInputStyle: React.CSSProperties = {
   marginTop: 4,
   padding: '6px 10px',
   fontSize: 13,
-  border: '1px solid #ccc',
-  borderRadius: 4,
+  border: `1px solid var(--border)`,
+  borderRadius: 'var(--radius-sm)',
   width: '100%',
   boxSizing: 'border-box',
+  background: 'var(--surface)',
+  color: 'var(--text)',
+  fontFamily: 'inherit',
 }
 
 const aliasChipStyle: React.CSSProperties = {
@@ -1214,20 +1257,20 @@ const aliasChipStyle: React.CSSProperties = {
   alignItems: 'center',
   padding: '2px 8px',
   fontSize: 12,
-  background: '#f0f0f0',
-  border: '1px solid #ddd',
+  background: 'var(--surface-2)',
+  border: `1px solid var(--border)`,
   borderRadius: 12,
-  color: '#555',
+  color: 'var(--text)',
 }
 
 const pinChipStyle: React.CSSProperties = {
   display: 'inline-block',
   padding: '1px 6px',
   fontSize: 11,
-  background: '#f0f0f0',
-  border: '1px solid #ddd',
+  background: 'var(--surface-2)',
+  border: `1px solid var(--border)`,
   borderRadius: 10,
-  color: '#555',
+  color: 'var(--text)',
   flexShrink: 0,
 }
 
@@ -1235,7 +1278,7 @@ const removeBtnStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
   cursor: 'pointer',
-  color: '#aaa',
+  color: 'var(--text-3)',
   fontSize: 12,
   padding: 0,
   lineHeight: 1,
@@ -1246,11 +1289,12 @@ const reprocessLogStyle: React.CSSProperties = {
   overflowY: 'auto',
   fontSize: 12,
   fontFamily: 'monospace',
-  background: '#f8f8f8',
-  border: '1px solid #eee',
-  borderRadius: 4,
+  background: 'var(--surface-2)',
+  border: `1px solid var(--border)`,
+  borderRadius: 'var(--radius-sm)',
   padding: '6px 10px',
   marginTop: 6,
+  color: 'var(--text)',
 }
 
 function chapterFilterBtnStyle(active: boolean): React.CSSProperties {

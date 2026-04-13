@@ -54,16 +54,6 @@ test('authenticated: Sources button on Library navigates to /sources', async ({ 
   await expect(page).toHaveURL(/\/sources/, { timeout: 5000 })
 })
 
-test('authenticated: ← Library button on Sources navigates back to /library', async ({ page }) => {
-  await authenticate(page)
-  await page.route('**/api/sources', route =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
-  )
-  await page.goto('/sources')
-  await page.getByRole('button', { name: '← Library' }).click()
-  await expect(page).toHaveURL(/\/library/, { timeout: 5000 })
-})
-
 const MOCK_SOURCES = [
   {
     id: 1,

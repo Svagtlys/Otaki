@@ -307,15 +307,13 @@ export default function Search() {
           {visibleResults.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 20 }}>
               {visibleResults.map(r => (
-                <div
+                <button
                   key={r.url}
+                  type="button"
                   className={`search-card${selected.has(r.url) ? ' selected' : ''}`}
-                  style={{ flexDirection: 'column', alignItems: 'flex-start' }}
-                  role="button"
-                  tabIndex={0}
+                  style={{ appearance: 'none', WebkitAppearance: 'none', background: 'none', border: 'none', padding: 0, margin: 0, font: 'inherit', cursor: 'pointer', textAlign: 'left', color: 'inherit', flexDirection: 'column', alignItems: 'flex-start' }}
                   aria-pressed={selected.has(r.url)}
                   onClick={() => toggleSelect(r.url)}
-                  onKeyDown={e => e.key === 'Enter' && toggleSelect(r.url)}
                 >
                   {r.cover_display_url ? (
                     <img
@@ -338,7 +336,7 @@ export default function Search() {
                       {r.synopsis}
                     </div>
                   )}
-                </div>
+                </button>
               ))}
             </div>
           )}

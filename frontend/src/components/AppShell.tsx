@@ -84,8 +84,8 @@ function HealthBadge() {
       <div
         id="health-panel"
         aria-live="polite"
-        hidden={!expanded}
         style={{
+          display: expanded ? 'block' : 'none',
           position: 'absolute',
           bottom: '100%',
           left: 10,

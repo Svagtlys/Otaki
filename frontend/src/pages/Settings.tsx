@@ -607,7 +607,7 @@ export default function Settings() {
                       {connSaving ? 'Saving…' : 'Save & Test'}
                     </button>
                     {connError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{connError}</span>}
-                    {connSuccess && <span style={{ color: 'var(--success)', fontSize: 13 }}>Connected successfully.</span>}
+                    {connSuccess && <span role="status" style={{ color: 'var(--success)', fontSize: 13 }}>Connected successfully.</span>}
                   </div>
                 </form>
               </div>

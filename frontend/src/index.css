@@ -496,6 +496,33 @@ input[type="checkbox"]:checked::after {
 }
 
 /* ------------------------------------------------------------------ */
+/* Pin search result buttons                                             */
+/* ------------------------------------------------------------------ */
+.pin-result-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  font-family: inherit;
+  width: 100%;
+}
+
+.pin-result-btn:hover {
+  background: var(--surface-2);
+}
+
+.pin-result-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ */
 /* Source priority rows                                                  */
 /* ------------------------------------------------------------------ */
 .source-row {
@@ -507,6 +534,8 @@ input[type="checkbox"]:checked::after {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   transition: box-shadow var(--transition), opacity var(--transition), border-color var(--transition), background var(--transition);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .source-row:hover {
@@ -647,4 +676,352 @@ input[type="checkbox"]:focus-visible {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Visually hidden (a11y)                                               */
+/* ------------------------------------------------------------------ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Button variants                                                       */
+/* ------------------------------------------------------------------ */
+.btn.secondary {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn.secondary:hover {
+  background: var(--border);
+}
+
+.btn.ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.btn.ghost:hover {
+  background: var(--surface-2);
+  border-color: transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Source tag pill (chapter table)                                       */
+/* ------------------------------------------------------------------ */
+.tag {
+  display: inline-block;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+/* ------------------------------------------------------------------ */
+/* Status badge                                                          */
+/* ------------------------------------------------------------------ */
+.status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-badge.tracking {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.status-badge.complete {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Comic detail — page topbar with breadcrumb                           */
+/* ------------------------------------------------------------------ */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.breadcrumb-sep {
+  color: var(--text-3);
+  font-size: 14px;
+  user-select: none;
+}
+
+.breadcrumb-current {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Comic detail — hero                                                   */
+/* ------------------------------------------------------------------ */
+.detail-hero {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  align-items: stretch;
+}
+
+.detail-cover {
+  width: 140px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 36px;
+  position: relative;
+  box-shadow: var(--shadow-md);
+}
+
+.detail-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 6px 0 2px;
+  line-height: 1.3;
+}
+
+.detail-subtitle {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.detail-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stat-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-right: 20px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.stat-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--border);
+  margin: 0 4px 0 0;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Comic detail — info cards                                             */
+/* ------------------------------------------------------------------ */
+.info-cards {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding: 0;
+  list-style: none;
+}
+
+.info-card {
+  flex: 1;
+  min-width: 150px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.info-card-label {
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.info-card-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+  display: block;
+}
+
+.info-card-sub {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-top: 2px;
+  display: block;
+}
+
+/* ------------------------------------------------------------------ */
+/* Comic detail — chapter section                                        */
+/* ------------------------------------------------------------------ */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chapter-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.chapter-filter-btn {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+  white-space: nowrap;
+}
+
+.chapter-filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.chapter-filter-btn:hover:not(.active) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.chapter-filter-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: background var(--transition), border-color var(--transition);
+  margin-bottom: 24px;
+}
+
+.table-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+/* Hide number-input spin buttons — users type or use arrow keys */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }

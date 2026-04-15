@@ -132,18 +132,6 @@ test('authenticated: Library row click navigates to /comics/{id}', async ({ page
   await expect(page).toHaveURL(/\/comics\/1/, { timeout: 5000 })
 })
 
-test('authenticated: ← Library button navigates back to /library', async ({ page }) => {
-  await authenticate(page)
-  await page.route('**/api/requests/1', route =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_COMIC) }),
-  )
-  await page.route('**/api/requests/1/chapters*', route =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_CHAPTERS) }),
-  )
-  await page.goto('/comics/1')
-  await page.locator('main').getByRole('button', { name: /library/i }).click()
-  await expect(page).toHaveURL(/\/library/, { timeout: 5000 })
-})
 
 test('authenticated: page renders comic title as heading', async ({ page }) => {
   await authenticate(page)
@@ -171,6 +159,45 @@ test('authenticated: metadata fields are visible', async ({ page }) => {
   await expect(page.getByText(/in \d+ days/)).toBeVisible()
 })
 
+test('authenticated: info cards are visible', async ({ page }) => {
+  await authenticate(page)
+  await page.route('**/api/requests/1', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_COMIC) }),
+  )
+  await page.route('**/api/requests/1/chapters*', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_CHAPTERS) }),
+  )
+  await page.route('**/api/requests/1/pins', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  )
+  await page.goto('/comics/1')
+  await expect(page.getByText('Poll interval')).toBeVisible({ timeout: 5000 })
+  await expect(page.getByText('Upgrade interval')).toBeVisible()
+  await expect(page.getByText('Last upgrade check')).toBeVisible()
+  await expect(page.getByText('Aliases')).toBeVisible()
+  await expect(page.getByText('Source pins')).toBeVisible()
+})
+
+test('authenticated: chapter filter chips show counts', async ({ page }) => {
+  await authenticate(page)
+  await page.route('**/api/requests/1', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_COMIC) }),
+  )
+  await page.route('**/api/requests/1/chapters*', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_CHAPTERS) }),
+  )
+  await page.route('**/api/requests/1/pins', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
+  )
+  await page.goto('/comics/1')
+  // Each chip shows a parenthetical count
+  await expect(page.getByRole('button', { name: /^All \(\d+\)$/ })).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('button', { name: /^Queued \(\d+\)$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Downloading \(\d+\)$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Available \(\d+\)$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Failed \(\d+\)$/ })).toBeVisible()
+})
+
 test('authenticated: chapter table rows are visible', async ({ page }) => {
   await authenticate(page)
   await page.route('**/api/requests/1', route =>
@@ -180,10 +207,10 @@ test('authenticated: chapter table rows are visible', async ({ page }) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_CHAPTERS) }),
   )
   await page.goto('/comics/1')
-  // Chapter 1 row
-  await expect(page.getByRole('cell', { name: '1' }).first()).toBeVisible({ timeout: 5000 })
-  await expect(page.getByRole('cell', { name: 'MangaDex' }).first()).toBeVisible()
-  await expect(page.getByRole('cell', { name: 'done' }).first()).toBeVisible()
+  // Chapter 1 row — chapter cell now renders "Ch. 1", download now shows "Done"
+  await expect(page.getByRole('cell', { name: /Ch\. 1/ }).first()).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('cell', { name: /MangaDex/i }).first()).toBeVisible()
+  await expect(page.getByRole('cell', { name: /Done/i }).first()).toBeVisible()
   // Chapter 2: volume null → '—'
   await expect(page.getByRole('cell', { name: '—' }).first()).toBeVisible()
 })

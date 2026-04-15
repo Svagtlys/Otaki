@@ -54,16 +54,6 @@ test('authenticated: Sources button on Library navigates to /sources', async ({ 
   await expect(page).toHaveURL(/\/sources/, { timeout: 5000 })
 })
 
-test('authenticated: ← Library button on Sources navigates back to /library', async ({ page }) => {
-  await authenticate(page)
-  await page.route('**/api/sources', route =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
-  )
-  await page.goto('/sources')
-  await page.getByRole('button', { name: '← Library' }).click()
-  await expect(page).toHaveURL(/\/library/, { timeout: 5000 })
-})
-
 const MOCK_SOURCES = [
   {
     id: 1,
@@ -111,7 +101,7 @@ test('authenticated: ↑ button moves source up and shows Save order', async ({ 
   await page.goto('/sources')
   await expect(page.getByText('MangaDex')).toBeVisible({ timeout: 5000 })
   // MangaPlus is at index 1 (priority 2) — click its ↑ button
-  await page.getByRole('button', { name: 'Move MangaPlus up' }).click()
+  await page.locator('button[aria-label="Move MangaPlus up"]').click()
   await expect(page.getByRole('button', { name: 'Save order' })).toBeVisible()
 })
 
@@ -164,7 +154,7 @@ test('authenticated: Save order fires PATCH for each source with new priorities'
   await page.goto('/sources')
   await expect(page.getByText('MangaDex')).toBeVisible({ timeout: 5000 })
   // Move MangaPlus up → MangaPlus becomes priority 1, MangaDex becomes priority 2
-  await page.getByRole('button', { name: 'Move MangaPlus up' }).click()
+  await page.locator('button[aria-label="Move MangaPlus up"]').click()
   await page.getByRole('button', { name: 'Save order' }).click()
   // After save, PATCH /api/sources/1 should have priority 2, /api/sources/2 should have priority 1
   await expect.poll(() => patches[2]).toEqual({ priority: 1 })

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
+import { ThemeProvider } from './context/ThemeContext'
+import AppShell from './components/AppShell'
 import Library from './pages/Library'
 import Login from './pages/Login'
 import Setup from './pages/Setup'
@@ -30,32 +32,38 @@ export default function App() {
 
   if (!setupComplete) {
     return (
-      <BrowserRouter>
-        <Routes>
-          <Route
-            path="/setup"
-            element={<Setup onComplete={() => setSetupComplete(true)} />}
-          />
-          <Route path="*" element={<Navigate to="/setup" replace />} />
-        </Routes>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route
+              path="/setup"
+              element={<Setup onComplete={() => setSetupComplete(true)} />}
+            />
+            <Route path="*" element={<Navigate to="/setup" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </ThemeProvider>
     )
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/setup" element={<Navigate to="/login" replace />} />
-        <Route path="/login" element={<Login />} />
-        <Route element={<RequireAuth />}>
-          <Route path="/library" element={<Library />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/comics/:id" element={<Comic />} />
-          <Route path="/sources" element={<Sources />} />
-          <Route path="/settings" element={<Settings />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/library" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/setup" element={<Navigate to="/login" replace />} />
+          <Route path="/login" element={<Login />} />
+          <Route element={<RequireAuth />}>
+            <Route element={<AppShell />}>
+              <Route path="/library" element={<Library />} />
+              <Route path="/search" element={<Search />} />
+              <Route path="/comics/:id" element={<Comic />} />
+              <Route path="/sources" element={<Sources />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
+          </Route>
+          <Route path="*" element={<Navigate to="/library" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }

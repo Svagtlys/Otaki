@@ -1,30 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
+import PageLayout from '../components/PageLayout'
+import Pagination from '../components/Pagination'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-interface HealthResponse {
-  status: 'healthy' | 'degraded' | 'unhealthy'
-  database: string
-  suwayomi: {
-    status: string
-    url: string | null
-    sources: { name: string; enabled: boolean; reachable: boolean }[]
-  }
-  workers: {
-    download_listener: { running: boolean; uptime_seconds: number | null }
-    scheduler: {
-      running: boolean
-      uptime_seconds: number | null
-      jobs: { comic_id: number; title: string; next_poll_at: string | null; next_upgrade_at: string | null }[]
-    }
-  }
-}
 
 interface ChapterCounts {
   total: number
@@ -56,104 +40,97 @@ interface Source {
 }
 
 // ---------------------------------------------------------------------------
-// HealthBadge (unchanged)
+// ListCoverCell — fixed-size cover cell for table rows
 // ---------------------------------------------------------------------------
 
-const STATUS_DOT: Record<string, string> = {
-  healthy: '#22c55e',
-  degraded: '#f59e0b',
-  unhealthy: '#ef4444',
-}
+function ListCoverCell({ comicId }: { comicId: number }) {
+  const [imgState, setImgState] = useState<'idle' | 'ok' | 'missing' | 'error'>('idle')
 
-function HealthBadge() {
-  const [expanded, setExpanded] = useState(false)
-  const { data, error } = useQuery<HealthResponse>({
-    queryKey: ['health'],
-    queryFn: () => apiFetch<HealthResponse>('/api/health'),
-    refetchInterval: 30_000,
-    retry: false,
-  })
-
-  const status = error ? 'unhealthy' : (data?.status ?? null)
-  const color = status ? (STATUS_DOT[status] ?? '#94a3b8') : '#94a3b8'
-
-  function fmt(s: number | null | undefined) {
-    if (s == null) return '—'
-    const h = Math.floor(s / 3600)
-    const m = Math.floor((s % 3600) / 60)
-    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  function handleError() {
+    const token = localStorage.getItem('otaki_token')
+    fetch(`/api/requests/${comicId}/cover`, {
+      method: 'HEAD',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => setImgState(r.status === 404 ? 'missing' : 'error'))
+      .catch(() => setImgState('error'))
   }
 
   return (
-    <div style={{ position: 'relative' }}>
-      <button
-        onClick={() => setExpanded(v => !v)}
-        title={status ? `System status: ${status}` : 'Checking system status…'}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}
-      >
-        <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
-        <span style={{ fontSize: 13, color: '#555' }}>{status ?? '…'}</span>
-      </button>
-      {expanded && (
-        <div style={healthPanelStyle}>
-          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>System status</div>
-          {error || !data ? (
-            <div style={{ fontSize: 12, color: '#ef4444' }}>Health check unreachable</div>
-          ) : (
-            <>
-              <Row label="Database" value={data.database} ok={data.database === 'ok'} />
-              <Row label="Suwayomi" value={data.suwayomi.status} ok={data.suwayomi.status === 'ok'} />
-              {data.suwayomi.sources.map(s => (
-                <Row key={s.name} label={`  ${s.name}`} value={s.reachable ? 'reachable' : 'unreachable'} ok={s.reachable} indent />
-              ))}
-              <Row label="Download listener" value={data.workers.download_listener.running ? `up ${fmt(data.workers.download_listener.uptime_seconds)}` : 'down'} ok={data.workers.download_listener.running} />
-              <Row label="Scheduler" value={data.workers.scheduler.running ? `up ${fmt(data.workers.scheduler.uptime_seconds)}` : 'down'} ok={data.workers.scheduler.running} />
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Row({ label, value, ok, indent }: { label: string; value: string; ok: boolean; indent?: boolean }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, paddingLeft: indent ? 8 : 0 }}>
-      <span style={{ color: '#555' }}>{label}</span>
-      <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 500 }}>{value}</span>
+    <div style={{
+      width: 48, height: 64, flexShrink: 0, position: 'relative',
+      background: 'var(--surface-2)', borderRadius: 4,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: 'var(--text-3)', fontSize: 20,
+    }}>
+      {imgState !== 'ok' && <i className={`bx ${imgState === 'error' ? 'bx-image-alt' : 'bx-book-open'}`} />}
+      <img
+        src={`/api/requests/${comicId}/cover`}
+        alt=""
+        onLoad={() => setImgState('ok')}
+        onError={handleError}
+        style={{
+          position: 'absolute', inset: 0, width: '100%', height: '100%',
+          objectFit: 'cover', borderRadius: 4,
+          display: imgState === 'ok' ? 'block' : 'none',
+        }}
+      />
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Pagination control
+// CoverCard
 // ---------------------------------------------------------------------------
 
-function Pagination({ page, total, perPage, onChange }: { page: number; total: number; perPage: number; onChange: (p: number) => void }) {
-  const totalPages = Math.max(1, Math.ceil(total / perPage))
-  if (totalPages <= 1) return null
+function CoverCard({ comic, onClick }: { comic: ComicListItem; onClick: () => void }) {
+  // 'idle' = not yet tried, 'ok' = loaded, 'missing' = 404 (no cover set), 'error' = other failure
+  const [imgState, setImgState] = useState<'idle' | 'ok' | 'missing' | 'error'>('idle')
 
-  const pages: (number | '…')[] = []
-  if (totalPages <= 7) {
-    for (let i = 1; i <= totalPages; i++) pages.push(i)
-  } else {
-    pages.push(1)
-    if (page > 3) pages.push('…')
-    for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
-    if (page < totalPages - 2) pages.push('…')
-    pages.push(totalPages)
+  function handleError() {
+    const token = localStorage.getItem('otaki_token')
+    fetch(`/api/requests/${comic.id}/cover`, {
+      method: 'HEAD',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => setImgState(r.status === 404 ? 'missing' : 'error'))
+      .catch(() => setImgState('error'))
   }
 
+  const placeholder = imgState === 'error' ? 'bx-image-alt' : 'bx-book-open'
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 16 }}>
-      <button disabled={page <= 1} onClick={() => onChange(page - 1)} style={pgBtnStyle(false)}>← Prev</button>
-      {pages.map((p, i) =>
-        p === '…'
-          ? <span key={`e${i}`} style={{ padding: '4px 6px', fontSize: 13, color: '#888' }}>…</span>
-          : <button key={p} onClick={() => onChange(p as number)} style={pgBtnStyle(p === page)}>{p}</button>
-      )}
-      <button disabled={page >= totalPages} onClick={() => onChange(page + 1)} style={pgBtnStyle(false)}>Next →</button>
-    </div>
+    <button
+      className="cover-card"
+      onClick={onClick}
+      aria-label={`View ${comic.title}`}
+      style={{
+        appearance: 'none',
+        WebkitAppearance: 'none',
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        margin: 0,
+        font: 'inherit',
+        cursor: 'pointer',
+        textAlign: 'left',
+        color: 'inherit',
+        display: 'block',
+      }}
+    >
+      <div className="cover-image">
+        {imgState !== 'ok' && <i className={`bx ${placeholder}`} />}
+        <img
+          src={`/api/requests/${comic.id}/cover`}
+          alt=""
+          onLoad={() => setImgState('ok')}
+          onError={handleError}
+          style={{ display: imgState === 'ok' ? 'block' : 'none' }}
+        />
+      </div>
+      <div className="cover-title">{comic.title}</div>
+      <div className="cover-sub">{comic.chapter_counts.done} / {comic.chapter_counts.total} ch</div>
+    </button>
   )
 }
 
@@ -161,213 +138,237 @@ function Pagination({ page, total, perPage, onChange }: { page: number; total: n
 // Main component
 // ---------------------------------------------------------------------------
 
-const SORT_OPTIONS = [
-  { value: 'id', label: 'ID' },
-  { value: 'title', label: 'Title' },
-  { value: 'library_title', label: 'Sort Title' },
-  { value: 'status', label: 'Status' },
-  { value: 'source', label: 'Source' },
-]
-
 export default function Library() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-
-  const page = parseInt(searchParams.get('page') ?? '1', 10) || 1
-  const perPage = parseInt(searchParams.get('per_page') ?? '25', 10) || 25
-  const status = searchParams.get('status') ?? ''
-  const sourceId = searchParams.get('source_id') ? parseInt(searchParams.get('source_id')!, 10) : null
-  const sortBy = searchParams.get('sort_by') ?? 'id'
-  const sortDir = searchParams.get('sort_dir') ?? 'asc'
-
-  // Debounced search
+  const [gridView, setGridView] = useState(true)
   const [searchInput, setSearchInput] = useState(searchParams.get('search') ?? '')
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const search = searchParams.get('search') ?? ''
 
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      setSearchParams(prev => {
-        const next = new URLSearchParams(prev)
-        if (searchInput) next.set('search', searchInput); else next.delete('search')
-        next.set('page', '1')
-        return next
-      })
-    }, 300)
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [searchInput])
+  const page     = Number(searchParams.get('page') ?? '1')
+  const perPage  = Number(searchParams.get('per_page') ?? '25')
+  const search   = searchParams.get('search') ?? ''
+  const status   = searchParams.get('status') ?? ''
+  const sourceId = searchParams.get('source_id') ?? ''
+  const sortBy   = searchParams.get('sort_by') ?? 'id'
+  const sortDir  = searchParams.get('sort_dir') ?? 'asc'
 
-  function set(key: string, value: string | null) {
+  function set(updates: Record<string, string>) {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev)
-      if (value) next.set(key, value); else next.delete(key)
-      if (key !== 'page') next.set('page', '1')
+      for (const [k, v] of Object.entries(updates)) {
+        if (v) next.set(k, v); else next.delete(k)
+      }
       return next
     })
   }
 
-  const url = new URL('/api/requests', window.location.origin)
-  url.searchParams.set('page', String(page))
-  url.searchParams.set('per_page', String(perPage))
-  if (search) url.searchParams.set('search', search)
-  if (status) url.searchParams.set('status', status)
-  if (sourceId != null) url.searchParams.set('source_id', String(sourceId))
-  url.searchParams.set('sort_by', sortBy)
-  url.searchParams.set('sort_dir', sortDir)
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => {
+      set({ search: searchInput, page: '1' })
+    }, 300)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput])
 
-  const { data, isLoading, error } = useQuery<ComicListPage>({
-    queryKey: ['comics', page, perPage, search, status, sourceId, sortBy, sortDir],
-    queryFn: () => apiFetch<ComicListPage>(url.pathname + url.search),
-  })
-
-  const { data: sources = [] } = useQuery<Source[]>({
+  // Sources for filter dropdown
+  const { data: sources } = useQuery<Source[]>({
     queryKey: ['sources'],
     queryFn: () => apiFetch<Source[]>('/api/sources'),
   })
 
+  // Comics
+  const params = new URLSearchParams({
+    page: String(page), per_page: String(perPage),
+    ...(search     && { search }),
+    ...(status     && { status }),
+    ...(sourceId   && { source_id: sourceId }),
+    ...(sortBy     && { sort_by: sortBy }),
+    ...(sortDir    && { sort_dir: sortDir }),
+  })
+
+  const { data, isLoading, error } = useQuery<ComicListPage>({
+    queryKey: ['comics', page, perPage, search, status, sourceId, sortBy, sortDir],
+    queryFn: () => apiFetch<ComicListPage>(`/api/requests?${params}`),
+  })
+
   const comics = data?.items ?? []
-  const total = data?.total ?? 0
+  const total  = data?.total ?? 0
 
-  return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>Library</h1>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <HealthBadge />
-          <button onClick={() => navigate('/search')} style={linkButtonStyle}>Search</button>
-          <button onClick={() => navigate('/sources')} style={linkButtonStyle}>Sources</button>
-          <button onClick={() => navigate('/settings')} style={linkButtonStyle}>Settings</button>
-        </div>
-      </div>
+  const STATUS_OPTIONS = [
+    { value: '',         label: 'All' },
+    { value: 'tracking', label: 'Tracking' },
+    { value: 'complete', label: 'Complete' },
+  ]
 
-      {/* Filter / sort bar */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16, alignItems: 'center' }}>
-        <input
-          type="search"
-          placeholder="Search titles…"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          style={inputStyle}
-        />
+  const SORT_OPTIONS = [
+    { value: 'id',            label: 'ID' },
+    { value: 'title',         label: 'Title' },
+    { value: 'library_title', label: 'Sort title' },
+    { value: 'status',        label: 'Status' },
+    { value: 'source',        label: 'Source' },
+  ]
 
+  const libraryActionBar = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+      {/* Row 1: search */}
+      <input
+        className="input"
+        placeholder="Search comics…"
+        value={searchInput}
+        onChange={e => setSearchInput(e.target.value)}
+        style={{ fontSize: 15, width: '100%' }}
+        aria-label="Search comics"
+      />
+
+      {/* Row 2: filters + navigation + view */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {/* Status chips */}
         <div style={{ display: 'flex', gap: 4 }}>
-          {(['', 'tracking', 'complete'] as const).map(s => (
+          {STATUS_OPTIONS.map(o => (
             <button
-              key={s}
-              onClick={() => set('status', s || null)}
-              style={filterBtnStyle(status === s)}
-            >
-              {s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
+              key={o.value}
+              className={`chip${status === o.value ? ' active' : ''}`}
+              onClick={() => set({ status: o.value, page: '1' })}
+            >{o.label}</button>
           ))}
         </div>
 
-        <select
-          value={sourceId ?? ''}
-          onChange={e => set('source_id', e.target.value || null)}
-          style={selectStyle}
-        >
-          <option value="">All sources</option>
-          {sources.map(s => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
+        {/* Source select */}
+        {sources && sources.length > 0 && (
+          <select
+            className="select"
+            value={sourceId}
+            onChange={e => set({ source_id: e.target.value, page: '1' })}
+            aria-label="Filter by source"
+          >
+            <option value="">All sources</option>
+            {sources.map(s => (
+              <option key={s.id} value={String(s.id)}>{s.name}</option>
+            ))}
+          </select>
+        )}
 
-        <select
-          value={sortBy}
-          onChange={e => set('sort_by', e.target.value)}
-          style={selectStyle}
-        >
-          {SORT_OPTIONS.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+        {/* Sort */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          <select
+            className="select"
+            value={sortBy}
+            onChange={e => set({ sort_by: e.target.value, page: '1' })}
+            aria-label="Sort by"
+          >
+            {SORT_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <button
+            className="btn"
+            onClick={() => set({ sort_dir: sortDir === 'asc' ? 'desc' : 'asc', page: '1' })}
+            title="Toggle sort direction"
+            aria-label="Toggle sort direction"
+          ><i className={`bx bx-${sortDir === 'asc' ? 'up' : 'down'}-arrow-alt`} /></button>
+        </div>
 
-        <button
-          onClick={() => set('sort_dir', sortDir === 'asc' ? 'desc' : 'asc')}
-          style={filterBtnStyle(false)}
-          title="Toggle sort direction"
-        >
-          {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
+        {/* Divider */}
+        <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />
+
+        {/* Pagination + per-page */}
+        {total > 0 && (
+          <>
+            <Pagination page={page} total={total} perPage={perPage} onChange={p => set({ page: String(p) })} />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[25, 50, 100].map(n => (
+                <button key={n} className={`btn${perPage === n ? ' primary' : ''}`}
+                  style={{ padding: '4px 8px', fontSize: 12 }}
+                  onClick={() => set({ per_page: String(n), page: '1' })}>{n}</button>
+              ))}
+            </div>
+            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />
+          </>
+        )}
+
+        {/* View toggle */}
+        <button className={`btn icon${gridView ? ' primary' : ''}`} onClick={() => setGridView(true)} title="Grid view" aria-label="Grid view">
+          <i className="bx bx-grid-alt" />
+        </button>
+        <button className={`btn icon${!gridView ? ' primary' : ''}`} onClick={() => setGridView(false)} title="List view" aria-label="List view">
+          <i className="bx bx-list-ul" />
         </button>
 
-        <select
-          value={perPage}
-          onChange={e => { set('per_page', e.target.value); set('page', '1') }}
-          style={selectStyle}
-        >
-          {[25, 50, 100].map(n => <option key={n} value={n}>{n} / page</option>)}
-        </select>
+        {/* Comic count */}
+        {total > 0 && (
+          <span style={{ fontSize: 12, color: 'var(--text-3)', marginLeft: 'auto' }}>
+            {total} comic{total !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
+    </div>
+  )
 
-      {isLoading && <p>Loading…</p>}
-
-      {error && (
-        <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>
-      )}
-
+  return (
+    <PageLayout title="Library" actionBar={libraryActionBar}>
+      {/* States */}
+      {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
+      {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
       {!isLoading && !error && comics.length === 0 && (
-        <p style={{ color: '#666' }}>
-          {search || status || sourceId ? 'No comics match your filters.' : 'No comics yet. Use Search to add your first.'}
+        <p style={{ color: 'var(--text-2)' }}>
+          {search || status || sourceId
+            ? 'No comics match the current filters.'
+            : 'No comics yet. Use Search to add your first.'}
         </p>
       )}
 
-      {comics.length > 0 && (
-        <>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
-                <th style={thStyle}>Cover</th>
-                <th style={thStyle}>Title</th>
-                <th style={thStyle}>Progress</th>
-                <th style={thStyle}>Next poll</th>
-              </tr>
-            </thead>
-            <tbody>
-              {comics.map(comic => (
-                <tr
-                  key={comic.id}
-                  onClick={() => navigate(`/comics/${comic.id}`)}
-                  style={rowStyle}
-                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = '#f5f5f5' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = '' }}
-                >
-                  <td style={tdStyle}>
-                    <img
-                      src={`/api/requests/${comic.id}/cover`}
-                      alt=""
-                      width={48}
-                      height={64}
-                      style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
-                      onError={e => { e.currentTarget.style.display = 'none' }}
-                    />
-                  </td>
-                  <td style={tdStyle}>{comic.title}</td>
-                  <td style={{ ...tdStyle, color: '#555' }}>
-                    {comic.chapter_counts.done} / {comic.chapter_counts.total} chapters
-                  </td>
-                  <td style={{ ...tdStyle, color: '#555' }}>
-                    {formatRelative(comic.next_poll_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-            <span style={{ fontSize: 13, color: '#888' }}>{total} comic{total !== 1 ? 's' : ''}</span>
-            <Pagination
-              page={page}
-              total={total}
-              perPage={perPage}
-              onChange={p => set('page', String(p))}
-            />
-          </div>
-        </>
+      {/* Grid view */}
+      {comics.length > 0 && gridView && (
+        <div className="cover-grid">
+          {comics.map(comic => (
+            <CoverCard key={comic.id} comic={comic} onClick={() => navigate(`/comics/${comic.id}`)} />
+          ))}
+        </div>
       )}
-    </div>
+
+      {/* List view */}
+      {comics.length > 0 && !gridView && (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: `2px solid var(--border)` }}>
+              <th style={thStyle}>Cover</th>
+              <th style={thStyle}>Title</th>
+              <th style={thStyle}>Progress</th>
+              <th style={thStyle}>Next poll</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comics.map(comic => (
+              <tr
+                key={comic.id}
+                onClick={() => navigate(`/comics/${comic.id}`)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    navigate(`/comics/${comic.id}`)
+                  }
+                }}
+                tabIndex={0}
+                aria-label={comic.title}
+                style={{ cursor: 'pointer', borderBottom: `1px solid var(--border)` }}
+                onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--surface-2)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = '' }}
+              >
+                <td style={tdStyle}><ListCoverCell comicId={comic.id} /></td>
+                <td style={tdStyle}>{comic.title}</td>
+                <td style={{ ...tdStyle, color: 'var(--text-2)' }}>
+                  {comic.chapter_counts.done} / {comic.chapter_counts.total} chapters
+                </td>
+                <td style={{ ...tdStyle, color: 'var(--text-2)' }}>
+                  {formatRelative(comic.next_poll_at)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </PageLayout>
   )
 }
 
@@ -375,83 +376,16 @@ export default function Library() {
 // Styles
 // ---------------------------------------------------------------------------
 
+
+
 const thStyle: React.CSSProperties = {
   padding: '8px 12px',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
+  color: 'var(--text-2)',
 }
 
 const tdStyle: React.CSSProperties = {
   padding: '10px 12px',
-  borderBottom: '1px solid #eee',
   verticalAlign: 'middle',
-}
-
-const rowStyle: React.CSSProperties = {
-  cursor: 'pointer',
-}
-
-const linkButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#0070f3',
-  cursor: 'pointer',
-  fontSize: 14,
-  padding: 0,
-}
-
-const healthPanelStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: '100%',
-  right: 0,
-  marginTop: 6,
-  background: '#fff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 6,
-  padding: '12px 14px',
-  minWidth: 240,
-  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-  zIndex: 100,
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: '5px 10px',
-  border: '1px solid #ddd',
-  borderRadius: 4,
-  fontSize: 13,
-  width: 180,
-}
-
-const selectStyle: React.CSSProperties = {
-  padding: '5px 8px',
-  border: '1px solid #ddd',
-  borderRadius: 4,
-  fontSize: 13,
-  background: '#fff',
-}
-
-function filterBtnStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '5px 10px',
-    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
-    borderRadius: 4,
-    background: active ? '#eff6ff' : '#fff',
-    color: active ? '#0070f3' : '#444',
-    cursor: 'pointer',
-    fontSize: 13,
-    fontWeight: active ? 600 : 400,
-  }
-}
-
-function pgBtnStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '4px 8px',
-    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
-    borderRadius: 4,
-    background: active ? '#0070f3' : '#fff',
-    color: active ? '#fff' : '#444',
-    cursor: 'pointer',
-    fontSize: 13,
-  }
 }

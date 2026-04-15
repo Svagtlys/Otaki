@@ -38,7 +38,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   const response = await fetch(path, { ...options, headers })
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
       localStorage.removeItem(TOKEN_KEY)
       window.location.href = '/login'
     }
@@ -71,7 +71,7 @@ export async function streamFetch(
   const res = await fetch(path, { ...options, headers, signal })
 
   if (!res.ok) {
-    if (res.status === 401) {
+    if (res.status === 401 && !window.location.pathname.startsWith('/login')) {
       localStorage.removeItem(TOKEN_KEY)
       window.location.href = '/login'
     }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch, streamFetch, extractDetail } from '../api/client'
+import PageLayout from '../components/PageLayout'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,12 +23,24 @@ interface SourceError {
   reason: string
 }
 
+interface Source {
+  id: number
+  name: string
+  enabled: boolean
+}
+
+type SourceStatus = { status: 'loading' | 'success' | 'error'; error?: string }
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export default function Search() {
   const navigate = useNavigate()
+
+  // Sources
+  const [sources, setSources] = useState<Source[]>([])
+  const sourcesRef = useRef<Source[]>([])
 
   // Step 1 state
   const [query, setQuery] = useState('')
@@ -41,6 +54,10 @@ export default function Search() {
   const [streamError, setStreamError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
+  // Source chip state
+  const [sourceStatuses, setSourceStatuses] = useState<Record<string, SourceStatus>>({})
+  const [hiddenSources, setHiddenSources] = useState<Set<number>>(new Set())
+
   // Step 2 state
   const [step, setStep] = useState<1 | 2>(1)
   const [displayName, setDisplayName] = useState('')
@@ -50,6 +67,17 @@ export default function Search() {
   const [pinResults, setPinResults] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Fetch enabled sources once on mount
+  useEffect(() => {
+    apiFetch<Source[]>('/api/sources')
+      .then(data => {
+        const enabled = data.filter(s => s.enabled)
+        setSources(enabled)
+        sourcesRef.current = enabled
+      })
+      .catch(() => {})
+  }, [])
 
   // Debounce query; clear selection on new search
   useEffect(() => {
@@ -67,10 +95,11 @@ export default function Search() {
       setSourceErrors([])
       setStreamDone(false)
       setStreamError(null)
+      setSourceStatuses({})
+      setHiddenSources(new Set())
       return
     }
 
-    // Abort any in-flight stream
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -79,6 +108,14 @@ export default function Search() {
     setSourceErrors([])
     setStreamDone(false)
     setStreamError(null)
+    setHiddenSources(new Set())
+
+    // Mark all known sources as loading
+    const initialStatuses: Record<string, SourceStatus> = {}
+    for (const s of sourcesRef.current) {
+      initialStatuses[s.name] = { status: 'loading' }
+    }
+    setSourceStatuses(initialStatuses)
 
     streamFetch(
       `/api/search/stream?q=${encodeURIComponent(debouncedQuery)}`,
@@ -86,14 +123,27 @@ export default function Search() {
       (data) => {
         if (data === '[DONE]') {
           setStreamDone(true)
+          // Any source still loading returned no results — treat as success (empty)
+          setSourceStatuses(prev => {
+            const next = { ...prev }
+            for (const name of Object.keys(next)) {
+              if (next[name].status === 'loading') next[name] = { status: 'success' }
+            }
+            return next
+          })
           return
         }
         try {
           const payload = JSON.parse(data)
           if (payload.error) {
             setSourceErrors(prev => [...prev, { source_name: payload.source_name, reason: payload.error }])
+            setSourceStatuses(prev => ({ ...prev, [payload.source_name]: { status: 'error', error: payload.error } }))
           } else {
-            setResults(prev => [...prev, ...(payload.results as SearchResult[])])
+            const newResults = payload.results as SearchResult[]
+            setResults(prev => [...prev, ...newResults])
+            if (newResults.length > 0) {
+              setSourceStatuses(prev => ({ ...prev, [newResults[0].source_name]: { status: 'success' } }))
+            }
           }
         } catch {
           // ignore malformed SSE line
@@ -115,6 +165,15 @@ export default function Search() {
       const next = new Set(prev)
       if (next.has(url)) next.delete(url)
       else next.add(url)
+      return next
+    })
+  }
+
+  function toggleSourceHidden(sourceId: number) {
+    setHiddenSources(prev => {
+      const next = new Set(prev)
+      if (next.has(sourceId)) next.delete(sourceId)
+      else next.add(sourceId)
       return next
     })
   }
@@ -168,6 +227,7 @@ export default function Search() {
   }
 
   const selectedResults = results.filter(r => selected.has(r.url))
+  const visibleResults = results.filter(r => !hiddenSources.has(r.source_id))
   const aliasTitles = [...new Set(
     selectedResults.map(r => r.title).filter(t => t !== displayName)
   )]
@@ -175,160 +235,173 @@ export default function Search() {
   const isLoading = debouncedQuery.length > 0 && !streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError
   const isLoadingMore = debouncedQuery.length > 0 && !streamDone && (results.length > 0 || sourceErrors.length > 0)
 
+  const searchHeaderActions = step === 2 ? (
+    <button onClick={() => setStep(1)} style={linkButtonStyle}><i className="bx bx-chevron-left" /> Back to results</button>
+  ) : undefined
+
+  const searchActionBar = step === 1 ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+      <input
+        className="input"
+        type="text"
+        placeholder="Search for a manga title…"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        style={{ fontSize: 15, width: '100%' }}
+        aria-label="Search"
+      />
+      {sources.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {sources.map(source => {
+            const st = sourceStatuses[source.name]
+            const hidden = hiddenSources.has(source.id)
+            let extra: React.CSSProperties = {}
+            let title: string | undefined
+            if (hidden) {
+              extra = { opacity: 0.4 }
+            } else if (st?.status === 'success') {
+              extra = { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' }
+            } else if (st?.status === 'error') {
+              extra = { background: 'var(--accent-complement)', borderColor: 'var(--accent-complement)', color: '#fff' }
+              title = st.error
+            }
+            return (
+              <button
+                key={source.id}
+                className="chip"
+                style={extra}
+                title={title}
+                onClick={() => toggleSourceHidden(source.id)}
+              >
+                {source.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  ) : undefined
+
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>Search</h1>
-        <button onClick={() => navigate('/library')} style={linkButtonStyle}>← Library</button>
-      </div>
+    <PageLayout title={step === 2 ? 'Review request' : 'Search'} headerActions={searchHeaderActions} actionBar={searchActionBar}>
 
       {step === 1 && (
         <>
-          {/* Search input */}
-          <input
-            type="text"
-            placeholder="Search for a manga title…"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            style={inputStyle}
-            aria-label="Search"
-          />
-
           {/* States */}
-          {isLoading && <p>Loading…</p>}
-          {isLoadingMore && (
-            <div style={loadingMoreBadgeStyle}>Loading more sources…</div>
-          )}
-          {streamError && (
-            <p style={{ color: 'red', fontSize: 13 }}>{streamError}</p>
-          )}
-          {debouncedQuery && streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError && (
-            <p style={{ color: '#666' }}>No results.</p>
-          )}
+          <div aria-live="polite" aria-atomic="false">
+            {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
+            {isLoadingMore && (
+              <div style={{
+                display: 'inline-block', marginBottom: 8, padding: '3px 10px',
+                fontSize: 12, background: 'var(--accent-soft)', border: `1px solid var(--accent)`,
+                borderRadius: 12, color: 'var(--accent)',
+              }}>Loading more sources…</div>
+            )}
+            {streamError && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{streamError}</p>}
+            {debouncedQuery && streamDone && results.length === 0 && sourceErrors.length === 0 && !streamError && (
+              <p style={{ color: 'var(--text-2)' }}>No results.</p>
+            )}
+          </div>
 
-          {/* Source error banner */}
-          {sourceErrors.length > 0 && (
-            <div style={sourceErrorBannerStyle}>
-              <strong>Some sources could not be reached:</strong>{' '}
-              {sourceErrors.map(e => `${e.source_name} (${e.reason})`).join(', ')}.
-              Results may be incomplete.
-            </div>
-          )}
-
-          {/* Result cards */}
-          {results.length > 0 && (
-            <div style={gridStyle}>
-              {results.map(r => (
-                <div
+          {/* Result grid */}
+          {visibleResults.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 20 }}>
+              {visibleResults.map(r => (
+                <button
                   key={r.url}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
+                  className={`search-card${selected.has(r.url) ? ' selected' : ''}`}
+                  style={{ appearance: 'none', WebkitAppearance: 'none', background: 'none', border: 'none', padding: 0, margin: 0, font: 'inherit', cursor: 'pointer', textAlign: 'left', color: 'inherit', flexDirection: 'column', alignItems: 'flex-start' }}
                   aria-pressed={selected.has(r.url)}
                   onClick={() => toggleSelect(r.url)}
-                  onKeyDown={e => e.key === 'Enter' && toggleSelect(r.url)}
-                  style={{
-                    ...cardStyle,
-                    border: selected.has(r.url) ? '2px solid #0070f3' : '2px solid #eee',
-                  }}
                 >
                   {r.cover_display_url ? (
                     <img
                       src={r.cover_display_url}
                       alt=""
-                      width={160}
-                      height={220}
-                      style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
+                      style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 4, display: 'block', marginBottom: 8 }}
                       onError={e => { e.currentTarget.style.display = 'none' }}
                     />
                   ) : (
-                    <div style={{ width: 160, height: 220, background: '#eee', borderRadius: 4 }} />
+                    <div style={{ width: '100%', height: 200, background: 'var(--surface-2)', borderRadius: 4, marginBottom: 8 }} />
                   )}
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{r.title}</div>
-                    <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{r.source_name}</div>
-                    {r.synopsis && (
-                      <div style={{
-                        fontSize: 12,
-                        color: '#444',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}>
-                        {r.synopsis}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2, color: 'var(--text)' }}>{r.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 4 }}>{r.source_name}</div>
+                  {r.synopsis && (
+                    <div style={{
+                      fontSize: 11, color: 'var(--text-2)',
+                      display: '-webkit-box', WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                    }}>
+                      {r.synopsis}
+                    </div>
+                  )}
+                </button>
               ))}
             </div>
           )}
 
           {/* Review button */}
           {selected.size > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <button onClick={handleReview} style={primaryButtonStyle}>
-                Review request ({selected.size})
-              </button>
-            </div>
+            <button className="btn primary" onClick={handleReview}>
+              Review request ({selected.size})
+            </button>
           )}
         </>
       )}
 
       {step === 2 && (
         <>
-          {/* Back link */}
-          <button
-            onClick={() => setStep(1)}
-            style={{ ...linkButtonStyle, marginBottom: 16, display: 'block' }}
-          >
-            ← Back to results
-          </button>
-
-          {/* Selected cards summary */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Selected sources</div>
+          {/* Selected sources */}
+          <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Selected sources
+            </div>
             {selectedResults.map(r => (
-              <div key={r.url} style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
-                {r.title} — <span style={{ color: '#888' }}>{r.source_name}</span>
+              <div key={r.url} style={{ fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>
+                {r.title}
+                <span style={{ color: 'var(--text-2)', marginLeft: 6 }}>— {r.source_name}</span>
               </div>
             ))}
           </div>
 
           {/* Display name */}
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>
+          <div style={{ marginBottom: 14 }}>
+            <label htmlFor="display-name" style={labelStyle}>
               Display name
               <input
+                id="display-name"
                 type="text"
                 value={displayName}
                 onChange={e => handleDisplayNameChange(e.target.value)}
-                style={{ ...inputStyle, marginTop: 4 }}
+                className="input"
+                style={{ marginTop: 4 }}
               />
             </label>
           </div>
 
           {/* Library title */}
-          <div style={{ marginBottom: 16 }}>
-            <label style={labelStyle}>
+          <div style={{ marginBottom: 14 }}>
+            <label htmlFor="library-title" style={labelStyle}>
               Library title
               <input
+                id="library-title"
                 type="text"
                 value={libraryTitle}
                 onChange={e => handleLibraryTitleChange(e.target.value)}
-                style={{ ...inputStyle, marginTop: 4 }}
+                className="input"
+                style={{ marginTop: 4 }}
               />
             </label>
           </div>
 
-          {/* Aliases (read-only) */}
+          {/* Aliases */}
           {aliasTitles.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Other titles (aliases)</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--text)' }}>Other titles (aliases)</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {aliasTitles.map(t => (
-                  <span key={t} style={aliasChipStyle}>{t}</span>
+                  <span key={t} className="chip" style={{ cursor: 'default', fontSize: 12, padding: '2px 8px' }}>{t}</span>
                 ))}
               </div>
             </div>
@@ -337,43 +410,49 @@ export default function Search() {
           {/* Cover picker */}
           {selectedResults.some(r => r.cover_display_url) && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#444' }}>Cover</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {selectedResults
-                  .filter(r => r.cover_display_url)
-                  .map(r => (
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>Cover</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {selectedResults.filter(r => r.cover_display_url).map(r => (
+                  <button
+                    key={r.url}
+                    onClick={() => setChosenCoverUrl(r.cover_url)}
+                    aria-label={`Select cover from ${r.source_name}`}
+                    aria-pressed={chosenCoverUrl === r.cover_url}
+                    style={{
+                      appearance: 'none', WebkitAppearance: 'none',
+                      background: 'none', border: 'none', padding: 0,
+                      cursor: 'pointer', font: 'inherit', color: 'inherit',
+                    }}
+                  >
                     <img
-                      key={r.url}
                       src={r.cover_display_url!}
-                      alt={r.source_name}
-                      width={160}
-                      height={220}
-                      onClick={() => setChosenCoverUrl(r.cover_url)}
+                      alt=""
                       style={{
-                        objectFit: 'cover',
-                        borderRadius: 4,
-                        cursor: 'pointer',
-                        border: chosenCoverUrl === r.cover_url ? '2px solid #0070f3' : '2px solid transparent',
+                        width: 100, height: 140, objectFit: 'cover', borderRadius: 6, display: 'block',
+                        border: `3px solid ${chosenCoverUrl === r.cover_url ? 'var(--accent)' : 'transparent'}`,
+                        boxShadow: chosenCoverUrl === r.cover_url ? 'var(--shadow-md)' : 'var(--shadow)',
                       }}
                       onError={e => { e.currentTarget.style.display = 'none' }}
                     />
-                  ))}
+                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4, textAlign: 'center' }}>{r.source_name}</div>
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
           {/* Pin checkbox */}
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={pinResults}
                 onChange={e => setPinResults(e.target.checked)}
-                style={{ marginTop: 2, flexShrink: 0 }}
+                style={{ marginTop: 3, flexShrink: 0 }}
               />
               <span>
-                <strong>Pin these source-manga IDs</strong>
-                <span style={{ color: '#666', display: 'block', marginTop: 2 }}>
+                <strong style={{ color: 'var(--text)' }}>Pin these source-manga IDs</strong>
+                <span style={{ color: 'var(--text-2)', display: 'block', marginTop: 2 }}>
                   Otaki will fetch chapters directly using the selected manga IDs instead of searching by title.
                   Useful when different comics have the same title.
                 </span>
@@ -383,105 +462,33 @@ export default function Search() {
 
           {/* Submit */}
           <button
+            className="btn primary"
             onClick={handleSubmit}
             disabled={submitting || !displayName}
-            style={{ ...primaryButtonStyle, opacity: submitting || !displayName ? 0.6 : 1 }}
+            style={{ opacity: submitting || !displayName ? 0.6 : 1 }}
           >
             {submitting ? 'Submitting…' : 'Submit request'}
           </button>
-          {submitError && (
-            <p style={{ color: 'red', fontSize: 13, marginTop: 8 }}>{submitError}</p>
-          )}
+          {submitError && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{submitError}</p>}
         </>
       )}
-    </div>
+    </PageLayout>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
 
 const linkButtonStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#0070f3',
+  color: 'var(--accent)',
   cursor: 'pointer',
-  fontSize: 14,
+  fontSize: 13,
   padding: 0,
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 10px',
-  fontSize: 14,
-  border: '1px solid #ddd',
-  borderRadius: 4,
-  boxSizing: 'border-box',
-}
-
-const primaryButtonStyle: React.CSSProperties = {
-  padding: '8px 16px',
-  fontSize: 14,
-  background: '#0070f3',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 4,
-  cursor: 'pointer',
-}
-
-const gridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(184px, 1fr))',
-  gap: 12,
-  marginTop: 16,
-}
-
-const cardStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  padding: 12,
-  borderRadius: 6,
-  cursor: 'pointer',
-  background: '#fff',
+  fontFamily: 'inherit',
 }
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
-}
-
-const aliasChipStyle: React.CSSProperties = {
-  display: 'inline-block',
-  padding: '2px 8px',
-  fontSize: 12,
-  background: '#f0f0f0',
-  border: '1px solid #ddd',
-  borderRadius: 12,
-  color: '#555',
-}
-
-const sourceErrorBannerStyle: React.CSSProperties = {
-  marginTop: 8,
-  marginBottom: 8,
-  padding: '8px 12px',
-  background: '#fff8e1',
-  border: '1px solid #ffe082',
-  borderRadius: 4,
-  fontSize: 13,
-  color: '#5d4037',
-}
-
-const loadingMoreBadgeStyle: React.CSSProperties = {
-  display: 'inline-block',
-  marginTop: 8,
-  marginBottom: 4,
-  padding: '3px 10px',
-  fontSize: 12,
-  background: '#e3f2fd',
-  border: '1px solid #90caf9',
-  borderRadius: 12,
-  color: '#1565c0',
+  color: 'var(--text)',
 }

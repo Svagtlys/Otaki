@@ -14,26 +14,6 @@ function extractDetail(err: unknown): string {
   return 'An unexpected error occurred'
 }
 
-const fieldStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  marginBottom: 12,
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: 14,
-  width: '100%',
-  boxSizing: 'border-box',
-}
-
-const errorStyle: React.CSSProperties = {
-  color: 'red',
-  fontSize: 13,
-  marginTop: 8,
-}
-
 interface TokenResponse {
   access_token: string
   token_type: string
@@ -71,54 +51,72 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        background: '#f5f5f5',
-      }}
-    >
-      <div
-        style={{
-          background: '#fff',
-          padding: 32,
-          borderRadius: 8,
-          width: 320,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-        }}
-      >
-        <h2 style={{ marginTop: 0, marginBottom: 24 }}>Log in to Otaki</h2>
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: '100vh',
+      background: 'var(--bg)',
+    }}>
+      {/* Logo mark */}
+      <div style={{ marginBottom: 24, textAlign: 'center' }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12, margin: '0 auto 12px',
+          background: 'linear-gradient(135deg, #007aff 0%, #5856d6 100%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 24, fontWeight: 700, color: '#fff',
+          boxShadow: '0 4px 16px rgba(0, 122, 255, 0.35)',
+        }}>O</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.3px' }}>Otaki</div>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 2 }}>Sign in to continue</div>
+      </div>
+
+      {/* Card */}
+      <div className="card" style={{ padding: 32, width: 340 }}>
         <form onSubmit={handleSubmit}>
-          <div style={fieldStyle}>
-            <label htmlFor="username">Username</label>
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelStyle} htmlFor="username">Username</label>
             <input
               id="username"
-              style={inputStyle}
+              className="input"
+              style={{ marginTop: 4 }}
               value={username}
               onChange={e => setUsername(e.target.value)}
               required
               autoFocus
             />
           </div>
-          <div style={fieldStyle}>
-            <label htmlFor="password">Password</label>
+          <div style={{ marginBottom: 20 }}>
+            <label style={labelStyle} htmlFor="password">Password</label>
             <input
               id="password"
               type="password"
-              style={inputStyle}
+              className="input"
+              style={{ marginTop: 4 }}
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
             />
           </div>
-          {error && <p style={errorStyle}>{error}</p>}
-          <button type="submit" disabled={loading} style={{ marginTop: 8 }}>
-            {loading ? 'Logging in…' : 'Log in'}
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, margin: '0 0 12px' }}>{error}</p>}
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={loading}
+            style={{ width: '100%', opacity: loading ? 0.6 : 1 }}
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
       </div>
     </div>
   )
+}
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--text)',
 }

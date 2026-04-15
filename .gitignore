@@ -18,6 +18,11 @@ __pycache__/
 
 # Frontend
 frontend/node_modules/
+
+# Stray root-level node installs
+node_modules/
+package.json
+package-lock.json
 frontend/dist/
 frontend/.vite/
 frontend/playwright-report/

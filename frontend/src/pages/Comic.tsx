@@ -1,8 +1,20 @@
-import { useState, useRef } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState, useRef, useEffect } from 'react'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
+import {
+  DndContext, DragEndEvent, KeyboardSensor, PointerSensor,
+  closestCenter, useSensor, useSensors,
+} from '@dnd-kit/core'
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates,
+  useSortable, verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import { CSS } from '@dnd-kit/utilities'
 import { apiFetch, streamFetch, extractDetail } from '../api/client'
 import { formatRelative } from '../utils/format'
+import PageLayout from '../components/PageLayout'
+import Pagination from '../components/Pagination'
 
 const TOKEN_KEY = 'otaki_token'
 
@@ -80,8 +92,59 @@ interface PinSearchResult {
 }
 
 // ---------------------------------------------------------------------------
+// SortableOverrideRow
+// ---------------------------------------------------------------------------
+
+interface OverrideRowProps {
+  entry: SourceOverrideEntry
+  index: number
+  total: number
+  showOverrideBadge: boolean
+  onMoveUp: () => void
+  onMoveDown: () => void
+}
+
+function SortableOverrideRow({ entry, index, total, showOverrideBadge, onMoveUp, onMoveDown }: OverrideRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.source_id })
+  return (
+    <div
+      ref={setNodeRef}
+      className={`source-row${isDragging ? ' dragging' : ''}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+    >
+      <i className="bx bx-grid-vertical drag-handle" aria-hidden="true" {...listeners} />
+      <span style={{
+        minWidth: 28, height: 28, borderRadius: '50%',
+        background: index === 0 ? 'var(--accent)' : 'var(--surface-2)',
+        color: index === 0 ? '#fff' : 'var(--text-2)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 12, fontWeight: 700, flexShrink: 0,
+      }}>{index + 1}</span>
+      <span style={{ flex: 1, fontWeight: 500 }}>{entry.source_name}</span>
+      {showOverrideBadge && entry.is_overridden && (
+        <span style={{ fontSize: 11, color: 'var(--accent)' }}>overridden</span>
+      )}
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button className="btn icon" type="button" onClick={onMoveUp}
+          disabled={index === 0} style={{ opacity: index === 0 ? 0.3 : 1 }}
+          aria-label={`Move ${entry.source_name} up`}
+        ><i className="bx bx-chevron-up" /></button>
+        <button className="btn icon" type="button" onClick={onMoveDown}
+          disabled={index === total - 1} style={{ opacity: index === total - 1 ? 0.3 : 1 }}
+          aria-label={`Move ${entry.source_name} down`}
+        ><i className="bx bx-chevron-down" /></button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
+
+const STATUS_LIST = ['queued', 'downloading', 'relocating', 'available', 'failed'] as const
+type ChapterStatus = typeof STATUS_LIST[number]
 
 export default function Comic() {
   const { id } = useParams<{ id: string }>()
@@ -105,21 +168,28 @@ export default function Comic() {
   const [upgradingChapterId, setUpgradingChapterId] = useState<number | null>(null)
   const [chapterUpgradeMsgs, setChapterUpgradeMsgs] = useState<Record<number, string>>({})
 
+  // Tab state
+  type ComicTab = 'details' | 'settings'
+  const [activeTab, setActiveTab] = useState<ComicTab>('details')
+
   // Chapter pagination / filter state
   const [chapterPage, setChapterPage] = useState(1)
-  const [chapterPerPage] = useState(50)
+  const [chapterPerPage, setChapterPerPage] = useState(25)
   const [chapterStatus, setChapterStatus] = useState('')
 
   // Source overrides state
-  const [overridesOpen, setOverridesOpen] = useState(false)
   const [overrideDraft, setOverrideDraft] = useState<SourceOverrideEntry[] | null>(null)
   const [overrideSaving, setOverrideSaving] = useState(false)
   const [overrideError, setOverrideError] = useState<string | null>(null)
   const [overrideResult, setOverrideResult] = useState<string | null>(null)
-  const dragIndexRef = useRef<number | null>(null)
+  const logScrollRef = useRef<HTMLDivElement>(null)
+
+  const overrideSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   // Pin management state
-  const [pinsOpen, setPinsOpen] = useState(false)
   const [removedPinIds, setRemovedPinIds] = useState<Set<number>>(new Set())
   const [pendingPins, setPendingPins] = useState<{ source_id: number; source_name: string; suwayomi_manga_id: string }[]>([])
   const [pinSaving, setPinSaving] = useState(false)
@@ -130,16 +200,15 @@ export default function Comic() {
   const [pinSearchQuery, setPinSearchQuery] = useState('')
   const [pinSearchResults, setPinSearchResults] = useState<PinSearchResult[]>([])
   const [pinSearching, setPinSearching] = useState(false)
+  const [pinSearchDone, setPinSearchDone] = useState(false)
   const pinAbortRef = useRef<AbortController | null>(null)
 
-  const [coverFormOpen, setCoverFormOpen] = useState(false)
   const [coverTab, setCoverTab] = useState<'url' | 'file'>('url')
   const [coverUrl, setCoverUrl] = useState('')
   const [coverFile, setCoverFile] = useState<File | null>(null)
   const [coverSubmitting, setCoverSubmitting] = useState(false)
   const [coverError, setCoverError] = useState<string | null>(null)
 
-  const [editOpen, setEditOpen] = useState(false)
   const [editLibraryTitle, setEditLibraryTitle] = useState('')
   const [editPollDays, setEditPollDays] = useState('')
   const [editPollClear, setEditPollClear] = useState(false)
@@ -162,20 +231,56 @@ export default function Comic() {
   const { data: pins = [] } = useQuery<SourcePin[]>({
     queryKey: ['comic-pins', comicId],
     queryFn: () => apiFetch<SourcePin[]>(`/api/requests/${comicId}/pins`),
-    enabled: comicId > 0 && pinsOpen,
+    enabled: comicId > 0,
   })
 
   const { data: sources = [] } = useQuery<Source[]>({
     queryKey: ['sources'],
     queryFn: () => apiFetch<Source[]>('/api/sources'),
-    enabled: pinsOpen || overridesOpen,
+    enabled: activeTab === 'settings',
   })
 
   const { data: sourceOverrides = [] } = useQuery<SourceOverrideEntry[]>({
     queryKey: ['comic-source-overrides', comicId],
     queryFn: () => apiFetch<SourceOverrideEntry[]>(`/api/requests/${comicId}/source-overrides`),
-    enabled: comicId > 0 && overridesOpen,
+    enabled: comicId > 0 && activeTab === 'settings',
   })
+
+  // Initialise Settings tab state when switching to it
+  useEffect(() => {
+    if (activeTab !== 'settings' || !comic) return
+    setEditLibraryTitle(comic.library_title)
+    setEditPollDays(comic.poll_override_days != null ? String(comic.poll_override_days) : '')
+    setEditPollClear(comic.poll_override_days == null)
+    setEditUpgradeDays(comic.upgrade_override_days != null ? String(comic.upgrade_override_days) : '')
+    setEditUpgradeClear(comic.upgrade_override_days == null)
+    setEditError(null)
+    setAliasError(null)
+    setPendingAliasAdds([])
+    setPendingAliasDeletes(new Set())
+    setNewAlias('')
+    setRemovedPinIds(new Set())
+    setPendingPins([])
+    setPinError(null)
+    setPinResult(null)
+    setPinSearchSourceId('')
+    setPinSearchQuery('')
+    setPinSearchResults([])
+    setPinSearchDone(false)
+    setOverrideDraft(null)
+    setOverrideError(null)
+    setOverrideResult(null)
+    setCoverUrl('')
+    setCoverFile(null)
+    setCoverError(null)
+  }, [activeTab])
+
+  // Auto-scroll operation log as new entries arrive
+  useEffect(() => {
+    if (logScrollRef.current) {
+      logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight
+    }
+  }, [reprocessLog, forceUpgradeLog, discoverResult])
 
   const chapterQueryUrl = (() => {
     const u = new URL(`/api/requests/${comicId}/chapters`, window.location.origin)
@@ -194,6 +299,24 @@ export default function Comic() {
   const chapters = chaptersData?.items ?? []
   const chaptersTotal = chaptersData?.total ?? 0
   const chapterTotalPages = Math.max(1, Math.ceil(chaptersTotal / chapterPerPage))
+
+  const statusCounts = useQueries({
+    queries: STATUS_LIST.map(status => ({
+      queryKey: ['comic-chapter-count', comicId, status],
+      queryFn: () =>
+        apiFetch<ChapterPage>(
+          `/api/requests/${comicId}/chapters?status=${status}&per_page=1&page=1`,
+        ).then(d => d.total),
+      enabled: comicId > 0,
+    })),
+    combine: (results) => ({
+      queued:      results[0].data ?? 0,
+      downloading: results[1].data ?? 0,
+      relocating:  results[2].data ?? 0,
+      available:   results[3].data ?? 0,
+      failed:      results[4].data ?? 0,
+    }),
+  })
 
   async function handleReprocess() {
     setReprocessing(true)
@@ -236,35 +359,38 @@ export default function Comic() {
     }
   }
 
-  function openOverrides() {
-    setOverridesOpen(true)
-    setOverrideDraft(null)
-    setOverrideError(null)
-    setOverrideResult(null)
-  }
-
   // Called once sourceOverrides loads — initialise draft from server data
   function initOverrideDraft(entries: SourceOverrideEntry[]) {
     if (overrideDraft === null) setOverrideDraft([...entries])
   }
 
-  function handleDragStart(index: number) {
-    dragIndexRef.current = index
+  function handleOverrideDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setOverrideDraft(prev => {
+      const list = prev ?? sourceOverrides
+      const oldIndex = list.findIndex(e => e.source_id === active.id)
+      const newIndex = list.findIndex(e => e.source_id === over.id)
+      return arrayMove([...list], oldIndex, newIndex)
+    })
   }
 
-  function handleDragOver(e: React.DragEvent, index: number) {
-    e.preventDefault()
-    const from = dragIndexRef.current
-    if (from === null || from === index || overrideDraft === null) return
-    const next = [...overrideDraft]
-    const [moved] = next.splice(from, 1)
-    next.splice(index, 0, moved)
-    dragIndexRef.current = index
-    setOverrideDraft(next)
+  function overrideMoveUp(index: number) {
+    setOverrideDraft(prev => {
+      const list = [...(prev ?? sourceOverrides)]
+      if (index === 0) return list
+      ;[list[index - 1], list[index]] = [list[index], list[index - 1]]
+      return list
+    })
   }
 
-  function handleDragEnd() {
-    dragIndexRef.current = null
+  function overrideMoveDown(index: number) {
+    setOverrideDraft(prev => {
+      const list = [...(prev ?? sourceOverrides)]
+      if (index === list.length - 1) return list
+      ;[list[index], list[index + 1]] = [list[index + 1], list[index]]
+      return list
+    })
   }
 
   async function handleSaveOverrides() {
@@ -379,17 +505,6 @@ export default function Comic() {
     }
   }
 
-  function openPins() {
-    setPinsOpen(true)
-    setRemovedPinIds(new Set())
-    setPendingPins([])
-    setPinError(null)
-    setPinResult(null)
-    setPinSearchSourceId('')
-    setPinSearchQuery('')
-    setPinSearchResults([])
-  }
-
   function removeSavedPin(pinId: number) {
     setRemovedPinIds(prev => new Set([...prev, pinId]))
   }
@@ -404,6 +519,7 @@ export default function Comic() {
     const controller = new AbortController()
     pinAbortRef.current = controller
     setPinSearching(true)
+    setPinSearchDone(false)
     setPinSearchResults([])
     const results: PinSearchResult[] = []
     try {
@@ -428,6 +544,7 @@ export default function Comic() {
       if ((err as Error).name !== 'AbortError') setPinError(extractDetail(err))
     } finally {
       setPinSearching(false)
+      setPinSearchDone(true)
     }
   }
 
@@ -498,7 +615,6 @@ export default function Comic() {
           throw new Error(text)
         }
       }
-      setCoverFormOpen(false)
       setCoverUrl('')
       setCoverFile(null)
       await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
@@ -507,21 +623,6 @@ export default function Comic() {
     } finally {
       setCoverSubmitting(false)
     }
-  }
-
-  function openEdit() {
-    if (!comic) return
-    setEditLibraryTitle(comic.library_title)
-    setEditPollDays(comic.poll_override_days != null ? String(comic.poll_override_days) : '')
-    setEditPollClear(comic.poll_override_days == null)
-    setEditUpgradeDays(comic.upgrade_override_days != null ? String(comic.upgrade_override_days) : '')
-    setEditUpgradeClear(comic.upgrade_override_days == null)
-    setEditError(null)
-    setAliasError(null)
-    setPendingAliasAdds([])
-    setPendingAliasDeletes(new Set())
-    setNewAlias('')
-    setEditOpen(true)
   }
 
   async function handleEditSubmit() {
@@ -559,7 +660,6 @@ export default function Comic() {
           apiFetch(`/api/requests/${comicId}/aliases`, { method: 'POST', body: JSON.stringify({ title }) })
         ),
       ])
-      setEditOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['comic', comicId] })
     } catch (err) {
       setEditError(extractDetail(err))
@@ -597,605 +697,623 @@ export default function Comic() {
     setPendingAliasAdds(prev => prev.filter(t => t !== title))
   }
 
+  function downloadStatusCell(status: string) {
+    switch (status) {
+      case 'done':
+        return <span style={{ color: 'var(--success)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-check" /> Done</span>
+      case 'downloading':
+        return <span style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-download" /> Downloading</span>
+      case 'queued':
+        return <span style={{ color: 'var(--warning)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-time" /> Queued</span>
+      case 'relocating':
+        return <span style={{ color: 'var(--text-2)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-transfer-alt" /> Relocating</span>
+      case 'failed':
+        return <span style={{ color: 'var(--danger)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-error-circle" /> Failed</span>
+      default:
+        return <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{status}</span>
+    }
+  }
+
+  function relocationStatusCell(status: string) {
+    switch (status) {
+      case 'done':
+        return <span style={{ color: 'var(--success)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-check" /> Done</span>
+      case 'relocating':
+        return <span style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-transfer-alt" /> Relocating</span>
+      case 'pending':
+        return <span style={{ color: 'var(--warning)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-time" /> Pending</span>
+      case 'failed':
+        return <span style={{ color: 'var(--danger)', fontSize: 12, fontWeight: 600 }}><i className="bx bx-error-circle" /> Failed</span>
+      default:
+        return <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{status}</span>
+    }
+  }
+
+  const TABS = ['details', 'settings'] as const
+  const actionBar = (
+    <div role="tablist" aria-label="Comic sections" style={{ display: 'contents' }}>
+      {TABS.map(tab => (
+        <button
+          key={tab}
+          id={`comic-tab-${tab}`}
+          role="tab"
+          aria-selected={activeTab === tab}
+          aria-controls={`comic-panel-${tab}`}
+          tabIndex={activeTab === tab ? 0 : -1}
+          className={`settings-nav-item${activeTab === tab ? ' active' : ''}`}
+          onClick={() => setActiveTab(tab)}
+          onKeyDown={e => {
+            if (e.key === 'ArrowRight') { e.preventDefault(); setActiveTab('settings') }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); setActiveTab('details') }
+          }}
+        >
+          {tab === 'details'
+            ? <><i className="bx bx-book-content" style={{ marginRight: 8, fontSize: 15 }} aria-hidden="true" />Details</>
+            : <><i className="bx bx-cog" style={{ marginRight: 8, fontSize: 15 }} aria-hidden="true" />Settings</>}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>{comic?.title ?? 'Comic'}</h1>
-        <button onClick={() => navigate('/library')} style={linkButtonStyle}>← Library</button>
-      </div>
+    <PageLayout
+      title={comic?.title ?? 'Comic'}
+      headerActions={
+        <button className="btn" onClick={() => navigate('/library')}>
+          <i className="bx bx-chevron-left" /> Library
+        </button>
+      }
+      actionBar={actionBar}
+    >
+      {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
 
-      {isLoading && <p>Loading…</p>}
-
-      {error && <p style={{ color: 'red' }}>{extractDetail(error)}</p>}
+      {error && (
+        <p role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>
+          {extractDetail(error)}
+        </p>
+      )}
 
       {comic && (
         <>
-          {/* Header: cover + metadata */}
-          <div style={{ display: 'flex', gap: 24, marginBottom: 32 }}>
-            <div style={{ flexShrink: 0 }}>
-              <img
-                src={`/api/requests/${comic.id}/cover`}
-                alt=""
-                width={160}
-                height={220}
-                style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
-                onError={e => { e.currentTarget.style.display = 'none' }}
-              />
-              <button onClick={() => { setCoverFormOpen(v => !v); setCoverError(null) }} style={{ ...linkButtonStyle, marginTop: 4, fontSize: 12 }}>
-                {coverFormOpen ? 'Cancel' : 'Change cover'}
-              </button>
-              {coverFormOpen && (
-                <div style={{ marginTop: 8, minWidth: 260 }}>
-                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                    <button onClick={() => setCoverTab('url')} style={coverTab === 'url' ? primaryButtonStyle : secondaryButtonStyle}>URL</button>
-                    <button onClick={() => setCoverTab('file')} style={coverTab === 'file' ? primaryButtonStyle : secondaryButtonStyle}>Upload</button>
+          {/* =========================================================== */}
+          {/* DETAILS TAB                                                   */}
+          {/* =========================================================== */}
+          {activeTab === 'details' && (
+            <div id="comic-panel-details" role="tabpanel" aria-labelledby="comic-tab-details">
+              <div className="detail-hero">
+                <div style={{ flexShrink: 0, alignSelf: 'flex-start' }}>
+                  <div className="detail-cover">
+                    <img src={`/api/requests/${comic.id}/cover`} alt={`Cover art for ${comic.title}`}
+                      onError={e => { e.currentTarget.style.display = 'none' }} />
+                    <i className="bx bx-book-open" style={{ fontSize: 36 }} aria-hidden="true" />
                   </div>
-                  {coverTab === 'url' && (
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input
-                        type="url"
-                        value={coverUrl}
-                        onChange={e => setCoverUrl(e.target.value)}
-                        placeholder="https://..."
-                        style={{ flex: 1, padding: '6px 10px', fontSize: 13, border: '1px solid #ccc', borderRadius: 4 }}
-                      />
-                      <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverUrl} style={{ ...primaryButtonStyle, opacity: (coverSubmitting || !coverUrl) ? 0.6 : 1 }}>
-                        {coverSubmitting ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  )}
-                  {coverTab === 'file' && (
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={e => setCoverFile(e.target.files?.[0] ?? null)}
-                        style={{ flex: 1, fontSize: 13 }}
-                      />
-                      <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverFile} style={{ ...primaryButtonStyle, opacity: (coverSubmitting || !coverFile) ? 0.6 : 1 }}>
-                        {coverSubmitting ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  )}
-                  {coverError && <p style={{ fontSize: 13, color: 'red', marginTop: 6 }}>{coverError}</p>}
                 </div>
-              )}
-            </div>
-            <div>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Library title</span>{comic.library_title}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Status</span>
-                {comic.status}
-                <button onClick={handleStatusToggle} style={{ ...linkButtonStyle, marginLeft: 8, fontSize: 12 }}>
-                  {comic.status === 'tracking' ? 'Mark complete' : 'Resume tracking'}
-                </button>
-              </p>
-              <p style={metaRowStyle}>
-                <span style={metaLabelStyle}>Poll interval</span>
-                {comic.poll_override_days != null
-                  ? `${comic.poll_override_days}d`
-                  : comic.inferred_cadence_days != null
-                    ? `${comic.inferred_cadence_days.toFixed(1)}d (inferred)`
-                    : '7d (default)'}
-              </p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Upgrade interval</span>{comic.upgrade_override_days != null ? `${comic.upgrade_override_days}d` : '(use poll interval)'}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Next poll</span>{formatRelative(comic.next_poll_at)}</p>
-              <p style={metaRowStyle}><span style={metaLabelStyle}>Last upgrade check</span>{formatRelative(comic.last_upgrade_check_at)}</p>
-              <button onClick={openEdit} style={{ ...linkButtonStyle, fontSize: 12, marginTop: 4 }}>Edit settings</button>
-            </div>
-          </div>
 
-          {/* Edit form */}
-          {editOpen && (
-            <div style={{ marginBottom: 24, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <strong style={{ fontSize: 14 }}>Edit settings</strong>
-                <button onClick={() => setEditOpen(false)} style={linkButtonStyle}>Cancel</button>
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={editLabelStyle}>
-                  Library title
-                  <input
-                    type="text"
-                    value={editLibraryTitle}
-                    onChange={e => setEditLibraryTitle(e.target.value)}
-                    style={editInputStyle}
-                  />
-                </label>
-                <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
-                  Changing this will not rename existing library files.
-                </p>
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={editLabelStyle}>
-                  Poll interval (days)
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                    <input
-                      type="number"
-                      min="0.1"
-                      step="0.5"
-                      value={editPollClear ? '' : editPollDays}
-                      disabled={editPollClear}
-                      onChange={e => setEditPollDays(e.target.value)}
-                      style={{ ...editInputStyle, width: 100, marginTop: 0, opacity: editPollClear ? 0.5 : 1 }}
-                    />
-                    <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="checkbox"
-                        checked={editPollClear}
-                        onChange={e => setEditPollClear(e.target.checked)}
-                      />
-                      Use inferred cadence
-                    </label>
-                  </div>
-                </label>
-              </div>
-
-              <div style={{ marginBottom: 12 }}>
-                <label style={editLabelStyle}>
-                  Upgrade interval (days)
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                    <input
-                      type="number"
-                      min="0.1"
-                      step="0.5"
-                      value={editUpgradeClear ? '' : editUpgradeDays}
-                      disabled={editUpgradeClear}
-                      onChange={e => setEditUpgradeDays(e.target.value)}
-                      style={{ ...editInputStyle, width: 100, marginTop: 0, opacity: editUpgradeClear ? 0.5 : 1 }}
-                    />
-                    <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="checkbox"
-                        checked={editUpgradeClear}
-                        onChange={e => setEditUpgradeClear(e.target.checked)}
-                      />
-                      Use poll interval
-                    </label>
-                  </div>
-                </label>
-              </div>
-
-              {/* Aliases */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#444', marginBottom: 6 }}>Aliases</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                  {(comic.aliases ?? [])
-                    .filter(a => !pendingAliasDeletes.has(a.id))
-                    .map(a => (
-                      <span key={a.id} style={aliasChipStyle}>
-                        {a.title}
-                        <button
-                          onClick={() => handleStagedDeleteAlias(a.id)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
-                          aria-label={`Remove alias ${a.title}`}
-                        >×</button>
-                      </span>
-                    ))}
-                  {pendingAliasAdds.map(title => (
-                    <span key={title} style={{ ...aliasChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>
-                      {title}
-                      <button
-                        onClick={() => handleRemoveStagedAdd(title)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: '#888', fontSize: 12, padding: 0 }}
-                        aria-label={`Remove pending alias ${title}`}
-                      >×</button>
+                <div className="detail-meta" style={{ alignSelf: 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className={`status-badge ${comic.status}`} aria-label={`Status: ${comic.status}`}>
+                      {comic.status}
                     </span>
-                  ))}
-                  {(comic.aliases ?? []).filter(a => !pendingAliasDeletes.has(a.id)).length === 0 &&
-                    pendingAliasAdds.length === 0 && (
-                      <span style={{ fontSize: 12, color: '#888' }}>None</span>
-                    )}
+                    <button className="btn" onClick={handleStatusToggle} style={{ fontSize: 12 }}>
+                      {comic.status === 'tracking' ? 'Mark complete' : 'Resume tracking'}
+                    </button>
+                  </div>
+
+                  <h1 className="detail-title">{comic.title}</h1>
+                  {comic.library_title !== comic.title && (
+                    <div className="detail-subtitle">Library title: {comic.library_title}</div>
+                  )}
+
+                  <dl className="detail-stats">
+                    <div className="stat-block">
+                      <dt className="stat-label">Downloaded</dt>
+                      <dd className="stat-value">{statusCounts.available}</dd>
+                    </div>
+                    <div className="stat-divider" aria-hidden="true" role="presentation" />
+                    <div className="stat-block">
+                      <dt className="stat-label">Total chapters</dt>
+                      <dd className="stat-value">{chaptersTotal}</dd>
+                    </div>
+                    <div className="stat-divider" aria-hidden="true" role="presentation" />
+                    <div className="stat-block">
+                      <dt className="stat-label">Poll cadence</dt>
+                      <dd className="stat-value">
+                        {comic.poll_override_days != null
+                          ? `${comic.poll_override_days}d`
+                          : comic.inferred_cadence_days != null
+                            ? `${comic.inferred_cadence_days.toFixed(1)}d`
+                            : '7d'}
+                      </dd>
+                    </div>
+                    <div className="stat-divider" aria-hidden="true" role="presentation" />
+                    <div className="stat-block">
+                      <dt className="stat-label">Next poll</dt>
+                      <dd className="stat-value" style={{ fontSize: 15, color: 'var(--text-2)' }}>
+                        {formatRelative(comic.next_poll_at)}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="detail-actions">
+                    <button className="btn primary" onClick={handleDiscover} disabled={discovering} aria-busy={discovering}>
+                      {discovering ? 'Searching sources…' : 'Re-discover chapters'}
+                    </button>
+                    <button className="btn" onClick={handleReprocess} disabled={reprocessing} aria-busy={reprocessing}>
+                      {reprocessing ? 'Reprocessing…' : 'Reprocess'}
+                    </button>
+                    <button className="btn" onClick={handleForceUpgrade} disabled={forceUpgrading} aria-busy={forceUpgrading}>
+                      {forceUpgrading ? 'Checking upgrades…' : 'Force upgrade'}
+                    </button>
+                  </div>
+
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    type="text"
-                    placeholder="Add alias…"
-                    value={newAlias}
-                    onChange={e => setNewAlias(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleStagedAddAlias()}
-                    style={{ ...editInputStyle, marginTop: 0, flex: 1 }}
-                  />
-                  <button
-                    onClick={handleStagedAddAlias}
-                    disabled={!newAlias.trim()}
-                    style={{ ...secondaryButtonStyle, opacity: !newAlias.trim() ? 0.6 : 1 }}
+
+                {/* Operation log column — only shown when there is something to display */}
+                {(discovering || reprocessing || forceUpgrading ||
+                  discoverResult || discoverError ||
+                  reprocessLog.length > 0 || reprocessResult || reprocessError ||
+                  forceUpgradeLog.length > 0 || forceUpgradeResult || forceUpgradeError) && (
+                  <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                  <div
+                    ref={logScrollRef}
+                    aria-live="polite"
+                    aria-atomic="false"
+                    aria-label="Operation log"
+                    role="log"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      overflowY: 'auto',
+                      background: 'var(--surface-2)',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: 'var(--text-2)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 3,
+                    }}
                   >
-                    Add
-                  </button>
-                </div>
-                {aliasError && <p style={{ fontSize: 12, color: 'red', marginTop: 4 }}>{aliasError}</p>}
+                    {/* Discover */}
+                    {(discovering || discoverResult || discoverError) && (
+                      <div style={{ marginBottom: discoverResult || discoverError ? 4 : 0 }}>
+                        <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2, fontFamily: 'inherit' }}>Re-discover</div>
+                        {discovering && <div style={{ color: 'var(--text-3)' }}><i className="bx bx-loader-alt" style={{ marginRight: 4 }} aria-hidden="true" />Searching sources…</div>}
+                        {discoverResult && <div role="status" style={{ color: 'var(--text-2)' }}>{discoverResult}</div>}
+                        {discoverError && <div role="alert" style={{ color: 'var(--danger)' }}>{discoverError}</div>}
+                      </div>
+                    )}
+
+                    {/* Reprocess */}
+                    {(reprocessing || reprocessLog.length > 0 || reprocessResult || reprocessError) && (
+                      <div style={{ marginBottom: reprocessResult || reprocessError ? 4 : 0 }}>
+                        <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2, fontFamily: 'inherit' }}>Reprocess</div>
+                        {reprocessLog.map((entry, i) => (
+                          <div key={i}>
+                            {entry.action === 'processed'
+                              ? <i className="bx bx-check" style={{ color: 'var(--success)' }} />
+                              : entry.action === 'queued' ? <i className="bx bx-refresh" /> : '—'}
+                            {' '}Ch {entry.chapter_number} — {entry.action}
+                          </div>
+                        ))}
+                        {reprocessing && <div style={{ color: 'var(--text-3)' }}>…</div>}
+                        {reprocessResult && <div role="status" style={{ color: 'var(--text-2)' }}>{reprocessResult}</div>}
+                        {reprocessError && <div role="alert" style={{ color: 'var(--danger)' }}>{reprocessError}</div>}
+                      </div>
+                    )}
+
+                    {/* Force upgrade */}
+                    {(forceUpgrading || forceUpgradeLog.length > 0 || forceUpgradeResult || forceUpgradeError) && (
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2, fontFamily: 'inherit' }}>Force upgrade</div>
+                        {forceUpgradeLog.map((entry, i) => (
+                          <div key={i}><i className="bx bx-refresh" /> Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
+                        ))}
+                        {forceUpgrading && <div style={{ color: 'var(--text-3)' }}>…</div>}
+                        {forceUpgradeResult && <div role="status" style={{ color: 'var(--text-2)' }}>{forceUpgradeResult}</div>}
+                        {forceUpgradeError && <div role="alert" style={{ color: 'var(--danger)' }}>{forceUpgradeError}</div>}
+                      </div>
+                    )}
+                  </div>
+                  </div>
+                )}
               </div>
 
-              <button
-                onClick={handleEditSubmit}
-                disabled={editSubmitting}
-                style={{ ...primaryButtonStyle, opacity: editSubmitting ? 0.6 : 1 }}
-              >
-                {editSubmitting ? 'Saving…' : 'Save changes'}
-              </button>
-              {editError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{editError}</p>}
+              <dl className="info-cards" aria-label="Comic details">
+                <div className="info-card">
+                  <dt className="info-card-label">Poll interval</dt>
+                  <dd className="info-card-value">
+                    {comic.poll_override_days != null
+                      ? `${comic.poll_override_days} days`
+                      : comic.inferred_cadence_days != null
+                        ? `${comic.inferred_cadence_days.toFixed(1)} days`
+                        : '7 days'}
+                  </dd>
+                  <dd className="info-card-sub">
+                    {comic.poll_override_days != null
+                      ? comic.inferred_cadence_days != null
+                        ? `Override (inferred: ${comic.inferred_cadence_days.toFixed(1)}d)`
+                        : 'Override'
+                      : comic.inferred_cadence_days != null ? 'Inferred' : 'Default'}
+                  </dd>
+                </div>
+                <div className="info-card">
+                  <dt className="info-card-label">Upgrade interval</dt>
+                  <dd className="info-card-value">{comic.upgrade_override_days != null ? `${comic.upgrade_override_days} days` : '—'}</dd>
+                  <dd className="info-card-sub">{comic.upgrade_override_days != null ? 'Override' : 'Uses poll interval'}</dd>
+                </div>
+                <div className="info-card">
+                  <dt className="info-card-label">Last upgrade check</dt>
+                  <dd className="info-card-value">{comic.last_upgrade_check_at ? formatRelative(comic.last_upgrade_check_at) : 'Never'}</dd>
+                  <dd className="info-card-sub">
+                    {comic.last_upgrade_check_at
+                      ? new Date(comic.last_upgrade_check_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+                      : '—'}
+                  </dd>
+                </div>
+                <div className="info-card">
+                  <dt className="info-card-label">Aliases</dt>
+                  <dd className="info-card-value">{comic.aliases.length}</dd>
+                  <dd className="info-card-sub">{comic.aliases.length > 0 ? comic.aliases.map(a => a.title).join(', ') : 'None'}</dd>
+                </div>
+                <div className="info-card">
+                  <dt className="info-card-label">Source pins</dt>
+                  <dd className="info-card-value">{pins.length}</dd>
+                  <dd className="info-card-sub">{pins.length > 0 ? pins.map(p => p.source_name).join(', ') : 'None'}</dd>
+                </div>
+              </dl>
+
+              <div className="section-header">
+                <span className="section-title" id="chapters-heading">Chapters</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div className="chapter-filters" role="group" aria-label="Filter chapters by status" style={{ marginBottom: 0 }}>
+                  {(['', 'queued', 'downloading', 'relocating', 'available', 'failed'] as const).map(s => {
+                    const label = s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)
+                    const count = s === '' ? chaptersTotal : statusCounts[s as ChapterStatus]
+                    return (
+                      <button key={s} className={`chip${chapterStatus === s ? ' active' : ''}`}
+                        aria-pressed={chapterStatus === s}
+                        onClick={() => { setChapterStatus(s); setChapterPage(1) }}>
+                        {label} ({count})
+                      </button>
+                    )
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, height: 32, minHeight: 32 }}>
+                  <Pagination page={chapterPage} total={chaptersTotal} perPage={chapterPerPage} onChange={p => setChapterPage(p)} />
+                  {chapterTotalPages > 1 && <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />}
+                  {[25, 50, 100].map(n => (
+                    <button key={n} className={`btn${chapterPerPage === n ? ' primary' : ''}`}
+                      style={{ padding: '4px 8px', fontSize: 12 }}
+                      onClick={() => { setChapterPerPage(n); setChapterPage(1) }}>{n}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="table-card">
+                <table aria-labelledby="chapters-heading">
+                  <thead>
+                    <tr style={{ borderBottom: `2px solid var(--border)` }}>
+                      <th scope="col" style={thStyle}>Chapter</th>
+                      <th scope="col" style={thStyle}>Volume</th>
+                      <th scope="col" style={thStyle}>Source</th>
+                      <th scope="col" style={thStyle}>Download</th>
+                      <th scope="col" style={thStyle}>Relocation</th>
+                      <th scope="col" style={thStyle}>Library path</th>
+                      <th scope="col" style={thStyle}><span className="sr-only">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chapters.map(ch => (
+                      <tr key={ch.assignment_id} style={{ borderBottom: `1px solid var(--border)` }}>
+                        <td style={tdStyle}><strong>Ch. {ch.chapter_number}</strong></td>
+                        <td style={{ ...tdStyle, color: 'var(--text-2)' }}>{ch.volume_number != null ? `Vol. ${ch.volume_number}` : '—'}</td>
+                        <td style={tdStyle}><span className="tag">{ch.source_name}</span></td>
+                        <td style={tdStyle}>{downloadStatusCell(ch.download_status)}</td>
+                        <td style={tdStyle}>{relocationStatusCell(ch.relocation_status)}</td>
+                        <td style={{ ...tdStyle, maxWidth: 280, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: '11.5px', color: 'var(--text-2)' }}>
+                          {ch.library_path ?? '—'}
+                        </td>
+                        <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                          {chapterUpgradeMsgs[ch.assignment_id] ? (
+                            <span style={{ fontSize: 11, color: chapterUpgradeMsgs[ch.assignment_id] === 'Upgrade queued' ? 'var(--success)' : 'var(--text-3)' }}>
+                              {chapterUpgradeMsgs[ch.assignment_id]}
+                            </span>
+                          ) : (
+                            <button className="btn" style={{ fontSize: 11, padding: '3px 8px' }}
+                              onClick={() => handleForceUpgradeChapter(ch.assignment_id)}
+                              disabled={upgradingChapterId === ch.assignment_id}
+                              aria-busy={upgradingChapterId === ch.assignment_id}
+                              aria-label={`Upgrade chapter ${ch.chapter_number}`}>
+                              {upgradingChapterId === ch.assignment_id ? '…' : 'Upgrade'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
-          {/* Source pins */}
-          <div style={{ marginBottom: 24 }}>
-            <button
-              onClick={() => pinsOpen ? setPinsOpen(false) : openPins()}
-              style={{ ...linkButtonStyle, fontSize: 12 }}
-            >
-              {pinsOpen ? 'Close pin manager' : 'Manage source pins'}
-            </button>
-            {pinsOpen && (
-              <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-                <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-                  Pins tell Otaki to fetch chapters directly by manga ID instead of searching by title.
-                  Useful when different comics have the same title.
+          {/* =========================================================== */}
+          {/* SETTINGS TAB                                                  */}
+          {/* =========================================================== */}
+          {activeTab === 'settings' && (
+            <div id="comic-panel-settings" role="tabpanel" aria-labelledby="comic-tab-settings" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+              {/* Cover */}
+              <div className="card" style={{ padding: 20 }}>
+                <h2 style={panelHeadingStyle}>Cover</h2>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <button onClick={() => setCoverTab('url')} className={`btn${coverTab === 'url' ? ' primary' : ''}`} style={{ fontSize: 12, padding: '5px 10px' }}>URL</button>
+                  <button onClick={() => setCoverTab('file')} className={`btn${coverTab === 'file' ? ' primary' : ''}`} style={{ fontSize: 12, padding: '5px 10px' }}>Upload</button>
+                </div>
+                {coverTab === 'url' && (
+                  <div style={{ display: 'flex', gap: 6, maxWidth: 480 }}>
+                    <input type="url" value={coverUrl} onChange={e => setCoverUrl(e.target.value)}
+                      placeholder="https://…" className="input" style={{ flex: 1, fontSize: 13 }}
+                      aria-label="Cover image URL" />
+                    <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverUrl} className="btn primary"
+                      style={{ fontSize: 12, opacity: (coverSubmitting || !coverUrl) ? 0.6 : 1 }}>
+                      {coverSubmitting ? 'Saving…' : 'Save cover'}
+                    </button>
+                  </div>
+                )}
+                {coverTab === 'file' && (
+                  <div style={{ display: 'flex', gap: 6, maxWidth: 480 }}>
+                    <input type="file" accept="image/*" onChange={e => setCoverFile(e.target.files?.[0] ?? null)} style={{ flex: 1, fontSize: 13 }}
+                      aria-label="Upload cover image" />
+                    <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverFile} className="btn primary"
+                      style={{ fontSize: 12, opacity: (coverSubmitting || !coverFile) ? 0.6 : 1 }}>
+                      {coverSubmitting ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                )}
+                {coverError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 6 }}>{coverError}</p>}
+              </div>
+
+              {/* Comic settings */}
+              <div className="card" style={{ padding: 20 }}>
+                <h2 style={panelHeadingStyle}>Comic settings</h2>
+
+                <div style={{ marginBottom: 10 }}>
+                  <label style={editLabelStyle}>
+                    Library title
+                    <input type="text" value={editLibraryTitle} onChange={e => setEditLibraryTitle(e.target.value)} style={editInputStyle} />
+                  </label>
+                  <p style={{ fontSize: 11, color: 'var(--text-3)', margin: '2px 0 0' }}>Changing this will not rename existing library files.</p>
                 </div>
 
-                {/* Current pins */}
+                <div style={{ marginBottom: 10 }}>
+                  <label htmlFor="edit-poll-days" style={editLabelStyle}>Poll interval (days)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <input id="edit-poll-days" className="input" style={{ width: 80 }} type="number" min="1" step="1"
+                      value={editPollClear ? '' : editPollDays} disabled={editPollClear}
+                      onChange={e => setEditPollDays(e.target.value)} />
+                    <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input type="checkbox" checked={editPollClear} onChange={e => setEditPollClear(e.target.checked)} />
+                      Use inferred cadence
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label htmlFor="edit-upgrade-days" style={editLabelStyle}>Upgrade interval (days)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <input id="edit-upgrade-days" type="number" className="input" min="1" step="1"
+                      value={editUpgradeClear ? '' : editUpgradeDays} disabled={editUpgradeClear}
+                      onChange={e => setEditUpgradeDays(e.target.value)} style={{ width: 80 }} />
+                    <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input type="checkbox" checked={editUpgradeClear} onChange={e => setEditUpgradeClear(e.target.checked)} />
+                      Use poll interval
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Aliases</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                    {(comic.aliases ?? []).filter(a => !pendingAliasDeletes.has(a.id)).map(a => (
+                      <span key={a.id} style={aliasChipStyle}>
+                        {a.title}
+                        <button onClick={() => handleStagedDeleteAlias(a.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: 'var(--text-3)', fontSize: 12, padding: 0 }}
+                          aria-label={`Remove alias ${a.title}`}><i className="bx bx-x" /></button>
+                      </span>
+                    ))}
+                    {pendingAliasAdds.map(title => (
+                      <span key={title} style={{ ...aliasChipStyle, borderStyle: 'dashed', color: 'var(--accent)' }}>
+                        {title}
+                        <button onClick={() => handleRemoveStagedAdd(title)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, color: 'var(--text-3)', fontSize: 12, padding: 0 }}
+                          aria-label={`Remove pending alias ${title}`}><i className="bx bx-x" /></button>
+                      </span>
+                    ))}
+                    {(comic.aliases ?? []).filter(a => !pendingAliasDeletes.has(a.id)).length === 0 && pendingAliasAdds.length === 0 && (
+                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>None</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input type="text" placeholder="Add alias…" value={newAlias}
+                      onChange={e => setNewAlias(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleStagedAddAlias()}
+                      style={{ ...editInputStyle, marginTop: 0, flex: 1 }}
+                      aria-label="New alias" />
+                    <button onClick={handleStagedAddAlias} disabled={!newAlias.trim()} className="btn"
+                      style={{ fontSize: 12, opacity: !newAlias.trim() ? 0.6 : 1 }}>Add</button>
+                  </div>
+                  {aliasError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{aliasError}</p>}
+                </div>
+
+                <button onClick={handleEditSubmit} disabled={editSubmitting} className="btn primary"
+                  style={{ opacity: editSubmitting ? 0.6 : 1 }}>
+                  {editSubmitting ? 'Saving…' : 'Save changes'}
+                </button>
+                {editError && <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', marginTop: 8 }}>{editError}</p>}
+              </div>
+
+              {/* Source pins */}
+              <div className="card" style={{ padding: 20 }}>
+                <h2 style={panelHeadingStyle}>Source pins</h2>
+                <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 12 }}>
+                  Pins tell Otaki to fetch chapters directly by manga ID instead of searching by title.
+                  Useful when different comics share the same title.
+                </p>
                 <div style={{ marginBottom: 12 }}>
                   {pins.filter(p => !removedPinIds.has(p.id)).length === 0 && pendingPins.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#888' }}>No pins set.</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No pins set.</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {pins.filter(p => !removedPinIds.has(p.id)).map(p => (
                         <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                           <span style={pinChipStyle}>{p.source_name}</span>
-                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
-                          <button onClick={() => removeSavedPin(p.id)} style={removeBtnStyle} aria-label="Remove pin">✕</button>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{p.suwayomi_manga_id}</span>
+                          <button onClick={() => removeSavedPin(p.id)} style={removeBtnStyle} aria-label="Remove pin"><i className="bx bx-x" /></button>
                         </div>
                       ))}
                       {pendingPins.map((p, i) => (
                         <div key={`pending-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                          <span style={{ ...pinChipStyle, borderStyle: 'dashed', color: '#0070f3' }}>{p.source_name}</span>
-                          <span style={{ fontFamily: 'monospace', color: '#444' }}>{p.suwayomi_manga_id}</span>
-                          <button onClick={() => removePendingPin(i)} style={removeBtnStyle} aria-label="Remove pending pin">✕</button>
+                          <span style={{ ...pinChipStyle, borderStyle: 'dashed', color: 'var(--accent)' }}>{p.source_name}</span>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{p.suwayomi_manga_id}</span>
+                          <button onClick={() => removePendingPin(i)} style={removeBtnStyle} aria-label="Remove pending pin"><i className="bx bx-x" /></button>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
-
-                {/* Add pin search */}
-                <div style={{ marginBottom: 12, borderTop: '1px solid #eee', paddingTop: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 6 }}>Add a pin</div>
+                <div style={{ marginBottom: 12, borderTop: `1px solid var(--border)`, paddingTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Add a pin</div>
                   <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-                    <select
-                      value={pinSearchSourceId}
-                      onChange={e => setPinSearchSourceId(e.target.value ? Number(e.target.value) : '')}
-                      style={{ padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
-                    >
+                    <select value={pinSearchSourceId} onChange={e => setPinSearchSourceId(e.target.value ? Number(e.target.value) : '')}
+                      className="select" style={{ fontSize: 12 }} aria-label="Source to search">
                       <option value="">Select source…</option>
-                      {sources.filter(s => s.enabled).map(s => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
+                      {sources.filter(s => s.enabled).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
-                    <input
-                      type="text"
-                      placeholder="Search title…"
-                      value={pinSearchQuery}
+                    <input type="text" placeholder="Search title…" value={pinSearchQuery}
                       onChange={e => setPinSearchQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handlePinSearch()}
-                      style={{ flex: 1, minWidth: 140, padding: '5px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4 }}
-                    />
-                    <button
-                      onClick={handlePinSearch}
-                      disabled={!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching}
-                      style={{ ...secondaryButtonStyle, fontSize: 12, padding: '5px 10px', opacity: (!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching) ? 0.6 : 1 }}
-                    >
+                      className="input" style={{ flex: 1, minWidth: 140, fontSize: 12 }}
+                      aria-label="Search title on selected source" />
+                    <button onClick={handlePinSearch} disabled={!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching}
+                      className="btn" style={{ fontSize: 12, padding: '5px 10px', opacity: (!pinSearchSourceId || !pinSearchQuery.trim() || pinSearching) ? 0.6 : 1 }}>
                       {pinSearching ? 'Searching…' : 'Search'}
                     </button>
                   </div>
+                  {pinSearching && pinSearchResults.length === 0 && (
+                    <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '4px 0 0' }}>
+                      <i className="bx bx-loader-alt" style={{ marginRight: 4 }} aria-hidden="true" />Searching…
+                    </p>
+                  )}
+                  {!pinSearching && pinSearchDone && pinSearchResults.length === 0 && (
+                    <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '4px 0 0' }}>No results on this source.</p>
+                  )}
                   {pinSearchResults.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', border: '1px solid #eee', borderRadius: 4, padding: 6 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', border: `1px solid var(--border)`, borderRadius: 4, padding: 6, background: 'var(--surface)' }}>
                       {pinSearchResults.map(r => (
-                        <button
-                          key={r.url}
-                          onClick={() => stagePinFromResult(r)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '4px 6px', borderRadius: 4, fontSize: 12, display: 'flex', flexDirection: 'column' }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#f0f4ff' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
-                        >
+                        <button key={r.url} onClick={() => stagePinFromResult(r)}
+                          className="pin-result-btn"
+                          aria-label={`Add pin: ${r.title}`}>
                           <span style={{ fontWeight: 500 }}>{r.title}</span>
-                          <span style={{ color: '#888', fontSize: 11 }}>ID: {r.suwayomi_manga_id}</span>
+                          <span style={{ color: 'var(--text-2)', fontSize: 11 }}>ID: {r.suwayomi_manga_id}</span>
                         </button>
                       ))}
+                      {pinSearching && (
+                        <p style={{ fontSize: 11, color: 'var(--text-3)', margin: '4px 0 0', padding: '2px 6px' }}>
+                          <i className="bx bx-loader-alt" style={{ marginRight: 4 }} aria-hidden="true" />Still searching…
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
-
-                {/* Save */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button
-                    onClick={handleSavePins}
-                    disabled={pinSaving}
-                    style={{ ...primaryButtonStyle, fontSize: 12, padding: '6px 12px', opacity: pinSaving ? 0.6 : 1 }}
-                  >
-                    {pinSaving ? 'Saving…' : 'Save pins'}
-                  </button>
-                  <button onClick={() => setPinsOpen(false)} style={{ ...linkButtonStyle, fontSize: 12 }}>Cancel</button>
-                </div>
-                {pinResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{pinResult}</p>}
-                {pinError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{pinError}</p>}
+                <button onClick={handleSavePins} disabled={pinSaving} className="btn primary"
+                  style={{ fontSize: 12, padding: '6px 12px', opacity: pinSaving ? 0.6 : 1 }}>
+                  {pinSaving ? 'Saving…' : 'Save pins'}
+                </button>
+                {pinResult && <p role="status" style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{pinResult}</p>}
+                {pinError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{pinError}</p>}
               </div>
-            )}
-          </div>
 
-          {/* Source priority overrides */}
-          <div style={{ marginBottom: 24 }}>
-            <button
-              onClick={() => overridesOpen ? setOverridesOpen(false) : openOverrides()}
-              style={{ ...linkButtonStyle, fontSize: 12 }}
-            >
-              {overridesOpen ? 'Close source priorities' : 'Manage source priorities'}
-            </button>
-            {overridesOpen && (() => {
-              // Initialise draft once data arrives
-              if (overrideDraft === null && sourceOverrides.length > 0) initOverrideDraft(sourceOverrides)
-              const display = overrideDraft ?? sourceOverrides
-              return (
-                <div style={{ marginTop: 12, padding: 16, border: '1px solid #ddd', borderRadius: 6, background: '#fafafa' }}>
-                  <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-                    Drag to reorder sources for this comic. Overridden positions are shown in blue.
-                    Changes take effect on the next upgrade check — use Force Upgrade to apply immediately.
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
-                    {display.map((entry, index) => (
-                      <div
-                        key={entry.source_id}
-                        draggable
-                        onDragStart={() => handleDragStart(index)}
-                        onDragOver={e => handleDragOver(e, index)}
-                        onDragEnd={handleDragEnd}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10,
-                          padding: '6px 10px', borderRadius: 4, fontSize: 13,
-                          background: '#fff', border: '1px solid #eee',
-                          cursor: 'grab', userSelect: 'none',
-                        }}
-                      >
-                        <span style={{ color: '#aaa', fontSize: 11 }}>⠿</span>
-                        <span style={{ width: 20, textAlign: 'right', fontSize: 12, color: '#888' }}>{index + 1}</span>
-                        <span style={{ flex: 1, fontWeight: entry.is_overridden || overrideDraft !== null ? 500 : 400 }}>
-                          {entry.source_name}
-                        </span>
-                        {entry.is_overridden && overrideDraft === null && (
-                          <span style={{ fontSize: 11, color: '#0070f3' }}>overridden</span>
-                        )}
-                        {overrideDraft === null && entry.is_overridden && (
-                          <span style={{ fontSize: 11, color: '#888' }}>global: {entry.global_priority}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button
-                      onClick={handleSaveOverrides}
-                      disabled={overrideSaving || overrideDraft === null}
-                      style={{ ...primaryButtonStyle, fontSize: 12, padding: '6px 12px', opacity: (overrideSaving || overrideDraft === null) ? 0.6 : 1 }}
+              {/* Source priorities */}
+              {(() => {
+                if (overrideDraft === null && sourceOverrides.length > 0) initOverrideDraft(sourceOverrides)
+                const display = overrideDraft ?? sourceOverrides
+                return (
+                  <div className="card" style={{ padding: 20 }}>
+                    <h2 style={panelHeadingStyle}>Source priorities</h2>
+                    <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 12 }}>
+                      Drag to reorder sources for this comic. Overridden positions are highlighted.
+                      Changes take effect on the next upgrade check — use Force upgrade to apply immediately.
+                    </p>
+                    <DndContext
+                      sensors={overrideSensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleOverrideDragEnd}
+                      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
                     >
-                      {overrideSaving ? 'Saving…' : 'Save order'}
-                    </button>
-                    <button
-                      onClick={handleResetOverrides}
-                      disabled={overrideSaving}
-                      style={{ ...linkButtonStyle, fontSize: 12 }}
-                    >
-                      Reset to global defaults
-                    </button>
-                    <button onClick={() => setOverridesOpen(false)} style={{ ...linkButtonStyle, fontSize: 12, color: '#888' }}>Cancel</button>
-                  </div>
-                  {overrideResult && <p style={{ fontSize: 12, color: '#555', marginTop: 8 }}>{overrideResult}</p>}
-                  {overrideError && <p style={{ fontSize: 12, color: 'red', marginTop: 8 }}>{overrideError}</p>}
-                </div>
-              )
-            })()}
-          </div>
-
-          {/* Re-discover / Reprocess */}
-          <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            {chaptersTotal === 0 && (
-              <div>
-                <button
-                  onClick={handleDiscover}
-                  disabled={discovering}
-                  style={{ ...primaryButtonStyle, opacity: discovering ? 0.6 : 1 }}
-                >
-                  {discovering ? 'Searching sources…' : 'Re-discover chapters'}
-                </button>
-                {discoverResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{discoverResult}</p>}
-                {discoverError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{discoverError}</p>}
-              </div>
-            )}
-            {chaptersTotal > 0 && (
-              <div>
-                <button
-                  onClick={handleReprocess}
-                  disabled={reprocessing}
-                  style={{ ...secondaryButtonStyle, opacity: reprocessing ? 0.6 : 1 }}
-                >
-                  {reprocessing ? 'Reprocessing…' : 'Reprocess chapters'}
-                </button>
-                {(reprocessing || reprocessLog.length > 0) && (
-                  <div style={reprocessLogStyle}>
-                    {reprocessLog.map((entry, i) => (
-                      <div key={i}>
-                        {entry.action === 'processed' ? '✓' : entry.action === 'queued' ? '⟳' : '—'}
-                        {' '}Ch {entry.chapter_number} — {entry.action}
-                      </div>
-                    ))}
-                    {reprocessing && <div style={{ color: '#999' }}>…</div>}
-                  </div>
-                )}
-                {reprocessResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{reprocessResult}</p>}
-                {reprocessError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{reprocessError}</p>}
-              </div>
-            )}
-            {chaptersTotal > 0 && (
-              <div>
-                <button
-                  onClick={handleForceUpgrade}
-                  disabled={forceUpgrading}
-                  style={{ ...secondaryButtonStyle, opacity: forceUpgrading ? 0.6 : 1 }}
-                >
-                  {forceUpgrading ? 'Checking upgrades…' : 'Force upgrade'}
-                </button>
-                {(forceUpgrading || forceUpgradeLog.length > 0) && (
-                  <div style={reprocessLogStyle}>
-                    {forceUpgradeLog.map((entry, i) => (
-                      <div key={i}>⟳ Ch {entry.chapter_number}: {entry.old_source} → {entry.new_source}</div>
-                    ))}
-                    {forceUpgrading && <div style={{ color: '#999' }}>…</div>}
-                  </div>
-                )}
-                {forceUpgradeResult && <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>{forceUpgradeResult}</p>}
-                {forceUpgradeError && <p style={{ fontSize: 13, color: 'red', marginTop: 8 }}>{forceUpgradeError}</p>}
-              </div>
-            )}
-          </div>
-
-          {/* Chapter filter bar */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
-            {(['', 'queued', 'downloading', 'relocating', 'available', 'failed'] as const).map(s => (
-              <button
-                key={s}
-                onClick={() => { setChapterStatus(s); setChapterPage(1) }}
-                style={chapterFilterBtnStyle(chapterStatus === s)}
-              >
-                {s === '' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-              </button>
-            ))}
-            <span style={{ marginLeft: 8, fontSize: 12, color: '#888' }}>{chaptersTotal} chapter{chaptersTotal !== 1 ? 's' : ''}</span>
-          </div>
-
-          {/* Chapter table */}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
-                <th style={thStyle}>Chapter</th>
-                <th style={thStyle}>Volume</th>
-                <th style={thStyle}>Source</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Relocation</th>
-                <th style={thStyle}>Library path</th>
-                <th style={thStyle}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {chapters.map(ch => (
-                <tr key={ch.assignment_id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={tdStyle}>{ch.chapter_number}</td>
-                  <td style={tdStyle}>{ch.volume_number ?? '—'}</td>
-                  <td style={tdStyle}>{ch.source_name}</td>
-                  <td style={tdStyle}>{ch.download_status}</td>
-                  <td style={tdStyle}>{ch.relocation_status}</td>
-                  <td style={{ ...tdStyle, maxWidth: 280, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                    {ch.library_path ?? '—'}
-                  </td>
-                  <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                    {chapterUpgradeMsgs[ch.assignment_id] ? (
-                      <span style={{ fontSize: 11, color: chapterUpgradeMsgs[ch.assignment_id] === 'Upgrade queued' ? '#22c55e' : '#888' }}>
-                        {chapterUpgradeMsgs[ch.assignment_id]}
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => handleForceUpgradeChapter(ch.assignment_id)}
-                        disabled={upgradingChapterId === ch.assignment_id}
-                        style={{ ...linkButtonStyle, fontSize: 11, opacity: upgradingChapterId === ch.assignment_id ? 0.5 : 1 }}
-                      >
-                        {upgradingChapterId === ch.assignment_id ? '…' : 'Upgrade'}
+                      <SortableContext items={display.map(e => e.source_id)} strategy={verticalListSortingStrategy}>
+                        <div role="list" aria-label="Source priority order" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                          {display.map((entry, index) => (
+                            <SortableOverrideRow
+                              key={entry.source_id}
+                              entry={entry}
+                              index={index}
+                              total={display.length}
+                              showOverrideBadge={overrideDraft === null}
+                              onMoveUp={() => overrideMoveUp(index)}
+                              onMoveDown={() => overrideMoveDown(index)}
+                            />
+                          ))}
+                        </div>
+                      </SortableContext>
+                    </DndContext>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button onClick={handleSaveOverrides} disabled={overrideSaving || overrideDraft === null}
+                        className="btn primary" style={{ fontSize: 12, padding: '6px 12px', opacity: (overrideSaving || overrideDraft === null) ? 0.6 : 1 }}>
+                        {overrideSaving ? 'Saving…' : 'Save order'}
                       </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      <button onClick={handleResetOverrides} disabled={overrideSaving} className="btn" style={{ fontSize: 12 }}>
+                        Reset to global defaults
+                      </button>
+                    </div>
+                    {overrideResult && <p role="status" style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>{overrideResult}</p>}
+                    {overrideError && <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{overrideError}</p>}
+                  </div>
+                )
+              })()}
 
-          {/* Chapter pagination */}
-          {chapterTotalPages > 1 && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-              <button
-                disabled={chapterPage <= 1}
-                onClick={() => setChapterPage(p => p - 1)}
-                style={chapterFilterBtnStyle(false)}
-              >← Prev</button>
-              <span style={{ fontSize: 13, color: '#555' }}>
-                Page {chapterPage} / {chapterTotalPages}
-              </span>
-              <button
-                disabled={chapterPage >= chapterTotalPages}
-                onClick={() => setChapterPage(p => p + 1)}
-                style={chapterFilterBtnStyle(false)}
-              >Next →</button>
             </div>
           )}
         </>
       )}
-    </div>
+    </PageLayout>
   )
-}
-
-const linkButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#0070f3',
-  cursor: 'pointer',
-  fontSize: 14,
-  padding: 0,
-}
-
-const metaRowStyle: React.CSSProperties = {
-  margin: '0 0 6px 0',
-  fontSize: 14,
-}
-
-const metaLabelStyle: React.CSSProperties = {
-  fontWeight: 600,
-  marginRight: 8,
-  color: '#444',
-}
-
-const primaryButtonStyle: React.CSSProperties = {
-  padding: '8px 16px',
-  fontSize: 14,
-  background: '#0070f3',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 4,
-  cursor: 'pointer',
-}
-
-const secondaryButtonStyle: React.CSSProperties = {
-  padding: '8px 16px',
-  fontSize: 14,
-  background: '#f0f0f0',
-  color: '#333',
-  border: '1px solid #ccc',
-  borderRadius: 4,
-  cursor: 'pointer',
 }
 
 const thStyle: React.CSSProperties = {
   padding: '8px 12px',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
+  color: 'var(--text-2)',
 }
 
 const tdStyle: React.CSSProperties = {
   padding: '10px 12px',
   verticalAlign: 'middle',
   fontSize: 13,
+  color: 'var(--text)',
+  textAlign: 'center'
 }
 
 const editLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 13,
   fontWeight: 600,
-  color: '#444',
+  color: 'var(--text)',
 }
 
 const editInputStyle: React.CSSProperties = {
@@ -1203,10 +1321,13 @@ const editInputStyle: React.CSSProperties = {
   marginTop: 4,
   padding: '6px 10px',
   fontSize: 13,
-  border: '1px solid #ccc',
-  borderRadius: 4,
+  border: `1px solid var(--border)`,
+  borderRadius: 'var(--radius-sm)',
   width: '100%',
   boxSizing: 'border-box',
+  background: 'var(--surface)',
+  color: 'var(--text)',
+  fontFamily: 'inherit',
 }
 
 const aliasChipStyle: React.CSSProperties = {
@@ -1214,54 +1335,38 @@ const aliasChipStyle: React.CSSProperties = {
   alignItems: 'center',
   padding: '2px 8px',
   fontSize: 12,
-  background: '#f0f0f0',
-  border: '1px solid #ddd',
+  background: 'var(--surface-2)',
+  border: `1px solid var(--border)`,
   borderRadius: 12,
-  color: '#555',
+  color: 'var(--text)',
 }
 
 const pinChipStyle: React.CSSProperties = {
   display: 'inline-block',
   padding: '1px 6px',
   fontSize: 11,
-  background: '#f0f0f0',
-  border: '1px solid #ddd',
+  background: 'var(--surface-2)',
+  border: `1px solid var(--border)`,
   borderRadius: 10,
-  color: '#555',
+  color: 'var(--text)',
   flexShrink: 0,
+}
+
+const panelHeadingStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 700,
+  color: 'var(--text)',
+  margin: '0 0 16px',
 }
 
 const removeBtnStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
   cursor: 'pointer',
-  color: '#aaa',
+  color: 'var(--text-3)',
   fontSize: 12,
   padding: 0,
   lineHeight: 1,
 }
 
-const reprocessLogStyle: React.CSSProperties = {
-  maxHeight: 120,
-  overflowY: 'auto',
-  fontSize: 12,
-  fontFamily: 'monospace',
-  background: '#f8f8f8',
-  border: '1px solid #eee',
-  borderRadius: 4,
-  padding: '6px 10px',
-  marginTop: 6,
-}
 
-function chapterFilterBtnStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '4px 10px',
-    border: `1px solid ${active ? '#0070f3' : '#ddd'}`,
-    borderRadius: 4,
-    background: active ? '#eff6ff' : '#fff',
-    color: active ? '#0070f3' : '#444',
-    cursor: 'pointer',
-    fontSize: 12,
-    fontWeight: active ? 600 : 400,
-  }
-}

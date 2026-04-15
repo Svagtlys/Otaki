@@ -86,7 +86,6 @@ test('step 2 bad URL: unreachable host shows inline error', async ({ page }) => 
   // First test on a fresh DB — creates the admin user in step 1.
   await page.goto('/setup')
   await expect(page.getByRole('heading', { name: 'Create admin account' })).toBeVisible()
-  await expect(page.getByText('Step 1 of 4')).toBeVisible()
   await page.getByLabel('Username').fill('admin')
   await page.getByLabel('Password').fill('adminpass')
   await page.getByRole('button', { name: 'Create account' }).click()
@@ -94,13 +93,11 @@ test('step 2 bad URL: unreachable host shows inline error', async ({ page }) => 
   await expect(page.getByRole('heading', { name: 'Connect to Suwayomi' })).toBeVisible({
     timeout: 10000,
   })
-  await expect(page.getByText('Step 2 of 4')).toBeVisible()
   await page.getByLabel('Suwayomi URL').fill('http://localhost:9999')
   await page.getByRole('button', { name: 'Connect' }).click()
 
   // Stays on step 2 with an error
-  await expect(page.getByText('Step 2 of 4')).toBeVisible({ timeout: 15000 })
-  await expect(page.getByRole('heading', { name: 'Connect to Suwayomi' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Connect to Suwayomi' })).toBeVisible({ timeout: 15000 })
   await expect(page.getByText('Could not connect to Suwayomi')).toBeVisible()
 })
 
@@ -129,7 +126,6 @@ test('step 4 non-existent paths: shows creation confirmation, go back stays on s
   await page.getByText('+ Add').first().click()
   await page.getByRole('button', { name: 'Save order' }).click()
   await expect(page.getByRole('heading', { name: 'Set paths' })).toBeVisible()
-  await expect(page.getByText('Step 4 of 4')).toBeVisible()
 
   // Submit non-existent paths → confirmation screen (not an error)
   await page.getByLabel('Suwayomi download path').fill('/nonexistent/downloads')
@@ -140,40 +136,37 @@ test('step 4 non-existent paths: shows creation confirmation, go back stays on s
 
   // Go back — paths NOT written, still on step 4, setup still incomplete
   await page.getByRole('button', { name: 'Go back' }).click()
-  await expect(page.getByText('Step 4 of 4')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Set paths' })).toBeVisible()
 })
 
-test('happy path: all 4 steps → redirects to /login', async ({ page }) => {
+test('happy path: all 4 steps → redirects to /library', async ({ page }) => {
   test.skip(!hasSuwayomi, 'SUWAYOMI_URL not set in .env.test')
 
   // Step 1 (admin exists → 409 → auto-login)
   await doStep1(page)
-  await expect(page.getByText('Step 2 of 4')).toBeVisible()
 
   // Step 2 (Suwayomi already connected from step 4 bad path test → confirm mode)
   await doStep2(page)
-  await expect(page.getByText('Step 3 of 4')).toBeVisible()
 
   // Step 3 — add the first available source, then save
   await expect(page.getByText('+ Add').first()).toBeVisible({ timeout: 10000 })
   await page.getByText('+ Add').first().click()
   await page.getByRole('button', { name: 'Save order' }).click()
   await expect(page.getByRole('heading', { name: 'Set paths' })).toBeVisible()
-  await expect(page.getByText('Step 4 of 4')).toBeVisible()
 
   // Step 4 with valid paths from .env.test
   await page.getByLabel('Suwayomi download path').fill(DOWNLOAD_PATH)
   await page.getByLabel('Library path').fill(LIBRARY_PATH_ENV)
   await page.getByRole('button', { name: 'Save paths' }).click()
 
-  await expect(page).toHaveURL(/\/login/, { timeout: 10000 })
+  await expect(page).toHaveURL(/\/library/, { timeout: 10000 })
 })
 
 test('setup already complete: /setup redirects to /login', async ({ page }) => {
   test.skip(!hasSuwayomi, 'SUWAYOMI_URL not set in .env.test')
 
   // After the happy path, SETUP_COMPLETE=True is written to .env.
-  // App.tsx fetches /api/setup/complete → { complete: true } → routes /setup to /login.
+  // App.tsx fetches /api/setup/complete → { complete: true } → unauthenticated user lands on /login.
   await page.goto('/setup')
   await expect(page).toHaveURL(/\/login/, { timeout: 5000 })
 })

@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext, DragEndEvent, KeyboardSensor, PointerSensor,
+  closestCenter, useSensor, useSensors,
+} from '@dnd-kit/core'
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates,
+  useSortable, verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import { CSS } from '@dnd-kit/utilities'
 import { apiFetch, extractDetail } from '../api/client'
+import PageLayout from '../components/PageLayout'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,11 +27,74 @@ interface Source {
 }
 
 // ---------------------------------------------------------------------------
+// SortableSourceRow
+// ---------------------------------------------------------------------------
+
+interface RowProps {
+  source: Source
+  index: number
+  total: number
+  onMoveUp: () => void
+  onMoveDown: () => void
+  onToggle: () => void
+}
+
+function SortableSourceRow({ source, index, total, onMoveUp, onMoveDown, onToggle }: RowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: source.id })
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`source-row${isDragging ? ' dragging' : ''}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+    >
+      {/* Drag handle — listeners only here so clicks elsewhere still work */}
+      <i className="bx bx-grid-vertical drag-handle" aria-hidden="true" {...listeners} />
+
+      {/* Priority badge */}
+      <span style={{
+        minWidth: 28, height: 28, borderRadius: '50%',
+        background: index === 0 ? 'var(--accent)' : 'var(--surface-2)',
+        color: index === 0 ? '#fff' : 'var(--text-2)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 12, fontWeight: 700, flexShrink: 0,
+      }}>{index + 1}</span>
+
+      {/* Name */}
+      <span style={{ flex: 1, fontWeight: 500, color: 'var(--text)' }}>{source.name}</span>
+
+      {/* Enabled toggle */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}>
+        <input
+          type="checkbox"
+          checked={source.enabled}
+          onChange={onToggle}
+          aria-label={`Toggle ${source.name}`}
+        />
+        Enabled
+      </label>
+
+      {/* Arrow buttons */}
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button className="btn icon" type="button" onClick={onMoveUp}
+          disabled={index === 0} style={{ opacity: index === 0 ? 0.3 : 1 }}
+          aria-label={`Move ${source.name} up`}
+        ><i className="bx bx-chevron-up" /></button>
+        <button className="btn icon" type="button" onClick={onMoveDown}
+          disabled={index === total - 1} style={{ opacity: index === total - 1 ? 0.3 : 1 }}
+          aria-label={`Move ${source.name} down`}
+        ><i className="bx bx-chevron-down" /></button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export default function Sources() {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const { data: sources, isLoading, error } = useQuery({
@@ -33,6 +106,11 @@ export default function Sources() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [toggleError, setToggleError] = useState<string | null>(null)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   useEffect(() => {
     if (sources) setLocalSources(sources)
@@ -53,6 +131,16 @@ export default function Sources() {
       const next = [...prev]
       ;[next[i], next[i + 1]] = [next[i + 1], next[i]]
       return next
+    })
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setLocalSources(prev => {
+      const oldIndex = prev.findIndex(s => s.id === active.id)
+      const newIndex = prev.findIndex(s => s.id === over.id)
+      return arrayMove(prev, oldIndex, newIndex)
     })
   }
 
@@ -92,89 +180,56 @@ export default function Sources() {
     }
   }
 
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '5px 0',
-    borderBottom: '1px solid #eee',
-  }
+  const sourcesHeaderActions = isDirty ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {saveError && <span role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{saveError}</span>}
+      <button className="btn primary" type="button" onClick={saveOrder} disabled={saving}
+        style={{ opacity: saving ? 0.6 : 1 }}>
+        {saving ? 'Saving…' : 'Save order'}
+      </button>
+    </div>
+  ) : undefined
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>Sources</h1>
-        <button onClick={() => navigate('/library')} style={linkButtonStyle}>← Library</button>
-      </div>
-
-      {isLoading && <p>Loading…</p>}
-
-      {error && <p style={{ color: 'red', fontSize: 13 }}>{extractDetail(error)}</p>}
-
+    <PageLayout title="Sources" headerActions={sourcesHeaderActions}>
+      {isLoading && <p style={{ color: 'var(--text-2)' }}>Loading…</p>}
+      {error && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{extractDetail(error)}</p>}
       {!isLoading && !error && localSources.length === 0 && (
-        <p style={{ color: '#666' }}>No sources configured.</p>
+        <p style={{ color: 'var(--text-2)' }}>No sources configured.</p>
       )}
 
       {localSources.length > 0 && (
         <>
-          <p style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>
-            Position 1 is highest priority
+          <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 16 }}>
+            Position 1 is highest priority. Drag rows or use arrows to reorder.
           </p>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {localSources.map((source, i) => (
-              <li key={source.id} style={rowStyle}>
-                <span style={{ minWidth: 20, color: '#999', fontSize: 13 }}>{i + 1}.</span>
-                <span style={{ flex: 1 }}>{source.name}</span>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={source.enabled}
-                    onChange={() => toggleEnabled(source)}
-                    aria-label={`Toggle ${source.name}`}
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+          >
+            <SortableContext items={localSources.map(s => s.id)} strategy={verticalListSortingStrategy}>
+              <div role="list" aria-label="Source priority order" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {localSources.map((source, i) => (
+                  <SortableSourceRow
+                    key={source.id}
+                    source={source}
+                    index={i}
+                    total={localSources.length}
+                    onMoveUp={() => moveUp(i)}
+                    onMoveDown={() => moveDown(i)}
+                    onToggle={() => toggleEnabled(source)}
                   />
-                  Enabled
-                </label>
-                <button
-                  type="button"
-                  onClick={() => moveUp(i)}
-                  disabled={i === 0}
-                  aria-label={`Move ${source.name} up`}
-                >↑</button>
-                <button
-                  type="button"
-                  onClick={() => moveDown(i)}
-                  disabled={i === localSources.length - 1}
-                  aria-label={`Move ${source.name} down`}
-                >↓</button>
-              </li>
-            ))}
-          </ul>
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
 
-          {toggleError && <p style={{ color: 'red', fontSize: 13, marginTop: 8 }}>{toggleError}</p>}
-
-          {isDirty && (
-            <button
-              type="button"
-              onClick={saveOrder}
-              disabled={saving}
-              style={{ marginTop: 16 }}
-            >
-              {saving ? 'Saving…' : 'Save order'}
-            </button>
-          )}
-
-          {saveError && <p style={{ color: 'red', fontSize: 13, marginTop: 8 }}>{saveError}</p>}
+          {toggleError && <p role="alert" style={{ color: 'var(--danger)', fontSize: 13, marginTop: 12 }}>{toggleError}</p>}
         </>
       )}
-    </div>
+    </PageLayout>
   )
-}
-
-const linkButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#0070f3',
-  cursor: 'pointer',
-  fontSize: 14,
-  padding: 0,
 }

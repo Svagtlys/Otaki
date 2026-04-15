@@ -142,7 +142,7 @@ test('authenticated: page renders comic title as heading', async ({ page }) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_CHAPTERS) }),
   )
   await page.goto('/comics/1')
-  await expect(page.getByRole('heading', { name: 'One Piece' })).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('heading', { name: 'One Piece' }).first()).toBeVisible({ timeout: 5000 })
 })
 
 test('authenticated: metadata fields are visible', async ({ page }) => {
@@ -171,7 +171,7 @@ test('authenticated: info cards are visible', async ({ page }) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
   )
   await page.goto('/comics/1')
-  await expect(page.getByText('Poll interval')).toBeVisible({ timeout: 5000 })
+  await expect(page.getByText('Poll interval').first()).toBeVisible({ timeout: 5000 })
   await expect(page.getByText('Upgrade interval')).toBeVisible()
   await expect(page.getByText('Last upgrade check')).toBeVisible()
   await expect(page.getByText('Aliases')).toBeVisible()
@@ -228,7 +228,7 @@ test('authenticated: API error shows error message', async ({ page }) => {
   await expect(page.getByText('Comic not found')).toBeVisible({ timeout: 5000 })
 })
 
-test('authenticated: change cover via URL closes form on success', async ({ page }) => {
+test('authenticated: change cover via URL clears input on success', async ({ page }) => {
   await authenticate(page)
   await page.route('**/api/requests/1', route =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_COMIC) }),
@@ -249,14 +249,14 @@ test('authenticated: change cover via URL closes form on success', async ({ page
   })
 
   await page.goto('/comics/1')
-  await page.getByRole('button', { name: 'Change cover' }).click()
+  // Cover is in the Settings tab
+  await page.getByRole('tab', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'URL' }).click()
-  await page.getByPlaceholder('https://...').fill('https://example.com/cover.jpg')
-  await page.getByRole('button', { name: 'Save' }).click()
+  await page.getByLabel('Cover image URL').fill('https://example.com/cover.jpg')
+  await page.getByRole('button', { name: 'Save cover' }).click()
 
-  // Form closes on success — Cancel button gone, Change cover button visible again
-  await expect(page.getByPlaceholder('https://...')).not.toBeVisible({ timeout: 5000 })
-  await expect(page.getByRole('button', { name: 'Change cover' })).toBeVisible()
+  // Input is cleared on success (cover panel stays open)
+  await expect(page.getByLabel('Cover image URL')).toHaveValue('', { timeout: 5000 })
 })
 
 test('authenticated: Force upgrade queues upgrades and shows summary', async ({ page }) => {
@@ -295,7 +295,7 @@ test('authenticated: per-chapter Upgrade button queues upgrade for that chapter'
     }
   })
   await page.goto('/comics/1')
-  await expect(page.getByRole('cell', { name: '1' }).first()).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('cell', { name: /Ch\. 1/ }).first()).toBeVisible({ timeout: 5000 })
   // Chapter 1 is the first data row (assignment_id 55) — click its Upgrade button
   await page.locator('tbody tr').first().getByRole('button', { name: 'Upgrade' }).click()
   await expect(page.getByText('Upgrade queued')).toBeVisible({ timeout: 5000 })
@@ -323,7 +323,8 @@ test('authenticated: source overrides panel shows entries and saves order', asyn
     ]) }),
   )
   await page.goto('/comics/1')
-  await page.getByRole('button', { name: 'Manage source priorities' }).click()
+  // Source priorities panel is in the Settings tab
+  await page.getByRole('tab', { name: 'Settings' }).click()
   // Scope to the overrides panel to avoid matching chapter table cells
   const overridesPanel = page.locator('main').locator('.card').filter({ hasText: 'Drag to reorder' })
   await expect(overridesPanel.getByText('MangaDex')).toBeVisible({ timeout: 5000 })
@@ -358,7 +359,8 @@ test('authenticated: pin management panel shows pins and saves after remove', as
     ]) }),
   )
   await page.goto('/comics/1')
-  await page.getByRole('button', { name: 'Manage source pins' }).click()
+  // Pins panel is in the Settings tab
+  await page.getByRole('tab', { name: 'Settings' }).click()
   // Scope to the pins panel to avoid matching chapter table cells
   const pinsPanel = page.locator('main').locator('.card').filter({ hasText: 'Pins tell Otaki' })
   // The pin chip shows source_name in a <span> — use first() to avoid the <option> in the search <select>

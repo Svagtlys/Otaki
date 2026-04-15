@@ -1060,7 +1060,7 @@ export default function Comic() {
                       aria-label="Cover image URL" />
                     <button onClick={handleCoverSubmit} disabled={coverSubmitting || !coverUrl} className="btn primary"
                       style={{ fontSize: 12, opacity: (coverSubmitting || !coverUrl) ? 0.6 : 1 }}>
-                      {coverSubmitting ? 'Saving…' : 'Save'}
+                      {coverSubmitting ? 'Saving…' : 'Save cover'}
                     </button>
                   </div>
                 )}

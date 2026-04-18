@@ -311,7 +311,7 @@ export default function Search() {
                   key={r.url}
                   type="button"
                   className={`search-card${selected.has(r.url) ? ' selected' : ''}`}
-                  style={{ appearance: 'none', WebkitAppearance: 'none', background: 'none', border: 'none', padding: 0, margin: 0, font: 'inherit', cursor: 'pointer', textAlign: 'left', color: 'inherit', flexDirection: 'column', alignItems: 'flex-start' }}
+                  style={{ appearance: 'none', WebkitAppearance: 'none', background: 'none', padding: 0, margin: 0, font: 'inherit', cursor: 'pointer', textAlign: 'left', color: 'inherit', flexDirection: 'column', alignItems: 'flex-start' }}
                   aria-pressed={selected.has(r.url)}
                   onClick={() => toggleSelect(r.url)}
                 >
@@ -325,13 +325,14 @@ export default function Search() {
                   ) : (
                     <div style={{ width: '100%', height: 200, background: 'var(--surface-2)', borderRadius: 4, marginBottom: 8 }} />
                   )}
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2, color: 'var(--text)' }}>{r.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 4 }}>{r.source_name}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2, color: 'var(--text)', paddingLeft: '8px' }}>{r.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 4, paddingLeft: '8px' }}>{r.source_name}</div>
                   {r.synopsis && (
                     <div style={{
                       fontSize: 11, color: 'var(--text-2)',
                       display: '-webkit-box', WebkitLineClamp: 3,
                       WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                      paddingLeft: '8px',
                     }}>
                       {r.synopsis}
                     </div>

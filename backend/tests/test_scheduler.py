@@ -486,6 +486,43 @@ async def test_upgrade_falls_back_to_poll_override_days(sched_db, monkeypatch):
 # Integration test — requires live Suwayomi
 # ---------------------------------------------------------------------------
 
+def test_poll_job_has_misfire_grace_time(monkeypatch):
+    """_register_poll_job sets misfire_grace_time to 1 hour (3600 seconds)."""
+    # Use a dummy comic
+    comic = _make_comic()
+    comic.id = 123
+    # Capture job registration
+    captured = {}
+    def fake_add_job(*args, **kwargs):
+        captured.update(kwargs)
+    monkeypatch.setattr(scheduler_module.scheduler, "add_job", fake_add_job)
+    # Register
+    scheduler_module._register_poll_job(comic)
+    assert captured.get("id") == f"poll_{comic.id}"
+    assert captured.get("misfire_grace_time") == 3600
+
+@pytest.mark.asyncio
+async def test_start_processes_missed_poll(monkeypatch, sched_db):
+    """scheduler.start processes overdue poll jobs immediately."""
+    past = datetime.now(UTC) - timedelta(days=1)
+    async with sched_db() as db:
+        comic = _make_comic(next_poll_at=past)
+        db.add(comic)
+        await db.commit()
+        comic_id = comic.id
+    # Patch the poll function to record call
+    called = []
+    async def fake_poll(comic_id_inner):
+        called.append(comic_id_inner)
+    monkeypatch.setattr(scheduler_module, "_poll_comic", fake_poll)
+    # Patch add_job to avoid APScheduler side effects
+    monkeypatch.setattr(scheduler_module.scheduler, "add_job", lambda *a, **kw: None)
+    # Run start
+    async with sched_db() as db:
+        await scheduler_module.start(db)
+    assert comic_id in called
+
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio

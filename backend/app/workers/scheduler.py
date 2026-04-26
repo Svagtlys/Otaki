@@ -136,7 +136,7 @@ async def _poll_comic(comic_id: int) -> None:
             logger.info("_poll_comic: comic_id=%d status=complete — skipping", comic_id)
             return
 
-        chapter_map = await source_selector.build_chapter_source_map(comic, db)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db)
 
         existing_result = await db.execute(
             select(ChapterAssignment.chapter_number).where(

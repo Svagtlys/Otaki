@@ -426,7 +426,8 @@ Each comic has two scheduled jobs (poll and upgrade). The interval for each is d
 Public API:
 
 - `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers poll and upgrade jobs for each, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
-- `register_comic_jobs(comic: Comic) → None` — registers poll and upgrade jobs for a newly created comic. Called by `POST /api/requests` after committing the new `Comic` row.
+- `register_comic_jobs(comic: Comic) → None` — registers poll and upgrade jobs for a newly created comic. Jobs are created with a `misfire_grace_time` of 1 hour to ensure missed executions are caught. On application startup, any overdue poll or upgrade jobs are processed immediately via a catch‑up routine.
+
 - `remove_comic_jobs(comic_id: int) → None` — removes all APScheduler jobs for a comic (poll and upgrade). Called by `DELETE /api/requests/{id}`. `JobLookupError` is silently suppressed — safe to call even if jobs were never registered.
 
 Internal:

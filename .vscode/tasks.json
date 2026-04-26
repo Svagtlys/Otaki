@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Backend Tests: Full Suite",
+      "detail": "Run all backend tests including integration (requires Suwayomi running)",
+      "type": "shell",
+      "command": "\"${workspaceFolder}/backend/.venv/bin/python\" -m pytest --no-header -v",
+      "workingDirectory": "${workspaceFolder}/backend",
+      "problemMatcher": []
+    },
+    {
+      "label": "Backend Tests: Unit Only (No Suwayomi)",
+      "detail": "Run only unit tests, skip integration tests",
+      "type": "shell",
+      "command": "\"${workspaceFolder}/backend/.venv/bin/python\" -m pytest --no-header -v -m 'not integration'",
+      "workingDirectory": "${workspaceFolder}/backend",
+      "problemMatcher": []
+    },
+    {
+      "label": "Backend Tests: Current File",
+      "detail": "Run tests for the currently open test file",
+      "type": "shell",
+      "command": "\"${workspaceFolder}/backend/.venv/bin/python\" -m pytest --no-header -v ${file}",
+      "workingDirectory": "${workspaceFolder}/backend",
+      "problemMatcher": [],
+      "when": "resourceLangId == python"
+    }
+  ],
+  "inputs": []
+}

@@ -26,6 +26,8 @@ async def start(db: AsyncSession) -> None:
     for comic in comics:
         _register_poll_job(comic)
         _register_upgrade_job(comic)
+    # Process any missed poll or upgrade jobs that were scheduled while the service was down.
+    await _process_missed_jobs(db)
     if not scheduler.running:
         scheduler.start()
     _started_at = datetime.now(timezone.utc)
@@ -123,6 +125,7 @@ def _register_poll_job(comic: Comic) -> None:
         id=f"poll_{comic.id}",
         args=[comic.id],
         replace_existing=True,
+        misfire_grace_time=3600,
     )
 
 
@@ -206,7 +209,31 @@ def _register_upgrade_job(comic: Comic) -> None:
         id=f"upgrade_{comic.id}",
         args=[comic.id],
         replace_existing=True,
+        misfire_grace_time=3600,
     )
+
+# Process missed jobs on startup
+async def _process_missed_jobs(db: AsyncSession) -> None:
+    """Run any poll or upgrade jobs that are overdue.
+
+    This ensures that when Otaki starts after being down, it does not silently drop
+    missed executions. It simply invokes the corresponding coroutine for each
+    overdue job.
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(select(Comic).where(Comic.status == ComicStatus.tracking))
+    comics = result.scalars().all()
+    for comic in comics:
+        if (
+            comic.next_poll_at
+            and comic.next_poll_at.replace(tzinfo=timezone.utc) < now
+        ):
+            await _poll_comic(comic.id)
+        if (
+            comic.next_upgrade_check_at
+            and comic.next_upgrade_check_at.replace(tzinfo=timezone.utc) < now
+        ):
+            await _upgrade_comic(comic.id)
 
 
 async def _upgrade_comic(comic_id: int) -> None:

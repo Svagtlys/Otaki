@@ -114,7 +114,12 @@ def _register_poll_job(comic: Comic) -> None:
     scheduler.add_job(
         func=_poll_comic,
         trigger="date",
-        run_date=comic.next_poll_at or datetime.now(timezone.utc),
+        run_date=(
+            comic.next_poll_at.replace(tzinfo=timezone.utc)
+            if comic.next_poll_at
+            and comic.next_poll_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
+            else datetime.now(timezone.utc)
+        ),
         id=f"poll_{comic.id}",
         args=[comic.id],
         replace_existing=True,
@@ -192,7 +197,12 @@ def _register_upgrade_job(comic: Comic) -> None:
     scheduler.add_job(
         func=_upgrade_comic,
         trigger="date",
-        run_date=comic.next_upgrade_check_at or datetime.now(timezone.utc),
+        run_date=(
+            comic.next_upgrade_check_at.replace(tzinfo=timezone.utc)
+            if comic.next_upgrade_check_at
+            and comic.next_upgrade_check_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
+            else datetime.now(timezone.utc)
+        ),
         id=f"upgrade_{comic.id}",
         args=[comic.id],
         replace_existing=True,

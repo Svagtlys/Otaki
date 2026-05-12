@@ -15,6 +15,8 @@ _background_tasks: set[asyncio.Task] = set()
 _polled_items: dict[str, dict] = {}
 # chapter_ids where an ERROR event has already been dispatched in polling mode
 _emitted_error_ids: set[str] = set()
+# chapter_ids already dispatched per event type (deduplication)
+_emitted_ids: dict[str, set[str]] = {"FINISHED": set(), "ERROR": set()}
 # set when run() begins; cleared on process restart
 _started_at: datetime | None = None
 
@@ -34,6 +36,9 @@ def _dispatch(
     source_name: str,
 ) -> None:
     """Schedule chapter_event_handler.handle() as a background task."""
+    if chapter_id in _emitted_ids.get(event_type, set()):
+        return
+    _emitted_ids.setdefault(event_type, set()).add(chapter_id)
     task = asyncio.create_task(
         chapter_event_handler.handle(
             event_type, chapter_id, chapter_name, manga_title, source_name
@@ -204,6 +209,7 @@ async def run() -> None:
     global _polled_items, _emitted_error_ids, _started_at
     _polled_items = {}
     _emitted_error_ids = set()
+    _emitted_ids = {"FINISHED": set(), "ERROR": set()}
     _started_at = datetime.now(timezone.utc)
 
     await _seed_poll()

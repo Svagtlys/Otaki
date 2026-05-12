@@ -334,6 +334,38 @@ async def test_dispatches_error_event():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_duplicate_finished_event():
+    """Duplicate FINISHED event for the same chapter_id is skipped."""
+    download_listener._emitted_ids = {"FINISHED": set(), "ERROR": set()}
+    with (
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+    ):
+        download_listener._dispatch("FINISHED", "100", "Chapter 100", "Manga", "Source")
+        download_listener._dispatch("FINISHED", "100", "Chapter 100", "Manga", "Source")
+        await asyncio.sleep(0)
+        mock_handle.assert_awaited_once_with("FINISHED", "100", "Chapter 100", "Manga", "Source")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_duplicate_error_event():
+    """Duplicate ERROR event for the same chapter_id is skipped."""
+    download_listener._emitted_ids = {"FINISHED": set(), "ERROR": set()}
+    with (
+        patch(
+            "app.workers.download_listener.chapter_event_handler.handle",
+            new_callable=AsyncMock,
+        ) as mock_handle,
+    ):
+        download_listener._dispatch("ERROR", "200", "Chapter 200", "Manga", "Source")
+        download_listener._dispatch("ERROR", "200", "Chapter 200", "Manga", "Source")
+        await asyncio.sleep(0)
+        mock_handle.assert_awaited_once_with("ERROR", "200", "Chapter 200", "Manga", "Source")
+
+
+@pytest.mark.asyncio
 async def test_background_tasks_set_holds_then_releases_task():
     """Task is in _background_tasks immediately after creation, gone after it completes."""
     item = ("FINISHED", "77", "Chapter 77", "Test Manga", "TestSource")

@@ -601,6 +601,16 @@ def test_normalize_to_folder_noop_for_folder(tmp_path):
     assert (result / "001.jpg").exists()
 
 
+def test_find_manga_subdir_empty_title_returns_none(tmp_path):
+    """Empty manga_title should return None to prevent returning entire source dir."""
+    downloads = tmp_path / "downloads"
+    source_dir = downloads / "Source"
+
+    result = file_relocator._find_manga_subdir(source_dir, "")
+
+    assert result is None
+
+
 def test_normalize_to_folder_extracts_cbz(tmp_path):
     """A CBZ file is extracted to a sibling folder; the original CBZ is deleted."""
     cbz_path = tmp_path / "Chapter 001.cbz"
@@ -980,3 +990,21 @@ def test_find_staging_path_sanitized_in_fuzzy_source_dir(tmp_path, monkeypatch):
 
     result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
     assert result == cbz
+
+
+def test_find_staging_path_empty_manga_title_returns_none(tmp_path, monkeypatch):
+    """Empty manga_title should cause find_staging_path to return None instead of
+    treating entire source dir as staging."""
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+
+    source_display = "Source"
+    chapter_name = "Chapter 1"
+
+    (downloads / source_display).mkdir(parents=True)
+    cbz_in_source_dir = downloads / source_display / f"{chapter_name}.cbz"
+    _make_cbz(cbz_in_source_dir)
+
+    result = file_relocator.find_staging_path(chapter_name, "", source_display)
+
+    assert result is None

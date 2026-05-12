@@ -44,6 +44,8 @@ def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
     in title matches any one special char on disk).  Returns ``None`` if zero
     or multiple directories match.
     """
+    if manga_title == "":
+        return None
     exact = source_dir / manga_title
     if exact.is_dir():
         return exact
@@ -70,6 +72,8 @@ def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
 def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:
+    if not manga_title or manga_title == "":
+        return None
     source_dir = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name
     base = _find_manga_subdir(source_dir, manga_title)
 

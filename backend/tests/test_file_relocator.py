@@ -128,6 +128,39 @@ def test_resolve_path_uses_library_title(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_relocate_calls_to_thread(tmp_path, monkeypatch):
+    """relocate() uses asyncio.to_thread to run blocking I/O off the event loop."""
+    downloads = tmp_path / "downloads"
+    library = tmp_path / "library"
+    downloads.mkdir()
+    library.mkdir()
+
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+
+    source_display = "MangaSource"
+    manga_title = "OnePiece"
+    chapter_name = "Chapter 001"
+
+    source_dir = downloads / source_display / manga_title
+    source_dir.mkdir(parents=True)
+    staging_file = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(staging_file)
+
+    comic = _make_comic(library_title="OnePiece")
+    assignment = _make_assignment(chapter_number=1.0)
+
+    with patch("asyncio.to_thread") as mock_to_thread:
+        mock_to_thread.return_value = None
+        await file_relocator.relocate(
+            assignment, comic, None, chapter_name, manga_title, source_display
+        )
+        assert mock_to_thread.called
+        assert mock_to_thread.call_args[0][0] == file_relocator._relocate_sync
+
+
+@pytest.mark.asyncio
 async def test_relocate_hardlink(tmp_path, monkeypatch):
     """auto strategy on same filesystem: os.link is called and staging is removed."""
     downloads = tmp_path / "downloads"
@@ -318,6 +351,46 @@ async def test_relocate_with_folder_staging(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # replace_in_library tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replace_in_library_calls_to_thread(tmp_path, monkeypatch):
+    """replace_in_library() uses asyncio.to_thread to run blocking I/O off the event loop."""
+    downloads = tmp_path / "downloads"
+    library = tmp_path / "library"
+    downloads.mkdir()
+    library.mkdir()
+
+    monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+
+    source_display = "BetterSource"
+    manga_title = "HxH"
+    chapter_name = "Chapter 001"
+
+    source_dir = downloads / source_display / manga_title
+    source_dir.mkdir(parents=True)
+    staging_file = source_dir / f"{chapter_name}.cbz"
+    _make_cbz(staging_file)
+
+    existing_lib = library / "HxH" / "HxH - Ch.0001.0.cbz"
+    existing_lib.parent.mkdir(parents=True)
+    existing_lib.write_bytes(b"old content")
+
+    comic = _make_comic(library_title="HxH")
+    old_assignment = _make_assignment(
+        chapter_number=1.0, library_path=str(existing_lib)
+    )
+    old_assignment.relocation_status = RelocationStatus.done
+    new_assignment = _make_assignment(chapter_number=1.0)
+
+    with patch("asyncio.to_thread") as mock_to_thread:
+        mock_to_thread.return_value = None
+        await file_relocator.replace_in_library(
+            old_assignment, new_assignment, comic, None, chapter_name, manga_title, source_display
+        )
+        assert mock_to_thread.called
+        assert mock_to_thread.call_args[0][0] == file_relocator._replace_in_library_sync
 
 
 @pytest.mark.asyncio
@@ -727,6 +800,30 @@ async def test_relocate_injects_cover(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # update_library_file tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_library_file_calls_to_thread(tmp_path, monkeypatch):
+    """update_library_file() uses asyncio.to_thread to run blocking I/O off the event loop."""
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
+    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{chapter}.cbz")
+    monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
+
+    dest = library / "My Comic" / "0001.0.cbz"
+    dest.parent.mkdir(parents=True)
+    _make_cbz(dest, {"001.jpg": b"page"})
+
+    assignment = _make_assignment(chapter_number=1.0, library_path=str(dest))
+    assignment.relocation_status = RelocationStatus.done
+    comic = _make_comic(library_title="My Comic")
+
+    with patch("asyncio.to_thread") as mock_to_thread:
+        mock_to_thread.return_value = None
+        await file_relocator.update_library_file(assignment, comic, None)
+        assert mock_to_thread.called
+        assert mock_to_thread.call_args[0][0] == file_relocator._update_library_file_sync
 
 
 async def test_update_library_file_updates_comicinfo_in_place(tmp_path, monkeypatch):

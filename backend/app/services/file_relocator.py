@@ -85,8 +85,10 @@ def find_staging_path(
         download_root = Path(settings.SUWAYOMI_DOWNLOAD_PATH)
         norm_display = _normalize_source_name(source_display_name)
         candidates = [
-            d for d in download_root.iterdir()
-            if d.is_dir() and _normalize_source_name(d.name).startswith(norm_display)
+            d
+            for d in download_root.iterdir()
+            if d.is_dir()
+            and _normalize_source_name(d.name).startswith(norm_display)
             and _find_manga_subdir(d, manga_title) is not None
         ]
         if len(candidates) == 1:
@@ -280,6 +282,25 @@ async def relocate(
     manga_title: str,
     source_display_name: str,
 ) -> None:
+    await asyncio.to_thread(
+        _relocate_sync,
+        assignment,
+        comic,
+        db,
+        chapter_name,
+        manga_title,
+        source_display_name,
+    )
+
+
+def _relocate_sync(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+    chapter_name: str,
+    manga_title: str,
+    source_display_name: str,
+) -> None:
     logger.info(
         "relocate: starting for comic=%r chapter=%r source=%r",
         manga_title,
@@ -317,6 +338,27 @@ async def relocate(
 
 
 async def replace_in_library(
+    old: ChapterAssignment,
+    new: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+    chapter_name: str,
+    manga_title: str,
+    source_display_name: str,
+) -> None:
+    await asyncio.to_thread(
+        _replace_in_library_sync,
+        old,
+        new,
+        comic,
+        db,
+        chapter_name,
+        manga_title,
+        source_display_name,
+    )
+
+
+def _replace_in_library_sync(
     old: ChapterAssignment,
     new: ChapterAssignment,
     comic: Comic,
@@ -365,6 +407,19 @@ async def replace_in_library(
 
 
 async def update_library_file(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+) -> None:
+    await asyncio.to_thread(
+        _update_library_file_sync,
+        assignment,
+        comic,
+        db,
+    )
+
+
+def _update_library_file_sync(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,

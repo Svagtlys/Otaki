@@ -1127,3 +1127,78 @@ class TestChapterNumberVariants:
         """0.0 -> ['0.0', '0']"""
         result = file_relocator._get_chapter_number_variants(0.0)
         assert result == ["0.0", "0"]
+
+
+# ---------------------------------------------------------------------------
+# _match_by_regex tests
+# ---------------------------------------------------------------------------
+
+
+class TestMatchByRegex:
+    def test_matches_cbz_by_pattern(self, tmp_path, monkeypatch):
+        """Pattern 'MangaSee_Ch. {chapter_number}' matches 'MangaSee_Ch. 5.cbz'."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "MangaSee_Ch. 5.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["MangaSee_Ch\\. {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == [cbz]
+
+    def test_matches_folder_by_pattern(self, tmp_path, monkeypatch):
+        """Pattern matches folder name."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        folder = staging / "Chapter 10"
+        folder.mkdir()
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 10.0, [])
+        assert result == [folder]
+
+    def test_no_match_returns_empty(self, tmp_path, monkeypatch):
+        """Non-matching pattern returns empty list."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "SomeOther_File.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == []
+
+    def test_returns_none_when_config_empty(self, tmp_path, monkeypatch):
+        """No patterns configured returns empty list."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+
+        monkeypatch.setattr(settings, "CHAPTER_FILE_NAME_REGEX", None)
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == []
+
+    def test_deduplicates_matches(self, tmp_path, monkeypatch):
+        """Multiple patterns matching same file returns unique results."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "Chapter 5.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings,
+            "CHAPTER_FILE_NAME_REGEX",
+            [
+                "Chapter {chapter_number}",
+                "Chapter 5",  # would also match after replacement
+            ],
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == [cbz]
+        assert len(result) == 1
+

@@ -96,6 +96,51 @@ def _get_chapter_number_variants(chapter_number: float) -> list[str]:
     return variants
 
 
+def _match_by_regex(
+    directory: Path,
+    chapter_number: float,
+    extensions: list[str],
+) -> list[Path]:
+    """Match files or folders in *directory* using configured regex patterns.
+
+    Replaces {chapter_number} in each pattern with numeric variants and
+    uses re.search() against file/folder stems.
+
+    Returns deduplicated matching paths in first-match order.
+    """
+    patterns = settings.CHAPTER_FILE_NAME_REGEX
+    if not patterns:
+        return []
+
+    variants = _get_chapter_number_variants(chapter_number)
+    seen = set()
+    matches = []
+
+    # Gather candidates based on extension filter
+    if extensions:
+        ext_patterns = " ".join(f"*{ext}" for ext in extensions)
+        candidates = list(directory.glob(ext_patterns)) if directory.is_dir() else []
+    else:
+        candidates = (
+            [p for p in directory.iterdir() if p.is_dir()] if directory.is_dir() else []
+        )
+
+    for pattern_str in patterns:
+        for variant in variants:
+            try:
+                compiled = re.compile(pattern_str.replace("{chapter_number}", variant))
+            except re.error:
+                continue
+            for candidate in candidates:
+                if candidate in seen:
+                    continue
+                if compiled.search(candidate.stem):
+                    matches.append(candidate)
+                    seen.add(candidate)
+
+    return matches
+
+
 def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:

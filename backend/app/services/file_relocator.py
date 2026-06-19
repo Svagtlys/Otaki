@@ -69,6 +69,33 @@ def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
     return None
 
 
+def _get_chapter_number_variants(chapter_number: float) -> list[str]:
+    """Generate string representations of a chapter number for regex substitution.
+
+    Always includes the full float representation. Includes integer form
+    only when all decimal digits are zero.
+
+    Examples:
+        5.0  -> ['5.0', '5']
+        61.5 -> ['61.5']
+        3.02 -> ['3.02']
+    """
+    int_val = int(chapter_number)
+    is_whole = chapter_number == int_val
+
+    if is_whole:
+        # For whole numbers: "5.0" then "5"
+        float_str = f"{int_val}.0"
+    else:
+        # For fractional numbers: use str() which preserves decimals
+        float_str = str(chapter_number)
+
+    variants = [float_str]
+    if is_whole:
+        variants.append(str(int_val))
+    return variants
+
+
 def find_staging_path(
     chapter_name: str, manga_title: str, source_display_name: str
 ) -> Path | None:

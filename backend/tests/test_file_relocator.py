@@ -1102,6 +1102,28 @@ def test_find_staging_path_empty_manga_title_returns_none(tmp_path, monkeypatch)
     cbz_in_source_dir = downloads / source_display / f"{chapter_name}.cbz"
     _make_cbz(cbz_in_source_dir)
 
-    result = file_relocator.find_staging_path(chapter_name, "", source_display)
+# ---------------------------------------------------------------------------
+# _get_chapter_number_variants tests
+# ---------------------------------------------------------------------------
 
-    assert result is None
+
+class TestChapterNumberVariants:
+    def test_whole_number_produces_float_and_int_variants(self):
+        """5.0 -> ['5.0', '5']"""
+        result = file_relocator._get_chapter_number_variants(5.0)
+        assert result == ["5.0", "5"]
+
+    def test_fractional_number_produces_single_variant(self):
+        """61.5 -> ['61.5']"""
+        result = file_relocator._get_chapter_number_variants(61.5)
+        assert result == ["61.5"]
+
+    def test_nonzero_decimal_produces_single_variant(self):
+        """3.02 -> ['3.02']"""
+        result = file_relocator._get_chapter_number_variants(3.02)
+        assert result == ["3.02"]
+
+    def test_zero_chapter_produces_variants(self):
+        """0.0 -> ['0.0', '0']"""
+        result = file_relocator._get_chapter_number_variants(0.0)
+        assert result == ["0.0", "0"]

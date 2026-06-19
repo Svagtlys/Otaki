@@ -69,8 +69,80 @@ def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
     return None
 
 
+def _get_chapter_number_variants(chapter_number: float) -> list[str]:
+    """Generate string representations of a chapter number for regex substitution.
+
+    Always includes the full float representation. Includes integer form
+    only when all decimal digits are zero.
+
+    Examples:
+        5.0  -> ['5.0', '5']
+        61.5 -> ['61.5']
+        3.02 -> ['3.02']
+    """
+    int_val = int(chapter_number)
+    is_whole = chapter_number == int_val
+
+    if is_whole:
+        # For whole numbers: "5.0" then "5"
+        float_str = f"{int_val}.0"
+    else:
+        # For fractional numbers: use str() which preserves decimals
+        float_str = str(chapter_number)
+
+    variants = [float_str]
+    if is_whole:
+        variants.append(str(int_val))
+    return variants
+
+
+def _match_by_regex(
+    directory: Path,
+    chapter_number: float,
+    extensions: list[str],
+) -> list[Path]:
+    """Match files or folders in *directory* using configured regex patterns.
+
+    Replaces {chapter_number} in each pattern with numeric variants and
+    uses re.search() against file/folder stems.
+
+    Returns deduplicated matching paths in first-match order.
+    """
+    patterns = settings.CHAPTER_FILE_NAME_REGEX
+    if not patterns:
+        return []
+
+    variants = _get_chapter_number_variants(chapter_number)
+    seen = set()
+    matches = []
+
+    # Gather candidates based on extension filter
+    if extensions:
+        ext_patterns = " ".join(f"*{ext}" for ext in extensions)
+        candidates = list(directory.glob(ext_patterns)) if directory.is_dir() else []
+    else:
+        candidates = (
+            [p for p in directory.iterdir() if p.is_dir()] if directory.is_dir() else []
+        )
+
+    for pattern_str in patterns:
+        for variant in variants:
+            try:
+                compiled = re.compile(pattern_str.replace("{chapter_number}", variant))
+            except re.error:
+                continue
+            for candidate in candidates:
+                if candidate in seen:
+                    continue
+                if compiled.search(candidate.stem):
+                    matches.append(candidate)
+                    seen.add(candidate)
+
+    return matches
+
+
 def find_staging_path(
-    chapter_name: str, manga_title: str, source_display_name: str
+    chapter_name: str, manga_title: str, source_display_name: str, chapter_number: float
 ) -> Path | None:
     if not manga_title or manga_title == "":
         return None
@@ -111,36 +183,35 @@ def find_staging_path(
     if base is None:
         base = source_dir / manga_title  # non-existent path; triggers warning at end
 
-    # --- CBZ checks ---
+    # --- 1. Exact CBZ match ---
     exact = base / f"{chapter_name}.cbz"
     if exact.exists():
         return exact
-    # Fallback 1: only one CBZ in the directory
-    matches = list(base.glob("*.cbz"))
-    if len(matches) == 1:
-        return matches[0]
-    # Fallback 2: source prefixes the chapter name (e.g. "Official_Episode 148.cbz"
-    # when Suwayomi reports the chapter as "Episode 148"). The pattern anchors to
-    # end-of-stem so "Episode 148" does not match "Episode 148.1" or "Episode 1480".
-    name_lower = chapter_name.lower()
-    pattern = re.compile(re.escape(name_lower) + r"(?:\.\d+)?\s*$")
-    containing = [m for m in matches if pattern.search(m.stem.lower())]
-    if len(containing) == 1:
-        return containing[0]
 
-    # --- Folder checks ---
-    # Exact folder name match
+    # --- 2. Exact folder match ---
     exact_folder = base / chapter_name
     if exact_folder.is_dir():
         return exact_folder
-    # Fallback: exactly one subdirectory present
+
+    # --- 3. Regex CBZ match ---
+    cbz_matches = _match_by_regex(base, chapter_number, [".cbz"])
+    if len(cbz_matches) == 1:
+        return cbz_matches[0]
+
+    # --- 4. Regex folder match ---
+    folder_matches = _match_by_regex(base, chapter_number, [])
+    if len(folder_matches) == 1:
+        return folder_matches[0]
+
+    # --- 5. Single CBZ fallback ---
+    matches = list(base.glob("*.cbz"))
+    if len(matches) == 1:
+        return matches[0]
+
+    # --- 6. Single folder fallback ---
     subdirs = [p for p in base.iterdir() if p.is_dir()] if base.is_dir() else []
     if len(subdirs) == 1:
         return subdirs[0]
-    # Prefix match for folders
-    folder_containing = [d for d in subdirs if pattern.search(d.name.lower())]
-    if len(folder_containing) == 1:
-        return folder_containing[0]
 
     logger.warning(
         "file_relocator: ambiguous or missing staging file for chapter %r in %s",
@@ -307,7 +378,9 @@ def _relocate_sync(
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(
+        chapter_name, manga_title, source_display_name, assignment.chapter_number
+    )
     if staging is None:
         logger.warning(
             "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
@@ -373,7 +446,9 @@ def _replace_in_library_sync(
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(
+        chapter_name, manga_title, source_display_name, new.chapter_number
+    )
     if staging is None:
         logger.warning(
             "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",

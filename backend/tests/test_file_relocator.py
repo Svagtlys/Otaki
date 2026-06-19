@@ -1,4 +1,5 @@
 """Tests for services/file_relocator.py"""
+
 import os
 import zipfile
 from datetime import datetime, timezone
@@ -19,7 +20,9 @@ from app.services import file_relocator
 
 
 def _make_comic(title="My Comic", library_title="My Comic Library", cover_path=None):
-    return SimpleNamespace(title=title, library_title=library_title, cover_path=cover_path)
+    return SimpleNamespace(
+        title=title, library_title=library_title, cover_path=cover_path
+    )
 
 
 def _make_cbz(path: Path, files: dict[str, bytes] | None = None) -> None:
@@ -48,7 +51,8 @@ def _make_assignment(
         volume_number=volume_number,
         library_path=library_path,
         relocation_status=RelocationStatus.pending,
-        chapter_published_at=chapter_published_at or datetime(2024, 6, 15, tzinfo=timezone.utc),
+        chapter_published_at=chapter_published_at
+        or datetime(2024, 6, 15, tzinfo=timezone.utc),
         source=SimpleNamespace(name=source_name),
     )
 
@@ -69,7 +73,10 @@ def test_resolve_path_basic(tmp_path, monkeypatch):
 
     result = file_relocator.resolve_path(assignment, comic)
 
-    assert result == tmp_path / "library" / "Attack on Titan" / "Attack on Titan - Ch.0012.0.cbz"
+    assert (
+        result
+        == tmp_path / "library" / "Attack on Titan" / "Attack on Titan - Ch.0012.0.cbz"
+    )
 
 
 def test_resolve_path_with_volume(tmp_path, monkeypatch):
@@ -85,7 +92,10 @@ def test_resolve_path_with_volume(tmp_path, monkeypatch):
 
     result = file_relocator.resolve_path(assignment, comic)
 
-    assert result == tmp_path / "library" / "Berserk" / "Vol.03" / "Berserk - Ch.0005.0.cbz"
+    assert (
+        result
+        == tmp_path / "library" / "Berserk" / "Vol.03" / "Berserk - Ch.0005.0.cbz"
+    )
 
 
 def test_resolve_path_volume_omitted_gracefully(tmp_path, monkeypatch):
@@ -137,7 +147,9 @@ async def test_relocate_calls_to_thread(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
     monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
-    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+    monkeypatch.setattr(
+        settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz"
+    )
 
     source_display = "MangaSource"
     manga_title = "OnePiece"
@@ -170,7 +182,9 @@ async def test_relocate_hardlink(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
     monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
-    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+    monkeypatch.setattr(
+        settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz"
+    )
 
     source_display = "MangaSource"
     manga_title = "OnePiece"
@@ -224,7 +238,10 @@ async def test_relocate_cross_filesystem(tmp_path, monkeypatch):
     assignment = _make_assignment(chapter_number=1.0)
 
     # Simulate cross-filesystem by making os.link raise OSError
-    with patch("app.services.file_relocator.os.link", side_effect=OSError("cross-device link not permitted")):
+    with patch(
+        "app.services.file_relocator.os.link",
+        side_effect=OSError("cross-device link not permitted"),
+    ):
         await file_relocator.relocate(
             assignment, comic, None, chapter_name, manga_title, source_display
         )
@@ -387,7 +404,13 @@ async def test_replace_in_library_calls_to_thread(tmp_path, monkeypatch):
     with patch("asyncio.to_thread") as mock_to_thread:
         mock_to_thread.return_value = None
         await file_relocator.replace_in_library(
-            old_assignment, new_assignment, comic, None, chapter_name, manga_title, source_display
+            old_assignment,
+            new_assignment,
+            comic,
+            None,
+            chapter_name,
+            manga_title,
+            source_display,
         )
         assert mock_to_thread.called
         assert mock_to_thread.call_args[0][0] == file_relocator._replace_in_library_sync
@@ -426,7 +449,13 @@ async def test_replace_in_library_atomic(tmp_path, monkeypatch):
     new_assignment = _make_assignment(chapter_number=1.0)
 
     await file_relocator.replace_in_library(
-        old_assignment, new_assignment, comic, None, chapter_name, manga_title, source_display
+        old_assignment,
+        new_assignment,
+        comic,
+        None,
+        chapter_name,
+        manga_title,
+        source_display,
     )
 
     assert new_assignment.relocation_status == RelocationStatus.done
@@ -448,7 +477,9 @@ async def test_relocate_strategy_copy_keeps_staging(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
     monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
-    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+    monkeypatch.setattr(
+        settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz"
+    )
     monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")
 
     source_display = "Src"
@@ -461,7 +492,12 @@ async def test_relocate_strategy_copy_keeps_staging(tmp_path, monkeypatch):
 
     assignment = _make_assignment(chapter_number=1.0)
     await file_relocator.relocate(
-        assignment, _make_comic(library_title="TestManga"), None, chapter_name, manga_title, source_display
+        assignment,
+        _make_comic(library_title="TestManga"),
+        None,
+        chapter_name,
+        manga_title,
+        source_display,
     )
 
     assert assignment.relocation_status == RelocationStatus.done
@@ -482,7 +518,9 @@ async def test_relocate_strategy_move_deletes_staging(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
     monkeypatch.setattr(settings, "LIBRARY_PATH", str(library))
-    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+    monkeypatch.setattr(
+        settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz"
+    )
     monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "move")
 
     source_display = "Src"
@@ -495,7 +533,12 @@ async def test_relocate_strategy_move_deletes_staging(tmp_path, monkeypatch):
 
     assignment = _make_assignment(chapter_number=1.0)
     await file_relocator.relocate(
-        assignment, _make_comic(library_title="TestManga"), None, chapter_name, manga_title, source_display
+        assignment,
+        _make_comic(library_title="TestManga"),
+        None,
+        chapter_name,
+        manga_title,
+        source_display,
     )
 
     assert assignment.relocation_status == RelocationStatus.done
@@ -527,12 +570,20 @@ async def test_replace_in_library_copy_strategy_keeps_staging(tmp_path, monkeypa
     existing_lib.parent.mkdir(parents=True)
     existing_lib.write_bytes(b"old content")
 
-    old_assignment = _make_assignment(chapter_number=1.0, library_path=str(existing_lib))
+    old_assignment = _make_assignment(
+        chapter_number=1.0, library_path=str(existing_lib)
+    )
     old_assignment.relocation_status = RelocationStatus.done
     new_assignment = _make_assignment(chapter_number=1.0)
 
     await file_relocator.replace_in_library(
-        old_assignment, new_assignment, _make_comic(), None, chapter_name, manga_title, source_display
+        old_assignment,
+        new_assignment,
+        _make_comic(),
+        None,
+        chapter_name,
+        manga_title,
+        source_display,
     )
 
     assert new_assignment.relocation_status == RelocationStatus.done
@@ -565,7 +616,13 @@ async def test_replace_in_library_staging_not_found(tmp_path, monkeypatch):
     new_assignment = _make_assignment(chapter_number=1.0)
 
     await file_relocator.replace_in_library(
-        old_assignment, new_assignment, comic, None, "Chapter 001", "SomeComic", "NoSource"
+        old_assignment,
+        new_assignment,
+        comic,
+        None,
+        "Chapter 001",
+        "SomeComic",
+        "NoSource",
     )
 
     assert new_assignment.relocation_status == RelocationStatus.failed
@@ -608,7 +665,9 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(download_path))
     monkeypatch.setattr(settings, "LIBRARY_PATH", str(library_path))
-    monkeypatch.setattr(settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz")
+    monkeypatch.setattr(
+        settings, "CHAPTER_NAMING_FORMAT", "{title}/{title} - Ch.{chapter}.cbz"
+    )
     monkeypatch.setattr(settings, "RELOCATION_STRATEGY", "copy")  # preserve staging
 
     comic = _make_comic(library_title=manga_title)
@@ -625,6 +684,7 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
     assert dest.exists(), f"Expected file at {dest}"
     assert dest.stat().st_size > 0
     import zipfile as _zf
+
     assert _zf.is_zipfile(dest)
     assert cbz.exists()  # copy strategy — staging preserved
 
@@ -650,7 +710,9 @@ def test_find_staging_path_returns_folder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, source_display)
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, source_display, 1.0
+    )
 
     assert result == chapter_folder
     assert result.is_dir()
@@ -782,8 +844,12 @@ async def test_relocate_injects_cover(tmp_path, monkeypatch):
     assignment = _make_assignment(chapter_number=1.0, source_name=source_display)
 
     await file_relocator.relocate(
-        assignment, comic, None,
-        chapter_name=chapter_name, manga_title=manga_title, source_display_name=source_display,
+        assignment,
+        comic,
+        None,
+        chapter_name=chapter_name,
+        manga_title=manga_title,
+        source_display_name=source_display,
     )
 
     assert assignment.relocation_status == RelocationStatus.done
@@ -823,7 +889,9 @@ async def test_update_library_file_calls_to_thread(tmp_path, monkeypatch):
         mock_to_thread.return_value = None
         await file_relocator.update_library_file(assignment, comic, None)
         assert mock_to_thread.called
-        assert mock_to_thread.call_args[0][0] == file_relocator._update_library_file_sync
+        assert (
+            mock_to_thread.call_args[0][0] == file_relocator._update_library_file_sync
+        )
 
 
 async def test_update_library_file_updates_comicinfo_in_place(tmp_path, monkeypatch):
@@ -939,7 +1007,9 @@ def test_find_staging_path_source_dir_space_stripped(tmp_path, monkeypatch):
     cbz = source_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "Weeb Central", 1.0
+    )
     assert result == cbz
 
 
@@ -956,7 +1026,9 @@ def test_find_staging_path_source_dir_with_suffix(tmp_path, monkeypatch):
     cbz = source_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "Weeb Central", 1.0
+    )
     assert result == cbz
 
 
@@ -972,7 +1044,9 @@ def test_find_staging_path_source_dir_case_mismatch(tmp_path, monkeypatch):
     cbz = source_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "weebcentral")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "weebcentral", 1.0
+    )
     assert result == cbz
 
 
@@ -991,7 +1065,9 @@ def test_find_staging_path_source_dir_ambiguous_returns_none(tmp_path, monkeypat
         d.mkdir(parents=True)
         _make_cbz(d / f"{chapter_name}.cbz")
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "Weeb Central", 1.0
+    )
     assert result is None
 
 
@@ -1013,7 +1089,9 @@ def test_find_staging_path_exact_match_skips_fallback(tmp_path, monkeypatch):
     fuzzy_dir.mkdir(parents=True)
     _make_cbz(fuzzy_dir / f"{chapter_name}.cbz")
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "ExactSource")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "ExactSource", 1.0
+    )
     assert result == cbz
 
 
@@ -1035,7 +1113,9 @@ def test_find_staging_path_sanitized_colon_in_title(tmp_path, monkeypatch):
     cbz = sanitized_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "SomeSource", 1.0
+    )
     assert result == cbz
 
 
@@ -1051,7 +1131,9 @@ def test_find_staging_path_sanitized_multiple_special_chars(tmp_path, monkeypatc
     cbz = sanitized_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "SomeSource", 1.0
+    )
     assert result == cbz
 
 
@@ -1068,7 +1150,9 @@ def test_find_staging_path_sanitized_ambiguous(tmp_path, monkeypatch):
         d.mkdir(parents=True)
         _make_cbz(d / f"{chapter_name}.cbz")
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "SomeSource")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "SomeSource", 1.0
+    )
     assert result is None
 
 
@@ -1085,7 +1169,9 @@ def test_find_staging_path_sanitized_in_fuzzy_source_dir(tmp_path, monkeypatch):
     cbz = sanitized_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(chapter_name, manga_title, "Weeb Central")
+    result = file_relocator.find_staging_path(
+        chapter_name, manga_title, "Weeb Central", 1.0
+    )
     assert result == cbz
 
 
@@ -1102,6 +1188,243 @@ def test_find_staging_path_empty_manga_title_returns_none(tmp_path, monkeypatch)
     cbz_in_source_dir = downloads / source_display / f"{chapter_name}.cbz"
     _make_cbz(cbz_in_source_dir)
 
-    result = file_relocator.find_staging_path(chapter_name, "", source_display)
+    result = file_relocator.find_staging_path(chapter_name, "", source_display, 1.0)
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _get_chapter_number_variants tests
+# ---------------------------------------------------------------------------
+
+
+class TestChapterNumberVariants:
+    def test_whole_number_produces_float_and_int_variants(self):
+        """5.0 -> ['5.0', '5']"""
+        result = file_relocator._get_chapter_number_variants(5.0)
+        assert result == ["5.0", "5"]
+
+    def test_fractional_number_produces_single_variant(self):
+        """61.5 -> ['61.5']"""
+        result = file_relocator._get_chapter_number_variants(61.5)
+        assert result == ["61.5"]
+
+    def test_nonzero_decimal_produces_single_variant(self):
+        """3.02 -> ['3.02']"""
+        result = file_relocator._get_chapter_number_variants(3.02)
+        assert result == ["3.02"]
+
+    def test_zero_chapter_produces_variants(self):
+        """0.0 -> ['0.0', '0']"""
+        result = file_relocator._get_chapter_number_variants(0.0)
+        assert result == ["0.0", "0"]
+
+
+# ---------------------------------------------------------------------------
+# _match_by_regex tests
+# ---------------------------------------------------------------------------
+
+
+class TestMatchByRegex:
+    def test_matches_cbz_by_pattern(self, tmp_path, monkeypatch):
+        """Pattern 'MangaSee_Ch. {chapter_number}' matches 'MangaSee_Ch. 5.cbz'."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "MangaSee_Ch. 5.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["MangaSee_Ch\\. {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == [cbz]
+
+    def test_matches_folder_by_pattern(self, tmp_path, monkeypatch):
+        """Pattern matches folder name."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        folder = staging / "Chapter 10"
+        folder.mkdir()
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 10.0, [])
+        assert result == [folder]
+
+    def test_no_match_returns_empty(self, tmp_path, monkeypatch):
+        """Non-matching pattern returns empty list."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "SomeOther_File.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == []
+
+    def test_returns_none_when_config_empty(self, tmp_path, monkeypatch):
+        """No patterns configured returns empty list."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+
+        monkeypatch.setattr(settings, "CHAPTER_FILE_NAME_REGEX", None)
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == []
+
+    def test_deduplicates_matches(self, tmp_path, monkeypatch):
+        """Multiple patterns matching same file returns unique results."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cbz = staging / "Chapter 5.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(
+            settings,
+            "CHAPTER_FILE_NAME_REGEX",
+            [
+                "Chapter {chapter_number}",
+                "Chapter 5",  # would also match after replacement
+            ],
+        )
+        result = file_relocator._match_by_regex(staging, 5.0, [".cbz"])
+        assert result == [cbz]
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# find_staging_path regex integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestFindStagingPathRegex:
+    def test_regex_cbz_takes_priority_over_single_fallback(self, tmp_path, monkeypatch):
+        """When multiple CBZs exist, regex match wins over single-CBZ fallback."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        # Two CBZs present - single fallback would be ambiguous
+        (manga_dir / "MangaSee_Ch. 5.cbz").write_bytes(b"zip")
+        _make_cbz(manga_dir / "Other_Chapter.cbz")
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["MangaSee_Ch\\. {chapter_number}"]
+        )
+
+        result = file_relocator.find_staging_path(
+            "Unknown Name", "My Manga", "TestSource", 5.0
+        )
+        assert result == manga_dir / "MangaSee_Ch. 5.cbz"
+
+    def test_regex_folder_takes_priority_over_single_fallback(
+        self, tmp_path, monkeypatch
+    ):
+        """When multiple folders exist, regex match wins over single-folder fallback."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        # Two folders present - single fallback would be ambiguous
+        (manga_dir / "Chapter 10").mkdir()
+        (manga_dir / "Other Folder").mkdir()
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+
+        result = file_relocator.find_staging_path(
+            "Unknown Name", "My Manga", "TestSource", 10.0
+        )
+        assert result == manga_dir / "Chapter 10"
+
+    def test_exact_match_takes_priority_over_regex(self, tmp_path, monkeypatch):
+        """Exact CBZ match takes priority over regex match."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        exact_cbz = manga_dir / "Episode 5.cbz"
+        _make_cbz(exact_cbz)
+        # A regex-matching file also exists
+        _make_cbz(manga_dir / "MangaSee_Ch. 5.cbz")
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["MangaSee_Ch\\. {chapter_number}"]
+        )
+
+        result = file_relocator.find_staging_path(
+            "Episode 5", "My Manga", "TestSource", 5.0
+        )
+        assert result == exact_cbz
+
+    def test_regex_cbz_uses_chapter_number_variant(self, tmp_path, monkeypatch):
+        """Pattern with integer variant matches when chapter is 5.0."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        # File uses integer form "Chapter 5" not "Chapter 5.0"
+        cbz = manga_dir / "Chapter 5.cbz"
+        _make_cbz(cbz)
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(
+            settings, "CHAPTER_FILE_NAME_REGEX", ["Chapter {chapter_number}"]
+        )
+
+        result = file_relocator.find_staging_path(
+            "Unknown", "My Manga", "TestSource", 5.0
+        )
+        assert result == cbz
+
+    def test_prefix_fallback_removed_for_cbz(self, tmp_path, monkeypatch):
+        """Old prefix-based CBZ fallback no longer exists."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        # Old fallback 2 would match "Official_Episode 148.cbz" for chapter "Episode 148"
+        cbz = manga_dir / "Official_Episode 148.cbz"
+        _make_cbz(cbz)
+        # Add a second CBZ so single-CBZ fallback doesn't trigger
+        _make_cbz(manga_dir / "Another_Chapter.cbz")
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(settings, "CHAPTER_FILE_NAME_REGEX", None)
+
+        # Without regex config, and no exact match, should return None
+        result = file_relocator.find_staging_path(
+            "Episode 148", "My Manga", "TestSource", 148.0
+        )
+        assert result is None
+
+    def test_prefix_fallback_removed_for_folder(self, tmp_path, monkeypatch):
+        """Old prefix-based folder fallback no longer exists."""
+        downloads = tmp_path / "downloads"
+        source_dir = downloads / "TestSource"
+        manga_dir = source_dir / "My Manga"
+        manga_dir.mkdir(parents=True)
+
+        # Old prefix folder fallback would match "Official_Episode 148" folder
+        (manga_dir / "Official_Episode 148").mkdir()
+        # Add a second folder so single-folder fallback doesn't trigger
+        (manga_dir / "Another_Folder").mkdir()
+
+        monkeypatch.setattr(settings, "SUWAYOMI_DOWNLOAD_PATH", str(downloads))
+        monkeypatch.setattr(settings, "CHAPTER_FILE_NAME_REGEX", None)
+
+        result = file_relocator.find_staging_path(
+            "Episode 148", "My Manga", "TestSource", 148.0
+        )
+        assert result is None

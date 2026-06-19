@@ -1,7 +1,9 @@
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 import logging
@@ -35,6 +37,21 @@ class Settings(BaseSettings):
     DOWNLOAD_POLL_FALLBACK_SECONDS: int = 60
     MAX_RECONNECT_ATTEMPTS: int = 5
     MAX_DOWNLOAD_RETRIES: int = 2
+
+    CHAPTER_FILE_NAME_REGEX: list[str] | None = None
+
+    @field_validator("CHAPTER_FILE_NAME_REGEX", mode="after")
+    @classmethod
+    def validate_regex_patterns(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        for pattern in value:
+            try:
+                replaced = pattern.replace("{chapter_number}", "1")
+                re.compile(replaced)
+            except re.error as e:
+                raise ValueError(f"Invalid regex pattern '{pattern}': {e}")
+        return value
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8"}
 

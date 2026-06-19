@@ -32,7 +32,13 @@ from ..models.comic_source_override import ComicSourceOverride
 from ..models.comic_source_pin import ComicSourcePin
 from ..models.source import Source
 from ..models.user import User
-from ..services import cadence_inferrer, cover_handler, file_relocator, source_selector, suwayomi
+from ..services import (
+    cadence_inferrer,
+    cover_handler,
+    file_relocator,
+    source_selector,
+    suwayomi,
+)
 from ..workers import scheduler
 from .auth import require_auth
 
@@ -75,7 +81,9 @@ class AddAliasBody(BaseModel):
 class PatchComicBody(BaseModel):
     library_title: str | None = None
     poll_override_days: float | None = None
-    upgrade_override_days: float | None = None  # None means "clear"; absent means "unchanged"
+    upgrade_override_days: float | None = (
+        None  # None means "clear"; absent means "unchanged"
+    )
     status: ComicStatus | None = None
 
     model_config = ConfigDict(extra="ignore")
@@ -258,11 +266,13 @@ async def create_request(
 
     # 2c. Save source pins
     for pin in body.source_pins:
-        db.add(ComicSourcePin(
-            comic_id=comic.id,
-            source_id=pin.source_id,
-            suwayomi_manga_id=pin.suwayomi_manga_id,
-        ))
+        db.add(
+            ComicSourcePin(
+                comic_id=comic.id,
+                source_id=pin.source_id,
+                suwayomi_manga_id=pin.suwayomi_manga_id,
+            )
+        )
     if body.source_pins:
         await db.flush()
 
@@ -276,8 +286,17 @@ async def create_request(
         comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
 
     # 5. Set next poll/upgrade times
-    effective_poll = comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
-    effective_upgrade = comic.upgrade_override_days or comic.inferred_cadence_days or comic.poll_override_days or settings.DEFAULT_POLL_DAYS
+    effective_poll = (
+        comic.poll_override_days
+        or comic.inferred_cadence_days
+        or settings.DEFAULT_POLL_DAYS
+    )
+    effective_upgrade = (
+        comic.upgrade_override_days
+        or comic.inferred_cadence_days
+        or comic.poll_override_days
+        or settings.DEFAULT_POLL_DAYS
+    )
     now = datetime.now(timezone.utc)
     comic.next_poll_at = now + timedelta(days=effective_poll)
     comic.next_upgrade_check_at = now + timedelta(days=effective_upgrade)
@@ -478,12 +497,21 @@ async def patch_request(
 
     if "poll_override_days" in fields:
         comic.poll_override_days = body.poll_override_days  # None clears the override
-        effective_poll = comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
+        effective_poll = (
+            comic.poll_override_days
+            or comic.inferred_cadence_days
+            or settings.DEFAULT_POLL_DAYS
+        )
         comic.next_poll_at = now + timedelta(days=effective_poll)
 
     if "upgrade_override_days" in fields:
         comic.upgrade_override_days = body.upgrade_override_days
-        effective_upgrade = comic.upgrade_override_days or comic.inferred_cadence_days or comic.poll_override_days or settings.DEFAULT_POLL_DAYS
+        effective_upgrade = (
+            comic.upgrade_override_days
+            or comic.inferred_cadence_days
+            or comic.poll_override_days
+            or settings.DEFAULT_POLL_DAYS
+        )
         comic.next_upgrade_check_at = now + timedelta(days=effective_upgrade)
 
     if "status" in fields and body.status is not None:
@@ -496,7 +524,9 @@ async def patch_request(
         elif body.status == ComicStatus.tracking and old_status != ComicStatus.tracking:
             scheduler.register_comic_jobs(comic)
         result = await db.execute(
-            select(Comic).where(Comic.id == comic_id).options(selectinload(Comic.aliases))
+            select(Comic)
+            .where(Comic.id == comic_id)
+            .options(selectinload(Comic.aliases))
         )
         comic = result.scalar_one()
         return ComicResponse.model_validate(comic)
@@ -556,7 +586,9 @@ async def discover_chapters(
 
     # Retry cover download if it was never saved (e.g. sources failed at request time).
     if comic.cover_path is None and comic.requested_cover_url:
-        cover_path = await cover_handler.save_from_url(comic.id, comic.requested_cover_url)
+        cover_path = await cover_handler.save_from_url(
+            comic.id, comic.requested_cover_url
+        )
         if cover_path:
             comic.cover_path = str(cover_path)
             comic.requested_cover_url = None
@@ -599,10 +631,9 @@ async def reprocess_chapters(
 
     Idempotent — safe to call multiple times.
     """
+
     async def generate():
-        comic_result = await db.execute(
-            select(Comic).where(Comic.id == comic_id)
-        )
+        comic_result = await db.execute(select(Comic).where(Comic.id == comic_id))
         comic = comic_result.scalar_one_or_none()
         if comic is None:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Comic not found'})}\n\n"
@@ -626,14 +657,18 @@ async def reprocess_chapters(
                 display_name_by_source_id[s["id"]] = s["display_name"]
         except Exception as exc:
             reason = suwayomi.classify_error(exc)
-            logger.warning("reprocess: could not fetch source display names (%s): %r", reason, exc)
+            logger.warning(
+                "reprocess: could not fetch source display names (%s): %r", reason, exc
+            )
             yield f"data: {json.dumps({'type': 'error', 'detail': f'Suwayomi is unreachable ({reason}) — reprocess aborted.'})}\n\n"
             return
 
         queued = processed = skipped = 0
 
         for assignment in assignments:
-            chapter_name = assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+            chapter_name = (
+                assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+            )
             manga_title = assignment.source_manga_title or comic.title
             source_display_name = display_name_by_source_id.get(
                 assignment.source.suwayomi_source_id, assignment.source.name
@@ -651,16 +686,23 @@ async def reprocess_chapters(
                 continue
 
             # Case 2: queued/downloading — check staging before skipping
-            if assignment.download_status in (DownloadStatus.queued, DownloadStatus.downloading):
+            if assignment.download_status in (
+                DownloadStatus.queued,
+                DownloadStatus.downloading,
+            ):
                 staging = file_relocator.find_staging_path(
-                    chapter_name, manga_title, source_display_name
+                    chapter_name,
+                    manga_title,
+                    source_display_name,
+                    assignment.chapter_number,
                 )
                 if staging is not None:
                     # File already downloaded — treat as done and relocate (same as Case 4)
                     existing_active = await db.scalar(
                         select(ChapterAssignment).where(
                             ChapterAssignment.comic_id == comic_id,
-                            ChapterAssignment.chapter_number == assignment.chapter_number,
+                            ChapterAssignment.chapter_number
+                            == assignment.chapter_number,
                             ChapterAssignment.is_active.is_(True),
                             ChapterAssignment.id != assignment.id,
                         )
@@ -669,14 +711,19 @@ async def reprocess_chapters(
                     assignment.downloaded_at = datetime.now(timezone.utc)
                     if existing_active is None:
                         await file_relocator.relocate(
-                            assignment, comic, db,
+                            assignment,
+                            comic,
+                            db,
                             chapter_name=chapter_name,
                             manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     else:
                         await file_relocator.replace_in_library(
-                            existing_active, assignment, comic, db,
+                            existing_active,
+                            assignment,
+                            comic,
+                            db,
                             chapter_name=chapter_name,
                             manga_title=manga_title,
                             source_display_name=source_display_name,
@@ -727,28 +774,37 @@ async def reprocess_chapters(
             # Case 4: download done — check staging then library
             if assignment.download_status == DownloadStatus.done:
                 staging = file_relocator.find_staging_path(
-                    chapter_name, manga_title, source_display_name
+                    chapter_name,
+                    manga_title,
+                    source_display_name,
+                    assignment.chapter_number,
                 )
                 if staging is not None:
                     # Staging file exists — run the normal relocation pipeline
                     existing_active = await db.scalar(
                         select(ChapterAssignment).where(
                             ChapterAssignment.comic_id == comic_id,
-                            ChapterAssignment.chapter_number == assignment.chapter_number,
+                            ChapterAssignment.chapter_number
+                            == assignment.chapter_number,
                             ChapterAssignment.is_active.is_(True),
                             ChapterAssignment.id != assignment.id,
                         )
                     )
                     if existing_active is None:
                         await file_relocator.relocate(
-                            assignment, comic, db,
+                            assignment,
+                            comic,
+                            db,
                             chapter_name=chapter_name,
                             manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     else:
                         await file_relocator.replace_in_library(
-                            existing_active, assignment, comic, db,
+                            existing_active,
+                            assignment,
+                            comic,
+                            db,
                             chapter_name=chapter_name,
                             manga_title=manga_title,
                             source_display_name=source_display_name,
@@ -805,16 +861,23 @@ async def list_chapters(
     base_filters = [ChapterAssignment.comic_id == comic_id]
 
     if status == "available":
-        base_filters.append(ChapterAssignment.relocation_status == RelocationStatus.done)
+        base_filters.append(
+            ChapterAssignment.relocation_status == RelocationStatus.done
+        )
     elif status == "queued":
         base_filters.append(ChapterAssignment.download_status == DownloadStatus.queued)
     elif status == "downloading":
-        base_filters.append(ChapterAssignment.download_status == DownloadStatus.downloading)
+        base_filters.append(
+            ChapterAssignment.download_status == DownloadStatus.downloading
+        )
     elif status == "relocating":
         base_filters.append(ChapterAssignment.download_status == DownloadStatus.done)
-        base_filters.append(ChapterAssignment.relocation_status != RelocationStatus.done)
+        base_filters.append(
+            ChapterAssignment.relocation_status != RelocationStatus.done
+        )
     elif status == "failed":
         from sqlalchemy import or_
+
         base_filters.append(
             or_(
                 ChapterAssignment.download_status == DownloadStatus.failed,
@@ -827,15 +890,19 @@ async def list_chapters(
     ).scalar_one()
 
     assignments = (
-        await db.execute(
-            select(ChapterAssignment)
-            .where(*base_filters)
-            .order_by(ChapterAssignment.chapter_number)
-            .offset((page - 1) * per_page)
-            .limit(per_page)
-            .options(selectinload(ChapterAssignment.source))
+        (
+            await db.execute(
+                select(ChapterAssignment)
+                .where(*base_filters)
+                .order_by(ChapterAssignment.chapter_number)
+                .offset((page - 1) * per_page)
+                .limit(per_page)
+                .options(selectinload(ChapterAssignment.source))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return ChapterPage(
         items=[_chapter_summary(a) for a in assignments],
@@ -1014,17 +1081,17 @@ async def replace_pins(
         raise HTTPException(status_code=404, detail="Comic not found")
 
     # Delete all existing pins for this comic
-    await db.execute(
-        delete(ComicSourcePin).where(ComicSourcePin.comic_id == comic_id)
-    )
+    await db.execute(delete(ComicSourcePin).where(ComicSourcePin.comic_id == comic_id))
 
     # Insert new pins
     for pin in body.pins:
-        db.add(ComicSourcePin(
-            comic_id=comic_id,
-            source_id=pin.source_id,
-            suwayomi_manga_id=pin.suwayomi_manga_id,
-        ))
+        db.add(
+            ComicSourcePin(
+                comic_id=comic_id,
+                source_id=pin.source_id,
+                suwayomi_manga_id=pin.suwayomi_manga_id,
+            )
+        )
 
     await db.commit()
 
@@ -1061,6 +1128,7 @@ async def force_upgrade_comic(
       data: {"type": "done", "queued": N}
       data: {"type": "error", "detail": "..."}   # fatal error only
     """
+
     async def generate():
         comic = await db.get(Comic, comic_id)
         if comic is None:
@@ -1092,7 +1160,9 @@ async def force_upgrade_comic(
                 source_manga_title=ch_data.get("source_manga_title"),
             )
             db.add(upgrade)
-            enqueue_by_manga.setdefault(manga_id, []).append(ch_data["suwayomi_chapter_id"])
+            enqueue_by_manga.setdefault(manga_id, []).append(
+                ch_data["suwayomi_chapter_id"]
+            )
             queued += 1
             yield f"data: {json.dumps({'type': 'chapter', 'chapter_number': assignment.chapter_number, 'old_source': assignment.source.name, 'new_source': candidate_source.name})}\n\n"
 
@@ -1130,6 +1200,7 @@ async def force_upgrade_chapter(
       data: {"type": "done", "queued": 0|1}
       data: {"type": "error", "detail": "..."}
     """
+
     async def generate():
         comic = await db.get(Comic, comic_id)
         if comic is None:
@@ -1225,12 +1296,26 @@ async def list_source_overrides(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    sources = (await db.execute(select(Source).where(Source.enabled.is_(True)).order_by(Source.priority))).scalars().all()
+    sources = (
+        (
+            await db.execute(
+                select(Source).where(Source.enabled.is_(True)).order_by(Source.priority)
+            )
+        )
+        .scalars()
+        .all()
+    )
     overrides: dict[int, int] = {
         row.source_id: row.priority_override
-        for row in (await db.execute(
-            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id)
-        )).scalars().all()
+        for row in (
+            await db.execute(
+                select(ComicSourceOverride).where(
+                    ComicSourceOverride.comic_id == comic_id
+                )
+            )
+        )
+        .scalars()
+        .all()
     }
 
     entries = [
@@ -1264,23 +1349,40 @@ async def put_source_overrides(
         raise HTTPException(status_code=404, detail="Comic not found")
 
     enabled_ids = {
-        s.id for s in (await db.execute(select(Source).where(Source.enabled.is_(True)))).scalars().all()
+        s.id
+        for s in (await db.execute(select(Source).where(Source.enabled.is_(True))))
+        .scalars()
+        .all()
     }
     unknown = set(body.source_ids) - enabled_ids
     if unknown:
-        raise HTTPException(status_code=422, detail=f"Unknown or disabled source IDs: {sorted(unknown)}")
+        raise HTTPException(
+            status_code=422, detail=f"Unknown or disabled source IDs: {sorted(unknown)}"
+        )
     if sorted(body.source_ids) != sorted(enabled_ids):
-        raise HTTPException(status_code=422, detail="source_ids must contain every enabled source exactly once")
+        raise HTTPException(
+            status_code=422,
+            detail="source_ids must contain every enabled source exactly once",
+        )
 
     # Replace all overrides atomically
-    await db.execute(delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id))
+    await db.execute(
+        delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id)
+    )
     for rank, source_id in enumerate(body.source_ids, start=1):
-        db.add(ComicSourceOverride(comic_id=comic_id, source_id=source_id, priority_override=rank))
+        db.add(
+            ComicSourceOverride(
+                comic_id=comic_id, source_id=source_id, priority_override=rank
+            )
+        )
     await db.commit()
 
     # Return the updated list (re-use the GET logic)
     sources_by_id = {
-        s.id: s for s in (await db.execute(select(Source).where(Source.enabled.is_(True)))).scalars().all()
+        s.id: s
+        for s in (await db.execute(select(Source).where(Source.enabled.is_(True))))
+        .scalars()
+        .all()
     }
     entries = [
         SourceOverrideEntry(
@@ -1306,7 +1408,9 @@ async def delete_source_overrides(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    await db.execute(delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id))
+    await db.execute(
+        delete(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic_id)
+    )
     await db.commit()
     return Response(status_code=204)
 

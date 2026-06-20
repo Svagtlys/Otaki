@@ -145,12 +145,21 @@ async def test_poll_no_new_chapters(sched_db, monkeypatch):
     fake_source.id = source_id
 
     async def fake_build_map(comic, db):
-        return {1.0: (fake_source, "manga-1", {
-            "chapter_number": 1.0,
-            "volume_number": None,
-            "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime(2024, 1, 1, tzinfo=UTC),
-        })}
+        return (
+            {
+                1.0: (
+                    fake_source,
+                    "manga-1",
+                    {
+                        "chapter_number": 1.0,
+                        "volume_number": None,
+                        "suwayomi_chapter_id": "ch-1",
+                        "chapter_published_at": datetime(2024, 1, 1, tzinfo=UTC),
+                    },
+                )
+            },
+            [],
+        )
 
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(
@@ -185,12 +194,21 @@ async def test_poll_creates_assignments(sched_db, monkeypatch):
     fake_source.id = source_id
 
     async def fake_build_map(comic, db):
-        return {2.0: (fake_source, "manga-1", {
-            "chapter_number": 2.0,
-            "volume_number": None,
-            "suwayomi_chapter_id": "ch-2",
-            "chapter_published_at": published,
-        })}
+        return (
+            {
+                2.0: (
+                    fake_source,
+                    "manga-1",
+                    {
+                        "chapter_number": 2.0,
+                        "volume_number": None,
+                        "suwayomi_chapter_id": "ch-2",
+                        "chapter_published_at": published,
+                    },
+                )
+            },
+            [],
+        )
 
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(
@@ -230,7 +248,7 @@ async def test_poll_advances_next_poll_at(sched_db, monkeypatch):
     monkeypatch.setattr(scheduler_module.scheduler, "add_job", MagicMock())
 
     async def fake_build_map(comic, db):
-        return {}
+        return {}, []
 
     monkeypatch.setattr(
         scheduler_module.source_selector, "build_chapter_source_map", fake_build_map
@@ -381,17 +399,21 @@ async def test_upgrade_creates_assignment_and_enqueues(sched_db, monkeypatch):
     monkeypatch.setattr(
         scheduler_module.source_selector,
         "find_upgrade_candidates",
-        AsyncMock(return_value=[(
-            fake_assignment,
-            fake_source_b,
-            "manga-99",
-            {
-                "chapter_number": 1.0,
-                "volume_number": None,
-                "suwayomi_chapter_id": "ch-upgrade-1",
-                "chapter_published_at": published,
-            },
-        )]),
+        AsyncMock(
+            return_value=[
+                (
+                    fake_assignment,
+                    fake_source_b,
+                    "manga-99",
+                    {
+                        "chapter_number": 1.0,
+                        "volume_number": None,
+                        "suwayomi_chapter_id": "ch-upgrade-1",
+                        "chapter_published_at": published,
+                    },
+                )
+            ]
+        ),
     )
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(scheduler_module.suwayomi, "enqueue_downloads", mock_enqueue)
@@ -486,6 +508,7 @@ async def test_upgrade_falls_back_to_poll_override_days(sched_db, monkeypatch):
 # Integration test — requires live Suwayomi
 # ---------------------------------------------------------------------------
 
+
 def test_poll_job_has_misfire_grace_time(monkeypatch):
     """_register_poll_job sets misfire_grace_time to 1 hour (3600 seconds)."""
     # Use a dummy comic
@@ -493,13 +516,16 @@ def test_poll_job_has_misfire_grace_time(monkeypatch):
     comic.id = 123
     # Capture job registration
     captured = {}
+
     def fake_add_job(*args, **kwargs):
         captured.update(kwargs)
+
     monkeypatch.setattr(scheduler_module.scheduler, "add_job", fake_add_job)
     # Register
     scheduler_module._register_poll_job(comic)
     assert captured.get("id") == f"poll_{comic.id}"
     assert captured.get("misfire_grace_time") == 3600
+
 
 @pytest.mark.asyncio
 async def test_start_processes_missed_poll(monkeypatch, sched_db):
@@ -512,8 +538,10 @@ async def test_start_processes_missed_poll(monkeypatch, sched_db):
         comic_id = comic.id
     # Patch the poll function to record call
     called = []
+
     async def fake_poll(comic_id_inner):
         called.append(comic_id_inner)
+
     monkeypatch.setattr(scheduler_module, "_poll_comic", fake_poll)
     # Patch add_job to avoid APScheduler side effects
     monkeypatch.setattr(scheduler_module.scheduler, "add_job", lambda *a, **kw: None)
@@ -523,10 +551,11 @@ async def test_start_processes_missed_poll(monkeypatch, sched_db):
     assert comic_id in called
 
 
-
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_upgrade_comic_integration(sched_db, suwayomi_settings, test_manga_title, monkeypatch):
+async def test_upgrade_comic_integration(
+    sched_db, suwayomi_settings, test_manga_title, monkeypatch
+):
     """_upgrade_comic creates inactive upgrade assignments when a better-priority source has the chapter.
 
     Requires at least two Suwayomi sources that both return results for TEST_MANGA_TITLE.
@@ -536,16 +565,22 @@ async def test_upgrade_comic_integration(sched_db, suwayomi_settings, test_manga
 
     # Find two sources that both have the manga
     all_sources = await suwayomi_module.list_sources()
-    sources_with_manga: list[tuple[dict, str, str]] = []  # (source_info, manga_id, title)
+    sources_with_manga: list[
+        tuple[dict, str, str]
+    ] = []  # (source_info, manga_id, title)
     for src in all_sources:
         results = await suwayomi_module.search_source(src["id"], test_manga_title)
         if results:
-            sources_with_manga.append((src, results[0]["manga_id"], results[0]["title"]))
+            sources_with_manga.append(
+                (src, results[0]["manga_id"], results[0]["title"])
+            )
         if len(sources_with_manga) == 2:
             break
 
     if len(sources_with_manga) < 2:
-        pytest.skip("Need at least 2 sources that have the test manga for upgrade integration test")
+        pytest.skip(
+            "Need at least 2 sources that have the test manga for upgrade integration test"
+        )
 
     (src_a_info, manga_id_a, title_a), (src_b_info, manga_id_b, _) = sources_with_manga
 

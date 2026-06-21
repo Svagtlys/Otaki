@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import select
 
-from app.models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from app.models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from app.models.comic import Comic, ComicStatus
 from app.models.comic_source_pin import ComicSourcePin
 from app.models.source import Source
@@ -18,8 +22,11 @@ from app.models.source import Source
 # ---------------------------------------------------------------------------
 
 
-async def _add_source(*, name="Test Source", suwayomi_source_id="src-1", priority=1) -> Source:
+async def _add_source(
+    *, name="Test Source", suwayomi_source_id="src-1", priority=1
+) -> Source:
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         source = Source(
             suwayomi_source_id=suwayomi_source_id,
@@ -36,6 +43,7 @@ async def _add_source(*, name="Test Source", suwayomi_source_id="src-1", priorit
 
 async def _add_comic(*, title="Test Comic", library_title=None) -> Comic:
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         comic = Comic(
             title=title,
@@ -62,9 +70,12 @@ async def _add_assignment(
     is_active: bool = True,
 ) -> ChapterAssignment:
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         if relocation_status is None:
-            relocation_status = RelocationStatus.done if library_path else RelocationStatus.pending
+            relocation_status = (
+                RelocationStatus.done if library_path else RelocationStatus.pending
+            )
         assignment = ChapterAssignment(
             comic_id=comic_id,
             chapter_number=chapter_number,
@@ -91,7 +102,9 @@ async def _add_assignment(
 async def test_post_creates_comic(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post("/api/requests", json={"primary_title": "My Manga"})
@@ -102,6 +115,7 @@ async def test_post_creates_comic(logged_in_client, monkeypatch):
     assert data["status"] == "tracking"
 
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         result = await db.execute(select(Comic).where(Comic.title == "My Manga"))
         comic = result.scalar_one_or_none()
@@ -111,10 +125,14 @@ async def test_post_creates_comic(logged_in_client, monkeypatch):
 async def test_post_default_library_title(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
-    r = await logged_in_client.post("/api/requests", json={"primary_title": "Another Manga"})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": "Another Manga"}
+    )
     assert r.status_code == 201
     assert r.json()["library_title"] == "Another Manga"
 
@@ -122,11 +140,15 @@ async def test_post_default_library_title(logged_in_client, monkeypatch):
 async def test_post_duplicate_title_returns_409(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     await logged_in_client.post("/api/requests", json={"primary_title": "Dupe Comic"})
-    r = await logged_in_client.post("/api/requests", json={"primary_title": "Dupe Comic"})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": "Dupe Comic"}
+    )
     assert r.status_code == 409
 
 
@@ -141,17 +163,25 @@ async def test_post_creates_assignments(logged_in_client, monkeypatch):
     published = datetime(2024, 3, 1, tzinfo=timezone.utc)
 
     async def _fake_build_map(comic, db):
-        return {1.0: (fake_source, "manga-99", {
-            "chapter_number": 1.0,
-            "volume_number": None,
-            "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": published,
-        })}, []
+        return {
+            1.0: (
+                fake_source,
+                "manga-99",
+                {
+                    "chapter_number": 1.0,
+                    "volume_number": None,
+                    "suwayomi_chapter_id": "ch-1",
+                    "chapter_published_at": published,
+                },
+            )
+        }, []
 
     monkeypatch.setattr(source_selector, "build_chapter_source_map", _fake_build_map)
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
-    r = await logged_in_client.post("/api/requests", json={"primary_title": "Chapter Comic"})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": "Chapter Comic"}
+    )
     assert r.status_code == 201
     comic_id = r.json()["id"]
 
@@ -172,13 +202,19 @@ async def test_post_registers_jobs(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
     from app.workers import scheduler
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     registered = []
-    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda comic: registered.append(comic))
+    monkeypatch.setattr(
+        scheduler, "register_comic_jobs", lambda comic: registered.append(comic)
+    )
 
-    r = await logged_in_client.post("/api/requests", json={"primary_title": "Job Comic"})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": "Job Comic"}
+    )
     assert r.status_code == 201
     assert len(registered) == 1
     assert registered[0].title == "Job Comic"
@@ -187,11 +223,15 @@ async def test_post_registers_jobs(logged_in_client, monkeypatch):
 async def test_post_sets_next_poll_at(logged_in_client, monkeypatch):
     from app.services import source_selector, suwayomi
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     before = datetime.now(timezone.utc)
-    r = await logged_in_client.post("/api/requests", json={"primary_title": "Poll Comic"})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": "Poll Comic"}
+    )
     assert r.status_code == 201
 
     next_poll = r.json()["next_poll_at"]
@@ -277,7 +317,9 @@ async def test_delete_calls_remove_jobs(logged_in_client, monkeypatch):
     from app.workers import scheduler
 
     removed_ids = []
-    monkeypatch.setattr(scheduler, "remove_comic_jobs", lambda comic_id: removed_ids.append(comic_id))
+    monkeypatch.setattr(
+        scheduler, "remove_comic_jobs", lambda comic_id: removed_ids.append(comic_id)
+    )
 
     source = await _add_source()
     comic = await _add_comic(title="Remove Jobs Comic")
@@ -321,7 +363,9 @@ async def test_cover_post_url_saves_cover(logged_in_client, monkeypatch, tmp_pat
 
     fake_cover = tmp_path / "1.jpg"
     fake_cover.write_bytes(b"img")
-    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=fake_cover))
+    monkeypatch.setattr(
+        cover_handler, "save_from_url", AsyncMock(return_value=fake_cover)
+    )
 
     comic = await _add_comic(title="Cover URL Comic")
     r = await logged_in_client.post(
@@ -334,6 +378,7 @@ async def test_cover_post_url_saves_cover(logged_in_client, monkeypatch, tmp_pat
 
 async def test_cover_post_url_502_on_failure(logged_in_client, monkeypatch):
     from app.services import cover_handler
+
     monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=None))
 
     comic = await _add_comic(title="Cover Fail Comic")
@@ -349,7 +394,9 @@ async def test_cover_post_file_saves_cover(logged_in_client, monkeypatch, tmp_pa
 
     fake_cover = tmp_path / "1.jpg"
     fake_cover.write_bytes(b"img")
-    monkeypatch.setattr(cover_handler, "save_from_file", MagicMock(return_value=fake_cover))
+    monkeypatch.setattr(
+        cover_handler, "save_from_file", MagicMock(return_value=fake_cover)
+    )
 
     comic = await _add_comic(title="Cover File Comic")
     r = await logged_in_client.post(
@@ -360,8 +407,11 @@ async def test_cover_post_file_saves_cover(logged_in_client, monkeypatch, tmp_pa
     assert "cover_url" in r.json()
 
 
-async def test_cover_post_file_non_image_returns_415(logged_in_client, monkeypatch, tmp_path):
+async def test_cover_post_file_non_image_returns_415(
+    logged_in_client, monkeypatch, tmp_path
+):
     from app.services import cover_handler
+
     monkeypatch.setattr(cover_handler, "save_from_file", MagicMock(return_value=None))
 
     comic = await _add_comic(title="Cover Non-Image Comic")
@@ -389,7 +439,9 @@ async def test_cover_delete_clears_cover_path(logged_in_client, tmp_path):
     comic = await _add_comic(title="Cover Delete Comic")
     # Manually set cover_path
     async with database.AsyncSessionLocal() as db:
-        c = await db.get(__import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id)
+        c = await db.get(
+            __import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id
+        )
         c.cover_path = str(fake_cover)
         await db.commit()
 
@@ -398,7 +450,9 @@ async def test_cover_delete_clears_cover_path(logged_in_client, tmp_path):
     assert not fake_cover.exists()
 
     async with database.AsyncSessionLocal() as db:
-        c = await db.get(__import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id)
+        c = await db.get(
+            __import__("app.models.comic", fromlist=["Comic"]).Comic, comic.id
+        )
         assert c.cover_path is None
 
 
@@ -412,13 +466,18 @@ async def test_create_request_stores_requested_cover_url(logged_in_client, monke
     from app import database
     from app.services import source_selector, cover_handler
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     # Cover download fails so requested_cover_url should remain set
     monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=None))
 
     r = await logged_in_client.post(
         "/api/requests",
-        json={"primary_title": "Cover URL Stored", "cover_url": "https://example.com/cover.jpg"},
+        json={
+            "primary_title": "Cover URL Stored",
+            "cover_url": "https://example.com/cover.jpg",
+        },
     )
     assert r.status_code == 201
     comic_id = r.json()["id"]
@@ -429,19 +488,28 @@ async def test_create_request_stores_requested_cover_url(logged_in_client, monke
     assert comic.cover_path is None
 
 
-async def test_create_request_clears_requested_cover_url_on_success(logged_in_client, monkeypatch, tmp_path):
+async def test_create_request_clears_requested_cover_url_on_success(
+    logged_in_client, monkeypatch, tmp_path
+):
     """requested_cover_url is nulled after a successful cover download at request time."""
     from app import database
     from app.services import source_selector, cover_handler
 
     fake_cover = tmp_path / "1.jpg"
     fake_cover.write_bytes(b"img")
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
-    monkeypatch.setattr(cover_handler, "save_from_url", AsyncMock(return_value=fake_cover))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
+    monkeypatch.setattr(
+        cover_handler, "save_from_url", AsyncMock(return_value=fake_cover)
+    )
 
     r = await logged_in_client.post(
         "/api/requests",
-        json={"primary_title": "Cover URL Cleared", "cover_url": "https://example.com/cover.jpg"},
+        json={
+            "primary_title": "Cover URL Cleared",
+            "cover_url": "https://example.com/cover.jpg",
+        },
     )
     assert r.status_code == 201
     comic_id = r.json()["id"]
@@ -452,12 +520,16 @@ async def test_create_request_clears_requested_cover_url_on_success(logged_in_cl
     assert comic.cover_path == str(fake_cover)
 
 
-async def test_discover_retries_cover_when_missing(logged_in_client, monkeypatch, tmp_path):
+async def test_discover_retries_cover_when_missing(
+    logged_in_client, monkeypatch, tmp_path
+):
     """discover_chapters downloads the cover if cover_path is None and requested_cover_url is set."""
     from app import database
     from app.services import source_selector, cover_handler
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
 
     fake_cover = tmp_path / "1.jpg"
     fake_cover.write_bytes(b"img")
@@ -481,12 +553,16 @@ async def test_discover_retries_cover_when_missing(logged_in_client, monkeypatch
     assert c.requested_cover_url is None
 
 
-async def test_discover_does_not_overwrite_existing_cover(logged_in_client, monkeypatch, tmp_path):
+async def test_discover_does_not_overwrite_existing_cover(
+    logged_in_client, monkeypatch, tmp_path
+):
     """discover_chapters skips the cover retry if cover_path is already set."""
     from app import database
     from app.services import source_selector, cover_handler
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
     save_mock = AsyncMock(return_value=None)
     monkeypatch.setattr(cover_handler, "save_from_url", save_mock)
 
@@ -554,7 +630,9 @@ async def test_discover_creates_missing_assignments(logged_in_client, monkeypatc
     assert assignments[0].suwayomi_chapter_id == "disc-ch-1"
 
 
-async def test_discover_skips_existing_active_assignments(logged_in_client, monkeypatch):
+async def test_discover_skips_existing_active_assignments(
+    logged_in_client, monkeypatch
+):
     """POST /{id}/discover does not duplicate chapters already tracked with is_active=True."""
     from datetime import timezone
     from app import database
@@ -608,7 +686,9 @@ async def test_create_request_saves_aliases(logged_in_client, monkeypatch):
     from app.models.comic_alias import ComicAlias
     from app.services import source_selector
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
 
     r = await logged_in_client.post(
         "/api/requests",
@@ -630,11 +710,15 @@ async def test_create_request_saves_aliases(logged_in_client, monkeypatch):
     assert alias_titles == {"Alias One", "Alias Two"}
 
 
-async def test_create_request_returns_aliases_in_response(logged_in_client, monkeypatch):
+async def test_create_request_returns_aliases_in_response(
+    logged_in_client, monkeypatch
+):
     """POST /api/requests response includes saved aliases."""
     from app.services import source_selector
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
 
     r = await logged_in_client.post(
         "/api/requests",
@@ -656,7 +740,9 @@ async def test_get_detail_returns_aliases(logged_in_client, monkeypatch):
     from app.models.comic_alias import ComicAlias
     from app.services import source_selector
 
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
 
     r = await logged_in_client.post(
         "/api/requests",
@@ -754,16 +840,21 @@ async def test_patch_updates_library_title(logged_in_client):
     assert r.json()["library_title"] == "New Library Name"
 
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         c = await db.get(Comic, comic.id)
     assert c.library_title == "New Library Name"
 
 
-async def test_patch_updates_poll_override_days_and_reschedules(logged_in_client, monkeypatch):
+async def test_patch_updates_poll_override_days_and_reschedules(
+    logged_in_client, monkeypatch
+):
     from app.workers import scheduler
 
     registered = []
-    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: registered.append(c))
+    monkeypatch.setattr(
+        scheduler, "register_comic_jobs", lambda c: registered.append(c)
+    )
 
     comic = await _add_comic(title="Patch Poll Days Comic")
     r = await logged_in_client.patch(
@@ -822,7 +913,9 @@ async def test_patch_status_tracking_registers_jobs(logged_in_client, monkeypatc
     from app.workers import scheduler
 
     registered = []
-    monkeypatch.setattr(scheduler, "register_comic_jobs", lambda c: registered.append(c))
+    monkeypatch.setattr(
+        scheduler, "register_comic_jobs", lambda c: registered.append(c)
+    )
 
     comic = await _add_comic(title="Patch Status Tracking Comic")
     async with database.AsyncSessionLocal() as db:
@@ -847,12 +940,16 @@ async def test_patch_empty_body_is_noop(logged_in_client):
 
 
 async def test_patch_not_found(logged_in_client):
-    r = await logged_in_client.patch("/api/requests/99999", json={"library_title": "Ghost"})
+    r = await logged_in_client.patch(
+        "/api/requests/99999", json={"library_title": "Ghost"}
+    )
     assert r.status_code == 404
 
 
 @pytest.mark.integration
-async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_title, monkeypatch):
+async def test_post_integration(
+    logged_in_client, suwayomi_settings, test_manga_title, monkeypatch
+):
     """POST with a real manga title; verify 201 and assignments have chapter IDs."""
     from app import database
     from app.services.suwayomi import list_sources as _list_sources
@@ -866,7 +963,9 @@ async def test_post_integration(logged_in_client, suwayomi_settings, test_manga_
         await _add_source(name=s["name"], suwayomi_source_id=s["id"], priority=i + 1)
     monkeypatch.setattr(scheduler, "register_comic_jobs", lambda comic: None)
 
-    r = await logged_in_client.post("/api/requests", json={"primary_title": test_manga_title})
+    r = await logged_in_client.post(
+        "/api/requests", json={"primary_title": test_manga_title}
+    )
     assert r.status_code == 201
     data = r.json()
     assert data["title"] == test_manga_title
@@ -894,8 +993,12 @@ async def test_post_creates_comic_with_source_pins(logged_in_client, monkeypatch
     from app.models.comic_source_pin import ComicSourcePin
     from app.services import source_selector
 
-    source = await _add_source(name="Pin Source", suwayomi_source_id="src-pin", priority=1)
-    monkeypatch.setattr(source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, [])))
+    source = await _add_source(
+        name="Pin Source", suwayomi_source_id="src-pin", priority=1
+    )
+    monkeypatch.setattr(
+        source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
+    )
 
     r = await logged_in_client.post(
         "/api/requests",
@@ -928,7 +1031,9 @@ async def test_get_pins_returns_empty_for_new_comic(logged_in_client):
 
 async def test_put_pins_creates_and_replaces(logged_in_client):
     """PUT /{id}/pins replaces all pins with the supplied list."""
-    source = await _add_source(name="Pin Replace Source", suwayomi_source_id="src-replace", priority=1)
+    source = await _add_source(
+        name="Pin Replace Source", suwayomi_source_id="src-replace", priority=1
+    )
     comic = await _add_comic(title="Pin Replace Comic")
 
     # First PUT — creates one pin
@@ -953,6 +1058,7 @@ async def test_put_pins_creates_and_replaces(logged_in_client):
 
     # Verify DB state directly — not just API response
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         result = await db.execute(
             select(ComicSourcePin).where(ComicSourcePin.comic_id == comic.id)
@@ -994,14 +1100,17 @@ async def test_reprocess_404_for_unknown_comic(logged_in_client):
     assert any(e.get("type") == "error" for e in events)
 
 
-async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client, monkeypatch):
+async def test_reprocess_returns_503_when_suwayomi_unreachable(
+    logged_in_client, monkeypatch
+):
     """If list_sources() fails (Suwayomi unreachable), reprocess emits an error SSE event."""
     from app.services import suwayomi
     import httpx
 
     comic = await _add_comic(title="Reprocess 503 Comic")
     monkeypatch.setattr(
-        suwayomi, "list_sources",
+        suwayomi,
+        "list_sources",
         AsyncMock(side_effect=httpx.TimeoutException("timed out")),
     )
 
@@ -1013,7 +1122,9 @@ async def test_reprocess_returns_503_when_suwayomi_unreachable(logged_in_client,
     assert "unreachable" in error_events[0]["detail"].lower()
 
 
-async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypatch, tmp_path):
+async def test_reprocess_skips_queued_and_downloading(
+    logged_in_client, monkeypatch, tmp_path
+):
     """Chapters queued/downloading with no staging that are still in the live queue are skipped."""
     from app import database
     from app.services import file_relocator, suwayomi
@@ -1025,19 +1136,41 @@ async def test_reprocess_skips_queued_and_downloading(logged_in_client, monkeypa
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
     # Both chapters are genuinely still in the Suwayomi queue → skip them
     monkeypatch.setattr(
-        suwayomi, "poll_downloads",
-        AsyncMock(return_value=[
-            {"chapter_id": "ch-1.0", "chapter_name": "Ch 1", "manga_title": "T", "source_name": "S", "state": "DOWNLOADING"},
-            {"chapter_id": "ch-2.0", "chapter_name": "Ch 2", "manga_title": "T", "source_name": "S", "state": "DOWNLOADING"},
-        ]),
+        suwayomi,
+        "poll_downloads",
+        AsyncMock(
+            return_value=[
+                {
+                    "chapter_id": "ch-1.0",
+                    "chapter_name": "Ch 1",
+                    "manga_title": "T",
+                    "source_name": "S",
+                    "state": "DOWNLOADING",
+                },
+                {
+                    "chapter_id": "ch-2.0",
+                    "chapter_name": "Ch 2",
+                    "manga_title": "T",
+                    "source_name": "S",
+                    "state": "DOWNLOADING",
+                },
+            ]
+        ),
     )
 
     async with database.AsyncSessionLocal() as db:
-        for status, ch_num in [(DownloadStatus.queued, 1.0), (DownloadStatus.downloading, 2.0)]:
+        for status, ch_num in [
+            (DownloadStatus.queued, 1.0),
+            (DownloadStatus.downloading, 2.0),
+        ]:
             a = ChapterAssignment(
-                comic_id=comic.id, chapter_number=ch_num, source_id=source.id,
-                suwayomi_manga_id="m1", suwayomi_chapter_id=f"ch-{ch_num}",
-                download_status=status, is_active=True,
+                comic_id=comic.id,
+                chapter_number=ch_num,
+                source_id=source.id,
+                suwayomi_manga_id="m1",
+                suwayomi_chapter_id=f"ch-{ch_num}",
+                download_status=status,
+                is_active=True,
                 chapter_published_at=datetime.now(timezone.utc),
                 relocation_status=RelocationStatus.pending,
             )
@@ -1066,9 +1199,13 @@ async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_pa
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-fail",
-            download_status=DownloadStatus.failed, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-fail",
+            download_status=DownloadStatus.failed,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.pending,
         )
@@ -1082,7 +1219,9 @@ async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_pa
     assert done["processed"] == 0
 
 
-async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypatch, tmp_path):
+async def test_reprocess_relocates_done_with_staging(
+    logged_in_client, monkeypatch, tmp_path
+):
     """Chapters with download_status=done and a staging file are relocated."""
     from app import database
     from app.services import file_relocator, suwayomi
@@ -1094,15 +1233,21 @@ async def test_reprocess_relocates_done_with_staging(logged_in_client, monkeypat
     fake_staging.write_bytes(b"")
 
     monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
-    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: fake_staging)
+    monkeypatch.setattr(
+        file_relocator, "find_staging_path", lambda *a, **kw: fake_staging
+    )
     mock_relocate = AsyncMock()
     monkeypatch.setattr(file_relocator, "relocate", mock_relocate)
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-stg",
-            download_status=DownloadStatus.done, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-stg",
+            download_status=DownloadStatus.done,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.pending,
         )
@@ -1136,9 +1281,13 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-lib",
-            download_status=DownloadStatus.done, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-lib",
+            download_status=DownloadStatus.done,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             library_path=str(lib_file),
             relocation_status=RelocationStatus.done,
@@ -1153,7 +1302,9 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
 
 
 @pytest.mark.asyncio
-async def test_reprocess_queued_with_staging_file_relocates(logged_in_client, monkeypatch, tmp_path):
+async def test_reprocess_queued_with_staging_file_relocates(
+    logged_in_client, monkeypatch, tmp_path
+):
     """A queued chapter with a staging file is recovered: treated as done and relocated."""
     from pathlib import Path as _Path
     from app import database
@@ -1167,15 +1318,21 @@ async def test_reprocess_queued_with_staging_file_relocates(logged_in_client, mo
     staging_file.write_bytes(b"")
 
     monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
-    monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: staging_file)
+    monkeypatch.setattr(
+        file_relocator, "find_staging_path", lambda *a, **kw: staging_file
+    )
     mock_relocate = AsyncMock()
     monkeypatch.setattr(file_relocator, "relocate", mock_relocate)
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-qs1",
-            download_status=DownloadStatus.queued, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-qs1",
+            download_status=DownloadStatus.queued,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.pending,
         )
@@ -1198,7 +1355,9 @@ async def test_reprocess_queued_with_staging_file_relocates(logged_in_client, mo
 
 
 @pytest.mark.asyncio
-async def test_reprocess_queued_absent_from_queue_reenqueues(logged_in_client, monkeypatch, tmp_path):
+async def test_reprocess_queued_absent_from_queue_reenqueues(
+    logged_in_client, monkeypatch, tmp_path
+):
     """A queued chapter with no staging and absent from the live queue is re-enqueued."""
     from app import database
     from app.services import file_relocator, suwayomi
@@ -1215,9 +1374,13 @@ async def test_reprocess_queued_absent_from_queue_reenqueues(logged_in_client, m
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-aq1",
-            download_status=DownloadStatus.queued, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-aq1",
+            download_status=DownloadStatus.queued,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.pending,
         )
@@ -1234,7 +1397,9 @@ async def test_reprocess_queued_absent_from_queue_reenqueues(logged_in_client, m
 
 
 @pytest.mark.asyncio
-async def test_reprocess_queued_poll_fails_reenqueues(logged_in_client, monkeypatch, tmp_path):
+async def test_reprocess_queued_poll_fails_reenqueues(
+    logged_in_client, monkeypatch, tmp_path
+):
     """If poll_downloads raises, the chapter falls through to re-enqueue (not skipped)."""
     from app import database
     from app.services import file_relocator, suwayomi
@@ -1244,15 +1409,21 @@ async def test_reprocess_queued_poll_fails_reenqueues(logged_in_client, monkeypa
 
     monkeypatch.setattr(suwayomi, "list_sources", AsyncMock(return_value=[]))
     monkeypatch.setattr(file_relocator, "find_staging_path", lambda *a, **kw: None)
-    monkeypatch.setattr(suwayomi, "poll_downloads", AsyncMock(side_effect=Exception("timeout")))
+    monkeypatch.setattr(
+        suwayomi, "poll_downloads", AsyncMock(side_effect=Exception("timeout"))
+    )
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source.id,
-            suwayomi_manga_id="m1", suwayomi_chapter_id="ch-pf1",
-            download_status=DownloadStatus.queued, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source.id,
+            suwayomi_manga_id="m1",
+            suwayomi_chapter_id="ch-pf1",
+            download_status=DownloadStatus.queued,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.pending,
         )
@@ -1286,21 +1457,31 @@ async def test_force_upgrade_requires_auth(auth_client):
 
 
 @pytest.mark.asyncio
-async def test_force_upgrade_emits_chapter_events_and_done(logged_in_client, monkeypatch):
+async def test_force_upgrade_emits_chapter_events_and_done(
+    logged_in_client, monkeypatch
+):
     """When a better source exists, force-upgrade queues an upgrade assignment and emits events."""
     from app import database
     from app.services import source_selector, suwayomi
     from sqlalchemy.orm import selectinload
 
-    source_low = await _add_source(name="Low Priority", suwayomi_source_id="src-fu-lo", priority=2)
-    source_high = await _add_source(name="High Priority", suwayomi_source_id="src-fu-hi", priority=1)
+    source_low = await _add_source(
+        name="Low Priority", suwayomi_source_id="src-fu-lo", priority=2
+    )
+    source_high = await _add_source(
+        name="High Priority", suwayomi_source_id="src-fu-hi", priority=1
+    )
     comic = await _add_comic(title="Force Upgrade Comic")
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=1.0, source_id=source_low.id,
-            suwayomi_manga_id="m-fu1", suwayomi_chapter_id="ch-fu1",
-            download_status=DownloadStatus.done, is_active=True,
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=source_low.id,
+            suwayomi_manga_id="m-fu1",
+            suwayomi_chapter_id="ch-fu1",
+            download_status=DownloadStatus.done,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.done,
         )
@@ -1308,24 +1489,29 @@ async def test_force_upgrade_emits_chapter_events_and_done(logged_in_client, mon
         await db.commit()
         # Re-load with source eagerly so it remains accessible after session closes
         result = await db.execute(
-            select(ChapterAssignment).where(ChapterAssignment.id == a.id)
+            select(ChapterAssignment)
+            .where(ChapterAssignment.id == a.id)
             .options(selectinload(ChapterAssignment.source))
         )
         assignment = result.scalar_one()
 
     now = datetime.now(timezone.utc)
-    mock_candidates = AsyncMock(return_value=[(
-        assignment,
-        source_high,
-        "m-fu1",
-        {
-            "suwayomi_chapter_id": "ch-fu1-hi",
-            "chapter_published_at": now,
-            "volume_number": None,
-            "source_chapter_name": "Chapter 1",
-            "source_manga_title": "Force Upgrade Comic",
-        },
-    )])
+    mock_candidates = AsyncMock(
+        return_value=[
+            (
+                assignment,
+                source_high,
+                "m-fu1",
+                {
+                    "suwayomi_chapter_id": "ch-fu1-hi",
+                    "chapter_published_at": now,
+                    "volume_number": None,
+                    "source_chapter_name": "Chapter 1",
+                    "source_manga_title": "Force Upgrade Comic",
+                },
+            )
+        ]
+    )
     monkeypatch.setattr(source_selector, "find_upgrade_candidates", mock_candidates)
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
@@ -1344,15 +1530,21 @@ async def test_force_upgrade_emits_chapter_events_and_done(logged_in_client, mon
 
 
 @pytest.mark.asyncio
-async def test_force_upgrade_no_candidates_emits_done_zero(logged_in_client, monkeypatch):
+async def test_force_upgrade_no_candidates_emits_done_zero(
+    logged_in_client, monkeypatch
+):
     """When no better source is found, done event has queued=0 and no chapter events."""
     from app.services import source_selector, suwayomi
 
-    source = await _add_source(name="Only Source", suwayomi_source_id="src-fu-only", priority=1)
+    source = await _add_source(
+        name="Only Source", suwayomi_source_id="src-fu-only", priority=1
+    )
     comic = await _add_comic(title="Force Upgrade No Candidates")
     await _add_assignment(comic.id, source.id)
 
-    monkeypatch.setattr(source_selector, "find_upgrade_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        source_selector, "find_upgrade_candidates", AsyncMock(return_value=[])
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post(f"/api/requests/{comic.id}/force-upgrade")
@@ -1363,7 +1555,9 @@ async def test_force_upgrade_no_candidates_emits_done_zero(logged_in_client, mon
 
 
 @pytest.mark.asyncio
-async def test_force_upgrade_error_when_suwayomi_unreachable(logged_in_client, monkeypatch):
+async def test_force_upgrade_error_when_suwayomi_unreachable(
+    logged_in_client, monkeypatch
+):
     """If find_upgrade_candidates raises (Suwayomi down), emits an error event."""
     import httpx
     from app.services import source_selector
@@ -1402,7 +1596,9 @@ async def test_force_upgrade_chapter_404_unknown_comic(logged_in_client):
 @pytest.mark.asyncio
 async def test_force_upgrade_chapter_404_unknown_assignment(logged_in_client):
     comic = await _add_comic(title="Force Upgrade Chapter 404")
-    r = await logged_in_client.post(f"/api/requests/{comic.id}/chapters/99999/force-upgrade")
+    r = await logged_in_client.post(
+        f"/api/requests/{comic.id}/chapters/99999/force-upgrade"
+    )
     assert r.status_code == 200
     events = _parse_sse(r.text)
     assert any(e.get("type") == "error" for e in events)
@@ -1421,39 +1617,52 @@ async def test_force_upgrade_chapter_queues_upgrade(logged_in_client, monkeypatc
     from app.services import source_selector, suwayomi
     from sqlalchemy.orm import selectinload
 
-    source_low = await _add_source(name="Low", suwayomi_source_id="src-fuc-lo", priority=2)
-    source_high = await _add_source(name="High", suwayomi_source_id="src-fuc-hi", priority=1)
+    source_low = await _add_source(
+        name="Low", suwayomi_source_id="src-fuc-lo", priority=2
+    )
+    source_high = await _add_source(
+        name="High", suwayomi_source_id="src-fuc-hi", priority=1
+    )
     comic = await _add_comic(title="Force Upgrade Chapter Comic")
 
     async with database.AsyncSessionLocal() as db:
         a = ChapterAssignment(
-            comic_id=comic.id, chapter_number=2.0, source_id=source_low.id,
-            suwayomi_manga_id="m-fuc1", suwayomi_chapter_id="ch-fuc1",
-            download_status=DownloadStatus.done, is_active=True,
+            comic_id=comic.id,
+            chapter_number=2.0,
+            source_id=source_low.id,
+            suwayomi_manga_id="m-fuc1",
+            suwayomi_chapter_id="ch-fuc1",
+            download_status=DownloadStatus.done,
+            is_active=True,
             chapter_published_at=datetime.now(timezone.utc),
             relocation_status=RelocationStatus.done,
         )
         db.add(a)
         await db.commit()
         result = await db.execute(
-            select(ChapterAssignment).where(ChapterAssignment.id == a.id)
+            select(ChapterAssignment)
+            .where(ChapterAssignment.id == a.id)
             .options(selectinload(ChapterAssignment.source))
         )
         assignment = result.scalar_one()
 
     now = datetime.now(timezone.utc)
-    mock_candidates = AsyncMock(return_value=[(
-        assignment,
-        source_high,
-        "m-fuc1",
-        {
-            "suwayomi_chapter_id": "ch-fuc1-hi",
-            "chapter_published_at": now,
-            "volume_number": None,
-            "source_chapter_name": "Chapter 2",
-            "source_manga_title": "Force Upgrade Chapter Comic",
-        },
-    )])
+    mock_candidates = AsyncMock(
+        return_value=[
+            (
+                assignment,
+                source_high,
+                "m-fuc1",
+                {
+                    "suwayomi_chapter_id": "ch-fuc1-hi",
+                    "chapter_published_at": now,
+                    "volume_number": None,
+                    "source_chapter_name": "Chapter 2",
+                    "source_manga_title": "Force Upgrade Chapter Comic",
+                },
+            )
+        ]
+    )
     monkeypatch.setattr(source_selector, "find_upgrade_candidates", mock_candidates)
     mock_enqueue = AsyncMock()
     monkeypatch.setattr(suwayomi, "enqueue_downloads", mock_enqueue)
@@ -1472,15 +1681,21 @@ async def test_force_upgrade_chapter_queues_upgrade(logged_in_client, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_force_upgrade_chapter_no_candidate_done_zero(logged_in_client, monkeypatch):
+async def test_force_upgrade_chapter_no_candidate_done_zero(
+    logged_in_client, monkeypatch
+):
     """When this chapter has no upgrade candidate, done has queued=0."""
     from app.services import source_selector, suwayomi
 
-    source = await _add_source(name="Only", suwayomi_source_id="src-fuc-only", priority=1)
+    source = await _add_source(
+        name="Only", suwayomi_source_id="src-fuc-only", priority=1
+    )
     comic = await _add_comic(title="Force Upgrade Chapter No Candidate")
     assignment = await _add_assignment(comic.id, source.id, chapter_number=3.0)
 
-    monkeypatch.setattr(source_selector, "find_upgrade_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        source_selector, "find_upgrade_candidates", AsyncMock(return_value=[])
+    )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
     r = await logged_in_client.post(
@@ -1583,9 +1798,15 @@ async def test_list_requests_source_filter(logged_in_client):
 @pytest.mark.asyncio
 async def test_list_requests_sort_library_title_strips_articles(logged_in_client):
     """sort_by=library_title ignores leading 'A'/'An'/'The' when ordering."""
-    await _add_comic(title="The Zebra Comic Article", library_title="The Zebra Comic Article")
-    await _add_comic(title="An Apple Comic Article", library_title="An Apple Comic Article")
-    await _add_comic(title="A Flame Comic Article", library_title="A Flame Comic Article")
+    await _add_comic(
+        title="The Zebra Comic Article", library_title="The Zebra Comic Article"
+    )
+    await _add_comic(
+        title="An Apple Comic Article", library_title="An Apple Comic Article"
+    )
+    await _add_comic(
+        title="A Flame Comic Article", library_title="A Flame Comic Article"
+    )
     await _add_comic(title="Mango Comic Article", library_title="Mango Comic Article")
 
     r = await logged_in_client.get(
@@ -1594,7 +1815,9 @@ async def test_list_requests_sort_library_title_strips_articles(logged_in_client
     assert r.status_code == 200
     titles = [c["library_title"] for c in r.json()["items"]]
     # Strip articles for expected order: Apple, Flame, Mango, Zebra
-    assert titles.index("An Apple Comic Article") < titles.index("A Flame Comic Article")
+    assert titles.index("An Apple Comic Article") < titles.index(
+        "A Flame Comic Article"
+    )
     assert titles.index("A Flame Comic Article") < titles.index("Mango Comic Article")
     assert titles.index("Mango Comic Article") < titles.index("The Zebra Comic Article")
 
@@ -1606,12 +1829,16 @@ async def test_list_requests_sort(logged_in_client):
     await _add_comic(title="Apple Comic Sort")
     await _add_comic(title="Mango Comic Sort")
 
-    r = await logged_in_client.get("/api/requests?sort_by=title&sort_dir=asc&per_page=100")
+    r = await logged_in_client.get(
+        "/api/requests?sort_by=title&sort_dir=asc&per_page=100"
+    )
     assert r.status_code == 200
     titles = [c["title"] for c in r.json()["items"]]
     assert titles == sorted(titles)
 
-    r2 = await logged_in_client.get("/api/requests?sort_by=title&sort_dir=desc&per_page=100")
+    r2 = await logged_in_client.get(
+        "/api/requests?sort_by=title&sort_dir=desc&per_page=100"
+    )
     assert r2.status_code == 200
     titles2 = [c["title"] for c in r2.json()["items"]]
     assert titles2 == sorted(titles2, reverse=True)
@@ -1625,7 +1852,9 @@ async def test_list_chapters_pagination(logged_in_client):
     for i in range(1, 8):
         await _add_assignment(comic.id, source.id, chapter_number=float(i))
 
-    r = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?page=1&per_page=3")
+    r = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?page=1&per_page=3"
+    )
     assert r.status_code == 200
     data = r.json()
     assert data["total"] == 7
@@ -1634,7 +1863,9 @@ async def test_list_chapters_pagination(logged_in_client):
     assert len(data["items"]) == 3
     assert data["items"][0]["chapter_number"] == 1.0
 
-    r2 = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?page=3&per_page=3")
+    r2 = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?page=3&per_page=3"
+    )
     assert r2.status_code == 200
     data2 = r2.json()
     assert len(data2["items"]) == 1
@@ -1649,49 +1880,220 @@ async def test_list_chapters_status_filter(logged_in_client):
 
     # available: download done + relocation done
     await _add_assignment(
-        comic.id, source.id, chapter_number=1.0,
+        comic.id,
+        source.id,
+        chapter_number=1.0,
         download_status=DownloadStatus.done,
         relocation_status=RelocationStatus.done,
         library_path="/lib/ch1.cbz",
     )
     # queued
     await _add_assignment(
-        comic.id, source.id, chapter_number=2.0,
+        comic.id,
+        source.id,
+        chapter_number=2.0,
         download_status=DownloadStatus.queued,
         relocation_status=RelocationStatus.pending,
     )
     # relocating: download done but relocation pending
     await _add_assignment(
-        comic.id, source.id, chapter_number=3.0,
+        comic.id,
+        source.id,
+        chapter_number=3.0,
         download_status=DownloadStatus.done,
         relocation_status=RelocationStatus.pending,
     )
     # failed download
     await _add_assignment(
-        comic.id, source.id, chapter_number=4.0,
+        comic.id,
+        source.id,
+        chapter_number=4.0,
         download_status=DownloadStatus.failed,
         relocation_status=RelocationStatus.pending,
     )
 
-    r_avail = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=available")
+    r_avail = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?status=available"
+    )
     assert r_avail.status_code == 200
     assert r_avail.json()["total"] == 1
     assert r_avail.json()["items"][0]["chapter_number"] == 1.0
 
-    r_queued = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=queued")
+    r_queued = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?status=queued"
+    )
     assert r_queued.status_code == 200
     assert r_queued.json()["total"] == 1
     assert r_queued.json()["items"][0]["chapter_number"] == 2.0
 
-    r_reloc = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=relocating")
+    r_reloc = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?status=relocating"
+    )
     assert r_reloc.status_code == 200
     assert r_reloc.json()["total"] == 1
     assert r_reloc.json()["items"][0]["chapter_number"] == 3.0
 
-    r_failed = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=failed")
+    r_failed = await logged_in_client.get(
+        f"/api/requests/{comic.id}/chapters?status=failed"
+    )
     assert r_failed.status_code == 200
     assert r_failed.json()["total"] == 1
     assert r_failed.json()["items"][0]["chapter_number"] == 4.0
 
     r_all = await logged_in_client.get(f"/api/requests/{comic.id}/chapters")
     assert r_all.json()["total"] == 4
+
+
+# ---------------------------------------------------------------------------
+# is_active filtering tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_hides_inactive_assignments(logged_in_client):
+    """Default GET /{id}/chapters should hide is_active=False assignments."""
+    source = await _add_source(name="Active Filter Source", suwayomi_source_id="src-af")
+    comic = await _add_comic(title="Active Filter Comic")
+
+    # Active assignment for chapter 1
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        is_active=True,
+    )
+    # Inactive (superseded) assignment for chapter 1
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        is_active=False,
+    )
+    # Active assignment for chapter 2
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=2.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        is_active=True,
+    )
+
+    r = await logged_in_client.get(f"/api/requests/{comic.id}/chapters")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 2
+    chapter_numbers = [item["chapter_number"] for item in data["items"]]
+    assert chapter_numbers == [1.0, 2.0]
+    # Chapter 1 should only show the active assignment
+    ch1_items = [item for item in data["items"] if item["chapter_number"] == 1.0]
+    assert len(ch1_items) == 1
+    assert ch1_items[0]["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_shows_best_failed_assignment(logged_in_client):
+    """When all assignments for a chapter are failed, show the best one."""
+    # Two sources with different priorities (lower number = higher priority)
+    high_source = await _add_source(
+        name="High Priority", suwayomi_source_id="src-high", priority=1
+    )
+    low_source = await _add_source(
+        name="Low Priority", suwayomi_source_id="src-low", priority=10
+    )
+    comic = await _add_comic(title="All Failed Comic")
+
+    # Both assignments for chapter 1 are failed and inactive
+    await _add_assignment(
+        comic.id,
+        high_source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.failed,
+        relocation_status=RelocationStatus.pending,
+        is_active=False,
+    )
+    await _add_assignment(
+        comic.id,
+        low_source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.failed,
+        relocation_status=RelocationStatus.pending,
+        is_active=False,
+    )
+
+    r = await logged_in_client.get(f"/api/requests/{comic.id}/chapters")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    # Should show the high-priority source's assignment
+    assert data["items"][0]["source_name"] == "High Priority"
+    assert data["items"][0]["download_status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_get_request_hides_inactive_assignments(logged_in_client):
+    """GET /{comic_id} should hide is_active=False assignments."""
+    source = await _add_source(
+        name="Detail Active Source", suwayomi_source_id="src-das"
+    )
+    comic = await _add_comic(title="Detail Active Comic")
+
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        is_active=True,
+    )
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.done,
+        relocation_status=RelocationStatus.done,
+        is_active=False,
+    )
+
+    r = await logged_in_client.get(f"/api/requests/{comic.id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["chapters"]) == 1
+    assert data["chapters"][0]["chapter_number"] == 1.0
+    assert data["chapters"][0]["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_status_filter_respects_is_active(logged_in_client):
+    """status=failed should not show superseded (inactive) failed assignments."""
+    source = await _add_source(name="Status Filter Source", suwayomi_source_id="src-sf")
+    comic = await _add_comic(title="Status Active Comic")
+
+    # Active failed assignment for chapter 1
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=1.0,
+        download_status=DownloadStatus.failed,
+        relocation_status=RelocationStatus.pending,
+        is_active=True,
+    )
+    # Inactive failed assignment for chapter 2 (superseded)
+    await _add_assignment(
+        comic.id,
+        source.id,
+        chapter_number=2.0,
+        download_status=DownloadStatus.failed,
+        relocation_status=RelocationStatus.pending,
+        is_active=False,
+    )
+
+    r = await logged_in_client.get(f"/api/requests/{comic.id}/chapters?status=failed")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    assert data["items"][0]["chapter_number"] == 1.0

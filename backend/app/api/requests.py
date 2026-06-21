@@ -185,6 +185,68 @@ def _chapter_summary(a: ChapterAssignment) -> ChapterSummary:
     )
 
 
+async def _get_deduplicated_assignments(
+    comic_id: int, db: AsyncSession
+) -> list[ChapterAssignment]:
+    """Return active assignments, with fallback to best candidate for all-failed chapters.
+
+    Phase 1: Load all is_active=True assignments.
+    Phase 2: Find chapter_numbers NOT covered by Phase 1.
+    Phase 3: For uncovered chapters, pick the best candidate per chapter_number
+             (highest priority source, then most recent assignment).
+    """
+    # Phase 1: Active assignments
+    active_result = await db.execute(
+        select(ChapterAssignment)
+        .where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(True),
+        )
+        .options(selectinload(ChapterAssignment.source))
+    )
+    active_assignments = active_result.scalars().all()
+    active_chapter_numbers = {a.chapter_number for a in active_assignments}
+
+    # Phase 2: Find uncovered chapter numbers (only among inactive rows)
+    uncovered_result = await db.execute(
+        select(ChapterAssignment.chapter_number)
+        .where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(False),
+        )
+        .distinct()
+    )
+    all_inactive_chapters = {row[0] for row in uncovered_result.all()}
+    uncovered_chapters = all_inactive_chapters - active_chapter_numbers
+
+    if not uncovered_chapters:
+        return sorted(active_assignments, key=lambda a: a.chapter_number)
+
+    # Phase 3: Best candidate per uncovered chapter
+    # Join with Source to order by priority, then by assignment id DESC for recency
+    fallback_result = await db.execute(
+        select(ChapterAssignment)
+        .join(Source, Source.id == ChapterAssignment.source_id)
+        .where(
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(False),
+            ChapterAssignment.chapter_number.in_(uncovered_chapters),
+        )
+        .order_by(Source.priority.asc(), ChapterAssignment.id.desc())
+        .options(selectinload(ChapterAssignment.source))
+    )
+    fallback_assignments = fallback_result.scalars().all()
+
+    # Pick only the first (best) per chapter_number
+    best_per_chapter: dict[float, ChapterAssignment] = {}
+    for a in fallback_assignments:
+        if a.chapter_number not in best_per_chapter:
+            best_per_chapter[a.chapter_number] = a
+
+    combined = list(active_assignments) + list(best_per_chapter.values())
+    return sorted(combined, key=lambda a: a.chapter_number)
+
+
 async def _create_assignments_and_enqueue(
     comic_id: int,
     chapter_map: dict,
@@ -461,13 +523,7 @@ async def get_request(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    assignments_result = await db.execute(
-        select(ChapterAssignment)
-        .where(ChapterAssignment.comic_id == comic_id)
-        .options(selectinload(ChapterAssignment.source))
-        .order_by(ChapterAssignment.chapter_number)
-    )
-    assignments = assignments_result.scalars().all()
+    assignments = await _get_deduplicated_assignments(comic_id, db)
 
     return ComicDetail(
         **ComicResponse.model_validate(comic).model_dump(),
@@ -858,51 +914,67 @@ async def list_chapters(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    base_filters = [ChapterAssignment.comic_id == comic_id]
+    if status is None:
+        # Default path: deduplicated active + fallback
+        assignments = await _get_deduplicated_assignments(comic_id, db)
+        total = len(assignments)
+        # Apply pagination in Python since we already loaded all
+        start = (page - 1) * per_page
+        assignments = assignments[start : start + per_page]
+    else:
+        # Explicit status filter: add is_active=True to avoid showing superseded rows
+        base_filters = [
+            ChapterAssignment.comic_id == comic_id,
+            ChapterAssignment.is_active.is_(True),
+        ]
 
-    if status == "available":
-        base_filters.append(
-            ChapterAssignment.relocation_status == RelocationStatus.done
-        )
-    elif status == "queued":
-        base_filters.append(ChapterAssignment.download_status == DownloadStatus.queued)
-    elif status == "downloading":
-        base_filters.append(
-            ChapterAssignment.download_status == DownloadStatus.downloading
-        )
-    elif status == "relocating":
-        base_filters.append(ChapterAssignment.download_status == DownloadStatus.done)
-        base_filters.append(
-            ChapterAssignment.relocation_status != RelocationStatus.done
-        )
-    elif status == "failed":
-        from sqlalchemy import or_
-
-        base_filters.append(
-            or_(
-                ChapterAssignment.download_status == DownloadStatus.failed,
-                ChapterAssignment.relocation_status == RelocationStatus.failed,
+        if status == "available":
+            base_filters.append(
+                ChapterAssignment.relocation_status == RelocationStatus.done
             )
-        )
-
-    total: int = (
-        await db.execute(select(func.count()).where(*base_filters))
-    ).scalar_one()
-
-    assignments = (
-        (
-            await db.execute(
-                select(ChapterAssignment)
-                .where(*base_filters)
-                .order_by(ChapterAssignment.chapter_number)
-                .offset((page - 1) * per_page)
-                .limit(per_page)
-                .options(selectinload(ChapterAssignment.source))
+        elif status == "queued":
+            base_filters.append(
+                ChapterAssignment.download_status == DownloadStatus.queued
             )
+        elif status == "downloading":
+            base_filters.append(
+                ChapterAssignment.download_status == DownloadStatus.downloading
+            )
+        elif status == "relocating":
+            base_filters.append(
+                ChapterAssignment.download_status == DownloadStatus.done
+            )
+            base_filters.append(
+                ChapterAssignment.relocation_status != RelocationStatus.done
+            )
+        elif status == "failed":
+            from sqlalchemy import or_
+
+            base_filters.append(
+                or_(
+                    ChapterAssignment.download_status == DownloadStatus.failed,
+                    ChapterAssignment.relocation_status == RelocationStatus.failed,
+                )
+            )
+
+        total: int = (
+            await db.execute(select(func.count()).where(*base_filters))
+        ).scalar_one()
+
+        assignments = (
+            (
+                await db.execute(
+                    select(ChapterAssignment)
+                    .where(*base_filters)
+                    .order_by(ChapterAssignment.chapter_number)
+                    .offset((page - 1) * per_page)
+                    .limit(per_page)
+                    .options(selectinload(ChapterAssignment.source))
+                )
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
 
     return ChapterPage(
         items=[_chapter_summary(a) for a in assignments],

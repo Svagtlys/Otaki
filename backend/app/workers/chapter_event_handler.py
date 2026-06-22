@@ -73,12 +73,14 @@ async def handle(
         # Check whether this is an upgrade download (an active assignment already
         # exists for the same comic + chapter from a prior, lower-priority source).
         existing_active = await db.scalar(
-            select(ChapterAssignment).where(
+            select(ChapterAssignment)
+            .where(
                 ChapterAssignment.comic_id == assignment.comic_id,
                 ChapterAssignment.chapter_number == assignment.chapter_number,
                 ChapterAssignment.is_active.is_(True),
                 ChapterAssignment.id != assignment.id,
             )
+            .options(selectinload(ChapterAssignment.source))
         )
 
         try:
@@ -94,20 +96,50 @@ async def handle(
                 )
                 assignment.is_active = True
             else:
-                # Upgrade download — always swap for 1.0 (no quality condition until
-                # quality_scanner is added in 1.4; a higher-priority source is
-                # unconditionally better).
-                await file_relocator.replace_in_library(
-                    existing_active,
-                    assignment,
-                    comic,
-                    db,
-                    chapter_name=chapter_name,
-                    manga_title=manga_title,
-                    source_display_name=source_display_name,
+                # Upgrade download — priority-aware swap decision.
+                # A working download from ANY source beats a failed one.
+                existing_failed = (
+                    existing_active.download_status == DownloadStatus.failed
+                    or existing_active.relocation_status == RelocationStatus.failed
                 )
-                existing_active.is_active = False
-                assignment.is_active = True
+
+                if existing_failed:
+                    # Existing is broken — any working download wins.
+                    should_swap = True
+                else:
+                    # Compare effective priorities (lower number = higher priority).
+                    from ..services import source_selector
+
+                    incoming_priority = await source_selector.effective_priority(
+                        assignment.source, comic, db
+                    )
+                    existing_priority = await source_selector.effective_priority(
+                        existing_active.source, comic, db
+                    )
+                    # Swap only if incoming is strictly better (lower priority number).
+                    should_swap = incoming_priority < existing_priority
+
+                if should_swap:
+                    await file_relocator.replace_in_library(
+                        existing_active,
+                        assignment,
+                        comic,
+                        db,
+                        chapter_name=chapter_name,
+                        manga_title=manga_title,
+                        source_display_name=source_display_name,
+                    )
+                    existing_active.is_active = False
+                    assignment.is_active = True
+                else:
+                    # Lower-priority source completed — mark done but keep inactive.
+                    logger.info(
+                        "handle: incoming from lower-priority source (priority=%d vs %d) "
+                        "— marking done but keeping existing active",
+                        assignment.source.priority,
+                        existing_active.source.priority,
+                    )
+                    assignment.is_active = False
         except Exception:
             logger.exception(
                 "handle: relocation raised for chapter_id=%s comic=%r chapter=%s — "

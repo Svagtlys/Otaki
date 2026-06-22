@@ -104,7 +104,9 @@ async def _seed_comic(session_factory) -> tuple[Comic, Source]:
         return comic.id, source.id
 
 
-def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_number=1.0, retry_count=0):
+def _make_assignment(
+    comic_id, source_id, *, chapter_id, is_active, chapter_number=1.0, retry_count=0
+):
     return ChapterAssignment(
         comic_id=comic_id,
         chapter_number=chapter_number,
@@ -127,7 +129,9 @@ def _make_assignment(comic_id, source_id, *, chapter_id, is_active, chapter_numb
 @pytest.mark.asyncio
 async def test_handle_unknown_chapter_id(handler_db, mock_relocator):
     """handle() logs a warning and returns without error for an unknown chapter ID."""
-    await chapter_event_handler.handle("FINISHED", "does-not-exist", "Chapter 1", "Unknown Manga", "TestSrc")
+    await chapter_event_handler.handle(
+        "FINISHED", "does-not-exist", "Chapter 1", "Unknown Manga", "TestSrc"
+    )
 
     mock_relocator.relocate.assert_not_called()
     mock_relocator.replace_in_library.assert_not_called()
@@ -144,7 +148,9 @@ async def test_handle_duplicate_finished_ignored(handler_db, mock_relocator):
         db.add(a)
         await db.commit()
 
-    await chapter_event_handler.handle("FINISHED", "ch-dup", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-dup", "Chapter 1", "Test Comic", "TestSrc"
+    )
 
     mock_relocator.relocate.assert_not_called()
     mock_relocator.replace_in_library.assert_not_called()
@@ -163,7 +169,9 @@ async def test_handle_regular_download(handler_db, mock_relocator):
         await db.commit()
         assignment_id = assignment.id
 
-    await chapter_event_handler.handle("FINISHED", "ch-1", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-1", "Chapter 1", "Test Comic", "TestSrc"
+    )
 
     mock_relocator.relocate.assert_awaited_once()
     mock_relocator.replace_in_library.assert_not_called()
@@ -178,18 +186,65 @@ async def test_handle_regular_download(handler_db, mock_relocator):
 @pytest.mark.asyncio
 async def test_handle_upgrade_download(handler_db, mock_relocator):
     """Upgrade download: replace_in_library() called, old deactivated, new activated."""
-    comic_id, source_id = await _seed_comic(handler_db)
-
     async with handler_db() as db:
-        old = _make_assignment(comic_id, source_id, chapter_id="ch-old", is_active=True)
-        new = _make_assignment(
-            comic_id, source_id, chapter_id="ch-new", is_active=False
+        # Old assignment from lower-priority source
+        old_source = Source(
+            suwayomi_source_id="src-old-upgrade",
+            name="Old Source",
+            priority=10,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(old_source)
+        # New assignment from higher-priority source
+        new_source = Source(
+            suwayomi_source_id="src-new-upgrade",
+            name="New Source",
+            priority=1,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(new_source)
+        await db.flush()
+
+        comic = Comic(
+            title="Upgrade Test Comic",
+            library_title="Upgrade Test Comic",
+            status=ComicStatus.tracking,
+            created_at=datetime.now(UTC),
+        )
+        db.add(comic)
+        await db.flush()
+
+        old = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=old_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-old",
+            download_status=DownloadStatus.done,
+            is_active=True,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.done,
+        )
+        new = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=new_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-new",
+            download_status=DownloadStatus.downloading,
+            is_active=False,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.pending,
         )
         db.add_all([old, new])
         await db.commit()
         old_id, new_id = old.id, new.id
 
-    await chapter_event_handler.handle("FINISHED", "ch-new", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-new", "Chapter 1", "Upgrade Test Comic", "New Source"
+    )
 
     mock_relocator.replace_in_library.assert_awaited_once()
     mock_relocator.relocate.assert_not_called()
@@ -205,28 +260,237 @@ async def test_handle_upgrade_download(handler_db, mock_relocator):
 
 @pytest.mark.asyncio
 async def test_handle_upgrade_always_swaps(handler_db, mock_relocator):
-    """For 1.0 (no quality scanner), upgrade always swaps regardless of source quality."""
-    comic_id, source_id = await _seed_comic(handler_db)
-
+    """Higher-priority source always swaps regardless of other factors."""
     async with handler_db() as db:
-        old = _make_assignment(
-            comic_id, source_id, chapter_id="ch-old-2", is_active=True
+        # Old assignment from lower-priority source
+        old_source = Source(
+            suwayomi_source_id="src-old-always",
+            name="Old Source Always",
+            priority=10,
+            enabled=True,
+            created_at=datetime.now(UTC),
         )
-        new = _make_assignment(
-            comic_id, source_id, chapter_id="ch-new-2", is_active=False
+        db.add(old_source)
+        # New assignment from higher-priority source
+        new_source = Source(
+            suwayomi_source_id="src-new-always",
+            name="New Source Always",
+            priority=1,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(new_source)
+        await db.flush()
+
+        comic = Comic(
+            title="Always Swap Comic",
+            library_title="Always Swap Comic",
+            status=ComicStatus.tracking,
+            created_at=datetime.now(UTC),
+        )
+        db.add(comic)
+        await db.flush()
+
+        old = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=old_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-old-2",
+            download_status=DownloadStatus.done,
+            is_active=True,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.done,
+        )
+        new = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=new_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-new-2",
+            download_status=DownloadStatus.downloading,
+            is_active=False,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.pending,
         )
         db.add_all([old, new])
         await db.commit()
         old_id, new_id = old.id, new.id
 
-    # No severity comparison in 1.0 — swap always happens.
-    await chapter_event_handler.handle("FINISHED", "ch-new-2", "Chapter 1", "Test Comic", "TestSrc")
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-new-2", "Chapter 1", "Always Swap Comic", "New Source Always"
+    )
 
     mock_relocator.replace_in_library.assert_awaited_once()
 
     async with handler_db() as db:
         assert (await db.get(ChapterAssignment, old_id)).is_active is False
         assert (await db.get(ChapterAssignment, new_id)).is_active is True
+
+
+# ---------------------------------------------------------------------------
+# Priority-aware upgrade swap tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_upgrade_lower_priority_no_swap(handler_db, mock_relocator):
+    """Incoming from lower-priority source should NOT swap out existing active."""
+    async with handler_db() as db:
+        # High priority source (lower number = higher priority)
+        high_source = Source(
+            suwayomi_source_id="src-high",
+            name="High Priority",
+            priority=1,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(high_source)
+        # Low priority source
+        low_source = Source(
+            suwayomi_source_id="src-low",
+            name="Low Priority",
+            priority=10,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(low_source)
+        await db.flush()
+
+        comic = Comic(
+            title="Priority Test Comic",
+            library_title="Priority Test Comic",
+            status=ComicStatus.tracking,
+            created_at=datetime.now(UTC),
+        )
+        db.add(comic)
+        await db.flush()
+
+        # Existing active from high-priority source
+        existing = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=high_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-high",
+            download_status=DownloadStatus.done,
+            is_active=True,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.done,
+        )
+        db.add(existing)
+
+        # Incoming from low-priority source
+        incoming = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=low_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-low",
+            download_status=DownloadStatus.downloading,
+            is_active=False,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(incoming)
+        await db.commit()
+        existing_id = existing.id
+        incoming_id = incoming.id
+
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-low", "Chapter 1", "Priority Test Comic", "Low Priority"
+    )
+
+    # replace_in_library should NOT be called
+    mock_relocator.replace_in_library.assert_not_called()
+    mock_relocator.relocate.assert_not_called()
+
+    async with handler_db() as db:
+        existing_row = await db.get(ChapterAssignment, existing_id)
+        incoming_row = await db.get(ChapterAssignment, incoming_id)
+        # High-priority source should remain active
+        assert existing_row.is_active is True
+        # Incoming should be marked done but NOT active
+        assert incoming_row.is_active is False
+        assert incoming_row.download_status == DownloadStatus.done
+
+
+@pytest.mark.asyncio
+async def test_handle_upgrade_existing_failed_always_swaps(handler_db, mock_relocator):
+    """Even lower-priority source should swap if existing active has failed."""
+    async with handler_db() as db:
+        # High priority source (lower number = higher priority)
+        high_source = Source(
+            suwayomi_source_id="src-high-2",
+            name="High Priority",
+            priority=1,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(high_source)
+        # Low priority source
+        low_source = Source(
+            suwayomi_source_id="src-low-2",
+            name="Low Priority",
+            priority=10,
+            enabled=True,
+            created_at=datetime.now(UTC),
+        )
+        db.add(low_source)
+        await db.flush()
+
+        comic = Comic(
+            title="Failed Swap Comic",
+            library_title="Failed Swap Comic",
+            status=ComicStatus.tracking,
+            created_at=datetime.now(UTC),
+        )
+        db.add(comic)
+        await db.flush()
+
+        # Existing active from high-priority source but DOWNLOAD FAILED
+        existing = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=high_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-high-fail",
+            download_status=DownloadStatus.failed,
+            is_active=True,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(existing)
+
+        # Incoming from low-priority source
+        incoming = ChapterAssignment(
+            comic_id=comic.id,
+            chapter_number=1.0,
+            source_id=low_source.id,
+            suwayomi_manga_id="manga-1",
+            suwayomi_chapter_id="ch-low-success",
+            download_status=DownloadStatus.downloading,
+            is_active=False,
+            chapter_published_at=datetime.now(UTC),
+            relocation_status=RelocationStatus.pending,
+        )
+        db.add(incoming)
+        await db.commit()
+        existing_id = existing.id
+        incoming_id = incoming.id
+
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-low-success", "Chapter 1", "Failed Swap Comic", "Low Priority"
+    )
+
+    # Should swap because existing is failed
+    mock_relocator.replace_in_library.assert_awaited_once()
+
+    async with handler_db() as db:
+        existing_row = await db.get(ChapterAssignment, existing_id)
+        incoming_row = await db.get(ChapterAssignment, incoming_id)
+        assert existing_row.is_active is False
+        assert incoming_row.is_active is True
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +501,16 @@ async def test_handle_upgrade_always_swaps(handler_db, mock_relocator):
 @pytest.mark.asyncio
 async def test_handle_error_unknown_chapter_id(handler_db, mock_scheduler_module):
     """ERROR event for unknown chapter ID logs a warning and does not schedule a job."""
-    await chapter_event_handler.handle("ERROR", "does-not-exist", "Ch 1", "Manga", "Src")
+    await chapter_event_handler.handle(
+        "ERROR", "does-not-exist", "Ch 1", "Manga", "Src"
+    )
     mock_scheduler_module.scheduler.add_job.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_handle_error_first_retry_schedules_job(handler_db, mock_scheduler_module, monkeypatch):
+async def test_handle_error_first_retry_schedules_job(
+    handler_db, mock_scheduler_module, monkeypatch
+):
     """First ERROR: retry_count→1, status=failed, job scheduled ~300s out."""
     monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
     comic_id, source_id = await _seed_comic(handler_db)
@@ -271,13 +539,17 @@ async def test_handle_error_first_retry_schedules_job(handler_db, mock_scheduler
 
 
 @pytest.mark.asyncio
-async def test_handle_error_second_retry_doubled_delay(handler_db, mock_scheduler_module, monkeypatch):
+async def test_handle_error_second_retry_doubled_delay(
+    handler_db, mock_scheduler_module, monkeypatch
+):
     """Second ERROR: retry_count→2, job scheduled ~600s out."""
     monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a = _make_assignment(comic_id, source_id, chapter_id="ch-err-2", is_active=True, retry_count=1)
+        a = _make_assignment(
+            comic_id, source_id, chapter_id="ch-err-2", is_active=True, retry_count=1
+        )
         a.download_status = DownloadStatus.failed
         db.add(a)
         await db.commit()
@@ -297,13 +569,17 @@ async def test_handle_error_second_retry_doubled_delay(handler_db, mock_schedule
 
 
 @pytest.mark.asyncio
-async def test_handle_error_exhausts_retries(handler_db, mock_scheduler_module, monkeypatch):
+async def test_handle_error_exhausts_retries(
+    handler_db, mock_scheduler_module, monkeypatch
+):
     """ERROR after MAX_DOWNLOAD_RETRIES: permanently failed, no job scheduled."""
     monkeypatch.setattr(chapter_event_handler.settings, "MAX_DOWNLOAD_RETRIES", 2)
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a = _make_assignment(comic_id, source_id, chapter_id="ch-err-3", is_active=True, retry_count=2)
+        a = _make_assignment(
+            comic_id, source_id, chapter_id="ch-err-3", is_active=True, retry_count=2
+        )
         a.download_status = DownloadStatus.failed
         db.add(a)
         await db.commit()
@@ -325,7 +601,9 @@ async def test_retry_download_reenqueues_chapter(handler_db, mock_suwayomi):
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-1", is_active=True)
+        a = _make_assignment(
+            comic_id, source_id, chapter_id="ch-retry-1", is_active=True
+        )
         a.download_status = DownloadStatus.failed
         db.add(a)
         await db.commit()
@@ -346,7 +624,9 @@ async def test_retry_download_skips_non_failed(handler_db, mock_suwayomi):
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-2", is_active=True)
+        a = _make_assignment(
+            comic_id, source_id, chapter_id="ch-retry-2", is_active=True
+        )
         a.download_status = DownloadStatus.done
         db.add(a)
         await db.commit()
@@ -364,7 +644,9 @@ async def test_retry_download_reverts_on_enqueue_failure(handler_db, mock_suwayo
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a = _make_assignment(comic_id, source_id, chapter_id="ch-retry-3", is_active=True)
+        a = _make_assignment(
+            comic_id, source_id, chapter_id="ch-retry-3", is_active=True
+        )
         a.download_status = DownloadStatus.failed
         db.add(a)
         await db.commit()
@@ -395,22 +677,42 @@ async def test_handle_concurrent_calls_do_not_raise(handler_db, mock_relocator):
     comic_id, source_id = await _seed_comic(handler_db)
 
     async with handler_db() as db:
-        a1 = _make_assignment(comic_id, source_id, chapter_id="ch-conc-1", is_active=False, chapter_number=1.0)
-        a2 = _make_assignment(comic_id, source_id, chapter_id="ch-conc-2", is_active=False, chapter_number=2.0)
+        a1 = _make_assignment(
+            comic_id,
+            source_id,
+            chapter_id="ch-conc-1",
+            is_active=False,
+            chapter_number=1.0,
+        )
+        a2 = _make_assignment(
+            comic_id,
+            source_id,
+            chapter_id="ch-conc-2",
+            is_active=False,
+            chapter_number=2.0,
+        )
         db.add_all([a1, a2])
         await db.commit()
 
     await asyncio.gather(
-        chapter_event_handler.handle("FINISHED", "ch-conc-1", "Ch 1", "Test Comic", "TestSource"),
-        chapter_event_handler.handle("FINISHED", "ch-conc-2", "Ch 2", "Test Comic", "TestSource"),
+        chapter_event_handler.handle(
+            "FINISHED", "ch-conc-1", "Ch 1", "Test Comic", "TestSource"
+        ),
+        chapter_event_handler.handle(
+            "FINISHED", "ch-conc-2", "Ch 2", "Test Comic", "TestSource"
+        ),
     )
 
     async with handler_db() as db:
         r1 = await db.scalar(
-            select(ChapterAssignment).where(ChapterAssignment.suwayomi_chapter_id == "ch-conc-1")
+            select(ChapterAssignment).where(
+                ChapterAssignment.suwayomi_chapter_id == "ch-conc-1"
+            )
         )
         r2 = await db.scalar(
-            select(ChapterAssignment).where(ChapterAssignment.suwayomi_chapter_id == "ch-conc-2")
+            select(ChapterAssignment).where(
+                ChapterAssignment.suwayomi_chapter_id == "ch-conc-2"
+            )
         )
 
     assert r1.download_status == DownloadStatus.done

@@ -1,12 +1,10 @@
 """Unit tests for services/comicinfo_writer.py"""
+
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from app.services import comicinfo_writer
-
 
 # ---------------------------------------------------------------------------
 # Helpers

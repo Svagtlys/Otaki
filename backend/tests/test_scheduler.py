@@ -6,16 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from app import database
 from app.models.chapter_assignment import ChapterAssignment, DownloadStatus
 from app.models.comic import Comic, ComicStatus
 from app.models.source import Source
 from app.services import suwayomi as suwayomi_module
 from app.workers import scheduler as scheduler_module
-
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # ---------------------------------------------------------------------------
 # Helpers

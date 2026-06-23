@@ -6,16 +6,15 @@ without depending on any not-yet-implemented routers.
 
 import pytest
 import pytest_asyncio
-from fastapi import Depends
-from fastapi.routing import APIRoute
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from app import database
 from app.api.auth import UserResponse, require_auth
 from app.config import settings
 from app.main import app
 from app.models.user import User
+from fastapi import Depends
+from fastapi.routing import APIRoute
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 @pytest_asyncio.fixture
@@ -28,6 +27,7 @@ async def auth_client(monkeypatch):
 
     async with test_engine.begin() as conn:
         from app import models  # noqa: F401
+
         await conn.run_sync(database.Base.metadata.create_all)
 
     # All settings populated → setup middleware passes for all routes

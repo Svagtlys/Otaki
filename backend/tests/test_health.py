@@ -3,11 +3,10 @@
 All tests are unit-style — no live Suwayomi required.
 """
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.workers import download_listener, scheduler as scheduler_module
-
+from app.workers import download_listener
+from app.workers import scheduler as scheduler_module
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,9 +73,12 @@ async def test_health_db_ok(auth_client):
 # ---------------------------------------------------------------------------
 
 
-async def test_health_suwayomi_unreachable_when_not_configured(auth_client, monkeypatch):
+async def test_health_suwayomi_unreachable_when_not_configured(
+    auth_client, monkeypatch
+):
     """When SUWAYOMI_URL is None, suwayomi status is 'unreachable'."""
     from app.config import settings
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", None)
 
     r = await auth_client.get("/api/health")
@@ -89,6 +91,7 @@ async def test_health_suwayomi_unreachable_sets_degraded(auth_client, monkeypatc
     """When Suwayomi ping fails (DB ok), overall status is degraded."""
     from app.config import settings
     from app.services import suwayomi
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
 
     async def _failing_ping(url, username, password):
@@ -104,7 +107,8 @@ async def test_health_suwayomi_unreachable_sets_degraded(auth_client, monkeypatc
 
 async def test_health_suwayomi_ok_populates_sources(auth_client, monkeypatch):
     """When Suwayomi is reachable, sources list is populated from DB."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from app import database
     from app.config import settings
     from app.models.source import Source
@@ -122,10 +126,15 @@ async def test_health_suwayomi_ok_populates_sources(auth_client, monkeypatch):
     monkeypatch.setattr(suwayomi, "list_sources", _list_sources)
 
     async with database.AsyncSessionLocal() as db:
-        db.add(Source(
-            suwayomi_source_id="src-1", name="Test Source",
-            priority=1, enabled=True, created_at=datetime.now(timezone.utc)
-        ))
+        db.add(
+            Source(
+                suwayomi_source_id="src-1",
+                name="Test Source",
+                priority=1,
+                enabled=True,
+                created_at=datetime.now(UTC),
+            )
+        )
         await db.commit()
 
     r = await auth_client.get("/api/health")
@@ -155,7 +164,7 @@ async def test_health_workers_down_when_not_started(auth_client, monkeypatch):
 
 async def test_health_workers_running_reports_uptime(auth_client, monkeypatch):
     """Workers report running=True and uptime_seconds when started_at is set."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monkeypatch.setattr(download_listener, "_started_at", now)
     monkeypatch.setattr(scheduler_module, "_started_at", now)
 
@@ -169,7 +178,6 @@ async def test_health_workers_running_reports_uptime(auth_client, monkeypatch):
 async def test_health_worker_down_sets_degraded(auth_client, monkeypatch):
     """If a worker is not running but DB is ok, overall status is degraded."""
     from app.config import settings
-    from app.services import suwayomi
 
     monkeypatch.setattr(download_listener, "_started_at", None)
     monkeypatch.setattr(scheduler_module, "_started_at", None)
@@ -201,7 +209,7 @@ async def test_health_all_ok_reports_healthy(auth_client, monkeypatch):
     monkeypatch.setattr(suwayomi, "ping", _ok_ping)
     monkeypatch.setattr(suwayomi, "list_sources", _list_sources)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monkeypatch.setattr(download_listener, "_started_at", now)
     monkeypatch.setattr(scheduler_module, "_started_at", now)
 

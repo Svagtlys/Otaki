@@ -3,9 +3,8 @@
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from app.config import Settings
+from pydantic import ValidationError
 
 
 class TestChapterFileNameRegexValidation:

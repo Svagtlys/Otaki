@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.source import Source
 from ..services import suwayomi
-from ..workers import download_listener, scheduler as scheduler_module
+from ..workers import download_listener
+from ..workers import scheduler as scheduler_module
 
 router = APIRouter(prefix="/health", tags=["health"])
 logger = logging.getLogger(f"otaki.{__name__}")
@@ -67,6 +68,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
 
     # --- Suwayomi ---
     from ..config import settings
+
     suwayomi_url = settings.SUWAYOMI_URL
     source_healths: list[SourceHealth] = []
     suwayomi_status = "unreachable"
@@ -90,11 +92,13 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
                 result = await db.execute(select(Source).order_by(Source.priority))
                 db_sources = result.scalars().all()
                 for src in db_sources:
-                    source_healths.append(SourceHealth(
-                        name=src.name,
-                        enabled=src.enabled,
-                        reachable=src.suwayomi_source_id in live_ids,
-                    ))
+                    source_healths.append(
+                        SourceHealth(
+                            name=src.name,
+                            enabled=src.enabled,
+                            reachable=src.suwayomi_source_id in live_ids,
+                        )
+                    )
             else:
                 suwayomi_status = "unreachable"
         except Exception as exc:

@@ -5,23 +5,23 @@ Integration tests require a configured Suwayomi instance via suwayomi_settings.
 """
 
 import json
+from datetime import UTC, datetime
 
 import pytest
-from datetime import datetime, timezone
-
 from app.models.source import Source
 
 
 async def _add_source(*, name="Test Source", suwayomi_source_id="src-1", priority=1):
     """Seed a source row directly via the DB session used by the app."""
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         source = Source(
             suwayomi_source_id=suwayomi_source_id,
             name=name,
             priority=priority,
             enabled=True,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(source)
         await db.commit()
@@ -55,6 +55,7 @@ async def test_search_returns_empty_when_no_sources(logged_in_client):
 async def test_search_skips_failed_source(logged_in_client, monkeypatch):
     """A source that throws populates source_errors and returns empty results for that source."""
     from app.services import suwayomi
+
     await _add_source()
 
     async def _failing_search(source_id, query):
@@ -75,6 +76,7 @@ async def test_search_timeout_populates_source_error(logged_in_client, monkeypat
     """A TimeoutException from a source maps to 'connection timed out' in source_errors."""
     import httpx
     from app.services import suwayomi
+
     await _add_source()
 
     async def _timeout_search(source_id, query):
@@ -91,10 +93,19 @@ async def test_search_timeout_populates_source_error(logged_in_client, monkeypat
 
 async def test_search_result_shape(logged_in_client, monkeypatch):
     from app.services import suwayomi
+
     await _add_source()
 
     async def _mock_search(source_id, query):
-        return [{"manga_id": "1", "title": "Test Manga", "cover_url": None, "synopsis": None, "url": "http://example.com"}]
+        return [
+            {
+                "manga_id": "1",
+                "title": "Test Manga",
+                "cover_url": None,
+                "synopsis": None,
+                "url": "http://example.com",
+            }
+        ]
 
     monkeypatch.setattr(suwayomi, "search_source", _mock_search)
 
@@ -113,59 +124,78 @@ async def test_search_result_shape(logged_in_client, monkeypatch):
 
 async def test_search_cover_urls(logged_in_client, monkeypatch):
     """cover_url is absolute Suwayomi URL; cover_display_url is the proxied URL."""
-    from app.services import suwayomi
     from app.config import settings
+    from app.services import suwayomi
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
     await _add_source()
 
     async def _mock_search(source_id, query):
-        return [{"manga_id": "1", "title": "Test Manga",
-                 "cover_url": "/api/v1/manga/1/thumbnail",
-                 "synopsis": None, "url": None}]
+        return [
+            {
+                "manga_id": "1",
+                "title": "Test Manga",
+                "cover_url": "/api/v1/manga/1/thumbnail",
+                "synopsis": None,
+                "url": None,
+            }
+        ]
 
     monkeypatch.setattr(suwayomi, "search_source", _mock_search)
 
     r = await logged_in_client.get("/api/search?q=test")
     assert r.status_code == 200
     result = r.json()["results"][0]
-    assert result["cover_url"] == "https://suwayomi.example.com/api/v1/manga/1/thumbnail"
+    assert (
+        result["cover_url"] == "https://suwayomi.example.com/api/v1/manga/1/thumbnail"
+    )
     assert result["cover_display_url"].startswith("/api/search/thumbnail?url=")
 
 
 async def test_thumbnail_proxy_no_auth_required(auth_client, monkeypatch):
     """Thumbnail proxy must be accessible without JWT (img tags can't send auth headers)."""
-    from app.config import settings
     import httpx
+    from app.config import settings
 
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
 
     class FakeClient:
-        def __init__(self, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
         async def get(self, url, **kw):
             class R:
                 status_code = 200
                 content = b"img"
                 headers = {"content-type": "image/jpeg"}
+
             return R()
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
-    r = await auth_client.get("/api/search/thumbnail?url=https://suwayomi.example.com/img.jpg")
+    r = await auth_client.get(
+        "/api/search/thumbnail?url=https://suwayomi.example.com/img.jpg"
+    )
     assert r.status_code == 200
 
 
 async def test_thumbnail_proxy_rejects_non_suwayomi_url(logged_in_client, monkeypatch):
     from app.config import settings
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
     r = await logged_in_client.get("/api/search/thumbnail?url=https://evil.com/img.jpg")
     assert r.status_code == 400
 
 
 async def test_thumbnail_proxy_fetches_from_suwayomi(logged_in_client, monkeypatch):
-    from app.config import settings
     import httpx
+    from app.config import settings
 
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
 
@@ -175,15 +205,25 @@ async def test_thumbnail_proxy_fetches_from_suwayomi(logged_in_client, monkeypat
         headers = {"content-type": "image/jpeg"}
 
     class FakeClient:
-        def __init__(self, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
-        async def get(self, url, **kw): return FakeResponse()
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def get(self, url, **kw):
+            return FakeResponse()
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
     import urllib.parse
-    url = urllib.parse.quote("https://suwayomi.example.com/api/v1/manga/1/thumbnail", safe="")
+
+    url = urllib.parse.quote(
+        "https://suwayomi.example.com/api/v1/manga/1/thumbnail", safe=""
+    )
     r = await logged_in_client.get(f"/api/search/thumbnail?url={url}")
     assert r.status_code == 200
     assert r.content == b"fake-thumbnail"
@@ -191,21 +231,28 @@ async def test_thumbnail_proxy_fetches_from_suwayomi(logged_in_client, monkeypat
 
 async def test_thumbnail_proxy_timeout_returns_504(logged_in_client, monkeypatch):
     """A timeout from Suwayomi returns 504, not 500."""
-    from app.config import settings
     import httpx
+    from app.config import settings
 
     monkeypatch.setattr(settings, "SUWAYOMI_URL", "https://suwayomi.example.com")
 
     class FakeClient:
-        def __init__(self, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
         async def get(self, url, **kw):
             raise httpx.TimeoutException("timed out")
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
     import urllib.parse
+
     url = urllib.parse.quote("https://suwayomi.example.com/img.jpg", safe="")
     r = await logged_in_client.get(f"/api/search/thumbnail?url={url}")
     assert r.status_code == 504
@@ -213,6 +260,7 @@ async def test_thumbnail_proxy_timeout_returns_504(logged_in_client, monkeypatch
 
 async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
     from app.services import suwayomi
+
     await _add_source(name="Source A", suwayomi_source_id="src-1", priority=1)
     await _add_source(name="Source B", suwayomi_source_id="src-2", priority=2)
 
@@ -220,7 +268,15 @@ async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
 
     async def _mock_search(source_id, query):
         called_with.append(source_id)
-        return [{"manga_id": source_id, "title": f"Result from {source_id}", "cover_url": None, "synopsis": None, "url": None}]
+        return [
+            {
+                "manga_id": source_id,
+                "title": f"Result from {source_id}",
+                "cover_url": None,
+                "synopsis": None,
+                "url": None,
+            }
+        ]
 
     monkeypatch.setattr(suwayomi, "search_source", _mock_search)
 
@@ -235,9 +291,16 @@ async def test_search_fans_out_to_all_sources(logged_in_client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_live_returns_list(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_returns_list(
+    suwayomi_credentials,
+    suwayomi_settings,
+    logged_in_client,
+    monkeypatch,
+    test_manga_title,
+):
     from app.config import settings
     from app.services.suwayomi import list_sources as _list_sources
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
@@ -256,9 +319,17 @@ async def test_search_live_returns_list(suwayomi_credentials, suwayomi_settings,
     assert isinstance(body["results"], list)
 
 
-async def test_search_live_result_has_required_fields(suwayomi_credentials, suwayomi_settings, logged_in_client, monkeypatch, test_manga_title):
+async def test_search_live_result_has_required_fields(
+    suwayomi_credentials,
+    suwayomi_settings,
+    logged_in_client,
+    monkeypatch,
+    test_manga_title,
+):
     from app.config import settings
-    from app.services.suwayomi import list_sources as _list_sources, search_source as _search_source
+    from app.services.suwayomi import list_sources as _list_sources
+    from app.services.suwayomi import search_source as _search_source
+
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
@@ -325,12 +396,20 @@ async def test_search_stream_rejects_empty_query(logged_in_client):
 async def test_search_stream_emits_per_source_events(logged_in_client, monkeypatch):
     """Two sources both succeed — two result events arrive, then [DONE]."""
     from app.services import suwayomi
+
     await _add_source(name="Source A", suwayomi_source_id="src-a", priority=1)
     await _add_source(name="Source B", suwayomi_source_id="src-b", priority=2)
 
     async def _mock_search(source_id, query):
-        return [{"manga_id": f"{source_id}-1", "title": f"Manga from {source_id}",
-                 "cover_url": None, "synopsis": None, "url": None}]
+        return [
+            {
+                "manga_id": f"{source_id}-1",
+                "title": f"Manga from {source_id}",
+                "cover_url": None,
+                "synopsis": None,
+                "url": None,
+            }
+        ]
 
     monkeypatch.setattr(suwayomi, "search_source", _mock_search)
 
@@ -350,16 +429,27 @@ async def test_search_stream_emits_per_source_events(logged_in_client, monkeypat
     assert events[-1] == "[DONE]"
 
 
-async def test_search_stream_emits_error_for_failed_source(logged_in_client, monkeypatch):
+async def test_search_stream_emits_error_for_failed_source(
+    logged_in_client, monkeypatch
+):
     """One source raises, other succeeds — error event for the bad source, result event for the good one, then [DONE]."""
     from app.services import suwayomi
+
     await _add_source(name="Good Source", suwayomi_source_id="src-good", priority=1)
     await _add_source(name="Bad Source", suwayomi_source_id="src-bad", priority=2)
 
     async def _mock_search(source_id, query):
         if source_id == "src-bad":
             raise Exception("source down")
-        return [{"manga_id": "1", "title": "Good Manga", "cover_url": None, "synopsis": None, "url": None}]
+        return [
+            {
+                "manga_id": "1",
+                "title": "Good Manga",
+                "cover_url": None,
+                "synopsis": None,
+                "url": None,
+            }
+        ]
 
     monkeypatch.setattr(suwayomi, "search_source", _mock_search)
 

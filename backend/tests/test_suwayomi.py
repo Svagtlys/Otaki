@@ -10,13 +10,12 @@ SUWAYOMI_URL is set in .env.test):
     - ping() returns True for a reachable instance
     - list_sources(), search_source(), fetch_chapters(), enqueue_downloads()
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-
 from app.services import suwayomi
-
 
 # ---------------------------------------------------------------------------
 # Unit tests — ping()
@@ -83,22 +82,34 @@ async def test_poll_downloads_returns_all_queue_items():
                 {
                     "state": "FINISHED",
                     "chapter": {"id": 1, "name": "Chapter 1"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "ERROR",
                     "chapter": {"id": 2, "name": "Chapter 2"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "DOWNLOADING",
                     "chapter": {"id": 3, "name": "Chapter 3"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "QUEUED",
                     "chapter": {"id": 4, "name": "Chapter 4"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
             ]
         }
@@ -142,7 +153,10 @@ async def test_poll_downloads_maps_fields_correctly():
                 {
                     "state": "DOWNLOADING",
                     "chapter": {"id": 42, "name": "Episode 7"},
-                    "manga": {"title": "My Manga", "source": {"displayName": "Webtoons EN"}},
+                    "manga": {
+                        "title": "My Manga",
+                        "source": {"displayName": "Webtoons EN"},
+                    },
                 },
             ]
         }

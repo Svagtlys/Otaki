@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from gql.transport.exceptions import TransportError
 
@@ -24,7 +24,7 @@ _started_at: datetime | None = None
 def get_status() -> dict:
     """Return running state and uptime for the health endpoint."""
     running = _started_at is not None
-    uptime = (datetime.now(timezone.utc) - _started_at).total_seconds() if running else None
+    uptime = (datetime.now(UTC) - _started_at).total_seconds() if running else None
     return {"running": running, "uptime_seconds": uptime}
 
 
@@ -210,7 +210,7 @@ async def run() -> None:
     _polled_items = {}
     _emitted_error_ids = set()
     _emitted_ids = {"FINISHED": set(), "ERROR": set()}
-    _started_at = datetime.now(timezone.utc)
+    _started_at = datetime.now(UTC)
 
     await _seed_poll()
     await reconcile_on_startup()

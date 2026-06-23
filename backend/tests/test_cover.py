@@ -1,9 +1,7 @@
+from datetime import UTC, datetime
+
 import pytest
-from pathlib import Path
-
 from app.models.comic import Comic, ComicStatus
-from datetime import datetime, timezone
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -17,7 +15,7 @@ async def _create_comic(session, cover_path: str | None = None) -> Comic:
         cover_path=cover_path,
         status=ComicStatus.tracking,
         poll_override_days=7,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     session.add(comic)
     await session.commit()
@@ -62,8 +60,8 @@ async def test_get_cover_returns_image(logged_in_client_with_session, tmp_path):
 
 @pytest.mark.asyncio
 async def test_save_from_url_downloads_and_saves(tmp_path, monkeypatch):
-    from app.services import cover_handler
     from app.config import settings
+    from app.services import cover_handler
 
     monkeypatch.setattr(settings, "COVERS_PATH", str(tmp_path))
 
@@ -75,7 +73,8 @@ async def test_save_from_url_downloads_and_saves(tmp_path, monkeypatch):
         content = b"fake-cover-bytes"
 
     class FakeClient:
-        def __init__(self, **kwargs): pass
+        def __init__(self, **kwargs):
+            pass
 
         async def __aenter__(self):
             return self
@@ -97,8 +96,8 @@ async def test_save_from_url_downloads_and_saves(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_save_from_url_skips_on_http_error(tmp_path, monkeypatch):
-    from app.services import cover_handler
     from app.config import settings
+    from app.services import cover_handler
 
     monkeypatch.setattr(settings, "COVERS_PATH", str(tmp_path))
 
@@ -110,7 +109,8 @@ async def test_save_from_url_skips_on_http_error(tmp_path, monkeypatch):
         content = b""
 
     class FakeClient:
-        def __init__(self, **kwargs): pass
+        def __init__(self, **kwargs):
+            pass
 
         async def __aenter__(self):
             return self

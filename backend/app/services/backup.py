@@ -9,18 +9,23 @@ export time), not DB surrogate keys.  This makes the file portable across
 instances where the same comic may have a different auto-increment id.
 """
 
+import contextlib
 import io
 import json
 import logging
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from ..models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from ..models.comic import Comic
 from ..models.comic_alias import ComicAlias
 from ..models.comic_source_override import ComicSourceOverride
@@ -37,9 +42,13 @@ BACKUP_VERSION = 1
 # ---------------------------------------------------------------------------
 
 
-async def build_backup_json(db: AsyncSession, include_all_assignments: bool = False) -> dict:
+async def build_backup_json(
+    db: AsyncSession, include_all_assignments: bool = False
+) -> dict:
     """Build the backup.json dict from the current DB state."""
-    sources = (await db.execute(select(Source).order_by(Source.priority))).scalars().all()
+    sources = (
+        (await db.execute(select(Source).order_by(Source.priority))).scalars().all()
+    )
     comics = (await db.execute(select(Comic).order_by(Comic.id))).scalars().all()
     aliases = (await db.execute(select(ComicAlias))).scalars().all()
     pins = (await db.execute(select(ComicSourcePin))).scalars().all()
@@ -75,17 +84,19 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
             p = Path(c.cover_path)
             if p.exists():
                 cover_file = f"covers/{comic_bid[c.id]}{p.suffix}"
-        comic_list.append({
-            "_id": comic_bid[c.id],
-            "title": c.title,
-            "library_title": c.library_title,
-            "status": c.status,
-            "poll_override_days": c.poll_override_days,
-            "upgrade_override_days": c.upgrade_override_days,
-            "inferred_cadence_days": c.inferred_cadence_days,
-            "created_at": _dt(c.created_at),
-            "cover_file": cover_file,
-        })
+        comic_list.append(
+            {
+                "_id": comic_bid[c.id],
+                "title": c.title,
+                "library_title": c.library_title,
+                "status": c.status,
+                "poll_override_days": c.poll_override_days,
+                "upgrade_override_days": c.upgrade_override_days,
+                "inferred_cadence_days": c.inferred_cadence_days,
+                "created_at": _dt(c.created_at),
+                "cover_file": cover_file,
+            }
+        )
 
     alias_list = [
         {"comic_id": comic_bid[a.comic_id], "title": a.title}
@@ -137,7 +148,7 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
 
     return {
         "version": BACKUP_VERSION,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "include_all_assignments": include_all_assignments,
         "sources": src_list,
         "comics": comic_list,
@@ -148,7 +159,9 @@ async def build_backup_json(db: AsyncSession, include_all_assignments: bool = Fa
     }
 
 
-async def build_backup_zip(db: AsyncSession, include_all_assignments: bool = False) -> bytes:
+async def build_backup_zip(
+    db: AsyncSession, include_all_assignments: bool = False
+) -> bytes:
     """Return zip archive bytes containing backup.json and covers/."""
     backup = await build_backup_json(db, include_all_assignments)
     comics = (await db.execute(select(Comic).order_by(Comic.id))).scalars().all()
@@ -183,23 +196,33 @@ async def build_backup_csv(db: AsyncSession) -> str:
 
     out = _io.StringIO()
     writer = csv.writer(out)
-    writer.writerow([
-        "comic_title", "library_title", "chapter_number", "volume_number",
-        "source_name", "download_status", "relocation_status",
-        "library_path", "chapter_published_at",
-    ])
+    writer.writerow(
+        [
+            "comic_title",
+            "library_title",
+            "chapter_number",
+            "volume_number",
+            "source_name",
+            "download_status",
+            "relocation_status",
+            "library_path",
+            "chapter_published_at",
+        ]
+    )
     for a, comic_title, library_title, source_name in assignments:
-        writer.writerow([
-            comic_title,
-            library_title,
-            a.chapter_number,
-            a.volume_number,
-            source_name,
-            a.download_status,
-            a.relocation_status,
-            a.library_path or "",
-            a.chapter_published_at.isoformat() if a.chapter_published_at else "",
-        ])
+        writer.writerow(
+            [
+                comic_title,
+                library_title,
+                a.chapter_number,
+                a.volume_number,
+                source_name,
+                a.download_status,
+                a.relocation_status,
+                a.library_path or "",
+                a.chapter_published_at.isoformat() if a.chapter_published_at else "",
+            ]
+        )
     return out.getvalue()
 
 
@@ -252,16 +275,20 @@ async def build_preview(backup: dict, db: AsyncSession) -> dict:
     source_conflicts = []
     for s in backup.get("sources", []):
         existing = existing_sources.get(s["suwayomi_source_id"])
-        if existing and (existing.priority != s["priority"] or existing.enabled != s["enabled"]):
-            source_conflicts.append({
-                "backup_id": s["_id"],
-                "suwayomi_source_id": s["suwayomi_source_id"],
-                "name": s["name"],
-                "import_priority": s["priority"],
-                "import_enabled": s["enabled"],
-                "existing_priority": existing.priority,
-                "existing_enabled": existing.enabled,
-            })
+        if existing and (
+            existing.priority != s["priority"] or existing.enabled != s["enabled"]
+        ):
+            source_conflicts.append(
+                {
+                    "backup_id": s["_id"],
+                    "suwayomi_source_id": s["suwayomi_source_id"],
+                    "name": s["name"],
+                    "import_priority": s["priority"],
+                    "import_enabled": s["enabled"],
+                    "existing_priority": existing.priority,
+                    "existing_enabled": existing.enabled,
+                }
+            )
 
     # Count per backup comic_id
     alias_counts: dict[int, int] = {}
@@ -291,15 +318,24 @@ async def build_preview(backup: dict, db: AsyncSession) -> dict:
             for m in matches:
                 conflict = dict(entry)
                 conflict["existing_id"] = m.id
-                conflict["existing_has_cover"] = bool(m.cover_path and Path(m.cover_path).exists())
+                conflict["existing_has_cover"] = bool(
+                    m.cover_path and Path(m.cover_path).exists()
+                )
                 comic_conflicts.append(conflict)
         else:
             new_comics.append(entry)
 
-    new_source_bids = {s["_id"] for s in backup.get("sources", [])
-                       if s["suwayomi_source_id"] not in existing_sources}
+    new_source_bids = {
+        s["_id"]
+        for s in backup.get("sources", [])
+        if s["suwayomi_source_id"] not in existing_sources
+    }
     new_sources = [
-        {"backup_id": s["_id"], "suwayomi_source_id": s["suwayomi_source_id"], "name": s["name"]}
+        {
+            "backup_id": s["_id"],
+            "suwayomi_source_id": s["suwayomi_source_id"],
+            "name": s["name"],
+        }
         for s in backup.get("sources", [])
         if s["_id"] in new_source_bids
     ]
@@ -338,10 +374,8 @@ async def apply_backup(
     """
     zf: zipfile.ZipFile | None = None
     if zip_data:
-        try:
+        with contextlib.suppress(zipfile.BadZipFile):
             zf = zipfile.ZipFile(io.BytesIO(zip_data))
-        except zipfile.BadZipFile:
-            pass
 
     src_res: dict[int, str] = {r["backup_id"]: r["action"] for r in source_resolutions}
     comic_res: dict[int, dict] = {r["backup_id"]: r for r in comic_resolutions}
@@ -378,7 +412,7 @@ async def apply_backup(
                 name=s["name"],
                 priority=s["priority"],
                 enabled=s["enabled"],
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
             db.add(new_src)
             await db.flush()
@@ -404,19 +438,23 @@ async def apply_backup(
             comic_db_id[bid] = target_id
             target = existing_comics_by_id.get(target_id)
             if target is None:
-                logger.warning("apply_backup: merge target_id=%d not found, skipping", target_id)
+                logger.warning(
+                    "apply_backup: merge target_id=%d not found, skipping", target_id
+                )
                 skipped += 1
                 continue
             # Cover
             if c.get("cover_file") and zf:
-                if res.get("replace_cover") or not (target.cover_path and Path(target.cover_path).exists()):
+                if res.get("replace_cover") or not (
+                    target.cover_path and Path(target.cover_path).exists()
+                ):
                     _restore_cover(zf, c["cover_file"], target_id, target)
                     if target.cover_path:
                         covers_restored += 1
 
         else:  # create
             title = res.get("title_override") or c["title"]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             new_comic = Comic(
                 title=title,
                 library_title=c.get("library_title") or title,
@@ -463,11 +501,13 @@ async def apply_backup(
             continue
         triple = (target_comic_id, target_source_id, p["suwayomi_manga_id"])
         if triple not in existing_pin_triples:
-            db.add(ComicSourcePin(
-                comic_id=target_comic_id,
-                source_id=target_source_id,
-                suwayomi_manga_id=p["suwayomi_manga_id"],
-            ))
+            db.add(
+                ComicSourcePin(
+                    comic_id=target_comic_id,
+                    source_id=target_source_id,
+                    suwayomi_manga_id=p["suwayomi_manga_id"],
+                )
+            )
 
     # --- Source overrides ---
     existing_override_pairs: set[tuple[int, int]] = {
@@ -480,18 +520,24 @@ async def apply_backup(
         if target_comic_id is None or target_source_id is None:
             continue
         if (target_comic_id, target_source_id) not in existing_override_pairs:
-            db.add(ComicSourceOverride(
-                comic_id=target_comic_id,
-                source_id=target_source_id,
-                priority_override=o["priority_override"],
-            ))
+            db.add(
+                ComicSourceOverride(
+                    comic_id=target_comic_id,
+                    source_id=target_source_id,
+                    priority_override=o["priority_override"],
+                )
+            )
 
     # --- Chapter assignments ---
     existing_chapter_ids: set[tuple[int, str]] = {
         (a.comic_id, a.suwayomi_chapter_id)
-        for a in (await db.execute(select(
-            ChapterAssignment.comic_id, ChapterAssignment.suwayomi_chapter_id
-        ))).all()
+        for a in (
+            await db.execute(
+                select(
+                    ChapterAssignment.comic_id, ChapterAssignment.suwayomi_chapter_id
+                )
+            )
+        ).all()
     }
     for ch in backup.get("chapter_assignments", []):
         target_comic_id = comic_db_id.get(ch["comic_id"])
@@ -511,23 +557,26 @@ async def apply_backup(
             except ValueError:
                 return None
 
-        db.add(ChapterAssignment(
-            comic_id=target_comic_id,
-            chapter_number=ch["chapter_number"],
-            volume_number=ch.get("volume_number"),
-            source_id=target_source_id,
-            suwayomi_manga_id=ch["suwayomi_manga_id"],
-            suwayomi_chapter_id=ch["suwayomi_chapter_id"],
-            download_status=ch.get("download_status", DownloadStatus.done),
-            is_active=ch.get("is_active", True),
-            chapter_published_at=_parse_dt(ch.get("chapter_published_at")) or datetime.now(timezone.utc),
-            downloaded_at=_parse_dt(ch.get("downloaded_at")),
-            library_path=ch.get("library_path"),
-            relocation_status=ch.get("relocation_status", RelocationStatus.done),
-            source_chapter_name=ch.get("source_chapter_name"),
-            source_manga_title=ch.get("source_manga_title"),
-            retry_count=ch.get("retry_count", 0),
-        ))
+        db.add(
+            ChapterAssignment(
+                comic_id=target_comic_id,
+                chapter_number=ch["chapter_number"],
+                volume_number=ch.get("volume_number"),
+                source_id=target_source_id,
+                suwayomi_manga_id=ch["suwayomi_manga_id"],
+                suwayomi_chapter_id=ch["suwayomi_chapter_id"],
+                download_status=ch.get("download_status", DownloadStatus.done),
+                is_active=ch.get("is_active", True),
+                chapter_published_at=_parse_dt(ch.get("chapter_published_at"))
+                or datetime.now(UTC),
+                downloaded_at=_parse_dt(ch.get("downloaded_at")),
+                library_path=ch.get("library_path"),
+                relocation_status=ch.get("relocation_status", RelocationStatus.done),
+                source_chapter_name=ch.get("source_chapter_name"),
+                source_manga_title=ch.get("source_manga_title"),
+                retry_count=ch.get("retry_count", 0),
+            )
+        )
         chapters_created += 1
 
     await db.commit()
@@ -543,7 +592,9 @@ async def apply_backup(
     }
 
 
-def _restore_cover(zf: zipfile.ZipFile, cover_file: str, comic_id: int, comic: Comic) -> None:
+def _restore_cover(
+    zf: zipfile.ZipFile, cover_file: str, comic_id: int, comic: Comic
+) -> None:
     """Extract cover from zip and write to COVERS_PATH/{comic_id}.{ext}."""
     try:
         data = zf.read(cover_file)

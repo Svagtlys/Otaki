@@ -15,34 +15,36 @@ SUWAYOMI_URL is not configured in .env.test):
     - find_upgrade_candidates returns correct pairs
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-import pytest_asyncio
-from sqlalchemy import select
-
-from app.models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from app.models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from app.models.comic import Comic, ComicStatus
 from app.models.comic_alias import ComicAlias
 from app.models.comic_source_pin import ComicSourcePin
 from app.models.source import Source
 from app.services import source_selector, suwayomi
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-async def _make_source(db, *, name: str, priority: int, suwayomi_source_id: str = None) -> Source:
+async def _make_source(
+    db, *, name: str, priority: int, suwayomi_source_id: str = None
+) -> Source:
     source = Source(
         suwayomi_source_id=suwayomi_source_id or f"src-{priority}",
         name=name,
         priority=priority,
         enabled=True,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(source)
     await db.commit()
@@ -55,7 +57,7 @@ async def _make_comic(db, *, title: str = "Test Comic") -> Comic:
         title=title,
         library_title=title,
         status=ComicStatus.tracking,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(comic)
     await db.commit()
@@ -79,7 +81,7 @@ async def _make_assignment(
         suwayomi_chapter_id="1",
         download_status=DownloadStatus.done,
         is_active=is_active,
-        chapter_published_at=datetime.now(timezone.utc),
+        chapter_published_at=datetime.now(UTC),
         relocation_status=RelocationStatus.done,
     )
     db.add(assignment)
@@ -110,7 +112,7 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
 ):
     """If the first search result title does not match comic.title, the helper
     must skip it and use the matching result further down the list."""
-    source = await _make_source(db_session, name="Source A", priority=1)
+    await _make_source(db_session, name="Source A", priority=1)
     comic = await _make_comic(db_session, title="Correct Title")
 
     fake_results = [
@@ -121,7 +123,7 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -137,7 +139,9 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert len(chapter_map) == 1
     _src, manga_id, _ch = chapter_map[1.0]
@@ -148,7 +152,7 @@ async def test_build_chapter_source_map_uses_second_result_when_first_title_does
 async def test_build_chapter_source_map_returns_empty_when_no_title_match(db_session):
     """If no search result matches comic.title, the source must be skipped and
     build_chapter_source_map must return an empty chapter map with no error."""
-    source = await _make_source(db_session, name="Source A", priority=1)
+    await _make_source(db_session, name="Source A", priority=1)
     comic = await _make_comic(db_session, title="Missing Title")
 
     fake_results = [
@@ -159,7 +163,9 @@ async def test_build_chapter_source_map_returns_empty_when_no_title_match(db_ses
         "app.services.source_selector.suwayomi.search_source",
         new=AsyncMock(return_value=fake_results),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert chapter_map == {}
     assert source_errors == []
@@ -169,6 +175,7 @@ async def test_build_chapter_source_map_returns_error_when_source_raises(db_sess
     """A source that raises populates source_errors; chapter_map is still returned
     for any sources that succeeded."""
     import httpx
+
     await _make_source(db_session, name="Failing Source", priority=1)
     comic = await _make_comic(db_session, title="Any Title")
 
@@ -176,7 +183,9 @@ async def test_build_chapter_source_map_returns_error_when_source_raises(db_sess
         "app.services.source_selector.suwayomi.search_source",
         new=AsyncMock(side_effect=httpx.TimeoutException("timed out")),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert chapter_map == {}
     assert len(source_errors) == 1
@@ -186,7 +195,7 @@ async def test_build_chapter_source_map_returns_error_when_source_raises(db_sess
 
 async def test_build_chapter_source_map_matches_alias_title_in_results(db_session):
     """If comic.title doesn't match any result, but an alias title does, that result is used."""
-    source = await _make_source(db_session, name="Source A", priority=1)
+    await _make_source(db_session, name="Source A", priority=1)
     comic = await _make_comic(db_session, title="Primary Title")
 
     # Add an alias whose title matches the search result
@@ -201,7 +210,7 @@ async def test_build_chapter_source_map_matches_alias_title_in_results(db_sessio
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -217,7 +226,9 @@ async def test_build_chapter_source_map_matches_alias_title_in_results(db_sessio
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert len(chapter_map) == 1
     _src, manga_id, _ch = chapter_map[1.0]
@@ -227,7 +238,7 @@ async def test_build_chapter_source_map_matches_alias_title_in_results(db_sessio
 
 async def test_build_chapter_source_map_retries_search_with_alias_title(db_session):
     """If primary title search returns no results, alias titles are tried as search queries."""
-    source = await _make_source(db_session, name="Source A", priority=1)
+    await _make_source(db_session, name="Source A", priority=1)
     comic = await _make_comic(db_session, title="Primary Title")
 
     alias = ComicAlias(comic_id=comic.id, title="Alias Title")
@@ -238,7 +249,7 @@ async def test_build_chapter_source_map_retries_search_with_alias_title(db_sessi
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -265,7 +276,9 @@ async def test_build_chapter_source_map_retries_search_with_alias_title(db_sessi
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert len(chapter_map) == 1
     _src, manga_id, _ch = chapter_map[1.0]
@@ -276,15 +289,19 @@ async def test_build_chapter_source_map_retries_search_with_alias_title(db_sessi
 
 async def test_build_chapter_source_map_error_does_not_block_other_sources(db_session):
     """If one source fails, successful sources still contribute to the chapter map."""
-    await _make_source(db_session, name="Good Source", priority=1, suwayomi_source_id="src-good")
-    await _make_source(db_session, name="Bad Source", priority=2, suwayomi_source_id="src-bad")
+    await _make_source(
+        db_session, name="Good Source", priority=1, suwayomi_source_id="src-good"
+    )
+    await _make_source(
+        db_session, name="Bad Source", priority=2, suwayomi_source_id="src-bad"
+    )
     comic = await _make_comic(db_session, title="My Comic")
 
     fake_chapters = [
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
         }
     ]
@@ -304,7 +321,9 @@ async def test_build_chapter_source_map_error_does_not_block_other_sources(db_se
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert len(chapter_map) == 1
     assert len(source_errors) == 1
@@ -322,7 +341,9 @@ async def test_build_chapter_source_map_uses_pin_when_present(db_session):
     source = await _make_source(db_session, name="Pinned Source", priority=1)
     comic = await _make_comic(db_session, title="Pinned Comic")
 
-    pin = ComicSourcePin(comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pinned-id")
+    pin = ComicSourcePin(
+        comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pinned-id"
+    )
     db_session.add(pin)
     await db_session.commit()
 
@@ -330,7 +351,7 @@ async def test_build_chapter_source_map_uses_pin_when_present(db_session):
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -341,14 +362,18 @@ async def test_build_chapter_source_map_uses_pin_when_present(db_session):
     with (
         patch(
             "app.services.source_selector.suwayomi.search_source",
-            side_effect=AssertionError("search_source must not be called for a pinned source"),
+            side_effect=AssertionError(
+                "search_source must not be called for a pinned source"
+            ),
         ),
         patch(
             "app.services.source_selector.suwayomi.fetch_chapters",
             new=mock_fetch,
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     mock_fetch.assert_called_once_with("pinned-id")
     assert len(chapter_map) == 1
@@ -361,8 +386,12 @@ async def test_build_chapter_source_map_multiple_pins_same_source(db_session):
     source = await _make_source(db_session, name="Multi-Pin Source", priority=1)
     comic = await _make_comic(db_session, title="Multi-Pin Comic")
 
-    pin_a = ComicSourcePin(comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-a")
-    pin_b = ComicSourcePin(comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-b")
+    pin_a = ComicSourcePin(
+        comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-a"
+    )
+    pin_b = ComicSourcePin(
+        comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-b"
+    )
     db_session.add(pin_a)
     db_session.add(pin_b)
     await db_session.commit()
@@ -371,7 +400,7 @@ async def test_build_chapter_source_map_multiple_pins_same_source(db_session):
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-a-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -380,7 +409,7 @@ async def test_build_chapter_source_map_multiple_pins_same_source(db_session):
         {
             "chapter_number": 2.0,
             "suwayomi_chapter_id": "ch-b-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 2",
         }
@@ -391,14 +420,18 @@ async def test_build_chapter_source_map_multiple_pins_same_source(db_session):
     with (
         patch(
             "app.services.source_selector.suwayomi.search_source",
-            side_effect=AssertionError("search_source must not be called for pinned sources"),
+            side_effect=AssertionError(
+                "search_source must not be called for pinned sources"
+            ),
         ),
         patch(
             "app.services.source_selector.suwayomi.fetch_chapters",
             new=mock_fetch,
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert mock_fetch.call_count == 2
     assert 1.0 in chapter_map
@@ -406,14 +439,20 @@ async def test_build_chapter_source_map_multiple_pins_same_source(db_session):
     assert source_errors == []
 
 
-async def test_build_chapter_source_map_partial_pin_failure_does_not_block_other_ids(db_session):
+async def test_build_chapter_source_map_partial_pin_failure_does_not_block_other_ids(
+    db_session,
+):
     """If one pinned manga_id fails, the other pin's chapter still appears in the map
     and source_errors is empty (partial pin failure is not a source-level error)."""
     source = await _make_source(db_session, name="Partial Pin Source", priority=1)
     comic = await _make_comic(db_session, title="Partial Pin Comic")
 
-    pin_ok = ComicSourcePin(comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-ok")
-    pin_fail = ComicSourcePin(comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-fail")
+    pin_ok = ComicSourcePin(
+        comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-ok"
+    )
+    pin_fail = ComicSourcePin(
+        comic_id=comic.id, source_id=source.id, suwayomi_manga_id="pin-fail"
+    )
     db_session.add(pin_ok)
     db_session.add(pin_fail)
     await db_session.commit()
@@ -421,7 +460,7 @@ async def test_build_chapter_source_map_partial_pin_failure_does_not_block_other
     fake_chapter = {
         "chapter_number": 1.0,
         "suwayomi_chapter_id": "ch-1",
-        "chapter_published_at": datetime.now(timezone.utc),
+        "chapter_published_at": datetime.now(UTC),
         "volume_number": None,
         "source_chapter_name": "Chapter 1",
     }
@@ -434,14 +473,18 @@ async def test_build_chapter_source_map_partial_pin_failure_does_not_block_other
     with (
         patch(
             "app.services.source_selector.suwayomi.search_source",
-            side_effect=AssertionError("search_source must not be called for pinned sources"),
+            side_effect=AssertionError(
+                "search_source must not be called for pinned sources"
+            ),
         ),
         patch(
             "app.services.source_selector.suwayomi.fetch_chapters",
             new=AsyncMock(side_effect=_fetch_side_effect),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert len(chapter_map) == 1
     assert source_errors == []
@@ -453,12 +496,14 @@ async def test_build_chapter_source_map_pinned_source_skips_unpinned_search(db_s
     source_a = await _make_source(
         db_session, name="Source A (pinned)", priority=1, suwayomi_source_id="src-a"
     )
-    source_b = await _make_source(
+    await _make_source(
         db_session, name="Source B (unpinned)", priority=2, suwayomi_source_id="src-b"
     )
     comic = await _make_comic(db_session, title="Mixed Comic")
 
-    pin = ComicSourcePin(comic_id=comic.id, source_id=source_a.id, suwayomi_manga_id="pin-a-id")
+    pin = ComicSourcePin(
+        comic_id=comic.id, source_id=source_a.id, suwayomi_manga_id="pin-a-id"
+    )
     db_session.add(pin)
     await db_session.commit()
 
@@ -466,7 +511,7 @@ async def test_build_chapter_source_map_pinned_source_skips_unpinned_search(db_s
         {
             "chapter_number": 1.0,
             "suwayomi_chapter_id": "ch-1",
-            "chapter_published_at": datetime.now(timezone.utc),
+            "chapter_published_at": datetime.now(UTC),
             "volume_number": None,
             "source_chapter_name": "Chapter 1",
         }
@@ -490,7 +535,9 @@ async def test_build_chapter_source_map_pinned_source_skips_unpinned_search(db_s
             new=AsyncMock(return_value=fake_chapters),
         ),
     ):
-        chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db_session
+        )
 
     assert "src-a" not in searched_source_ids
     assert "src-b" in searched_source_ids
@@ -541,28 +588,38 @@ async def test_fetch_chapters_expected_keys(suwayomi_settings, test_manga_title)
     assert "volume_number" in ch
 
 
-async def test_fetch_chapters_chapter_number_is_float(suwayomi_settings, test_manga_title):
+async def test_fetch_chapters_chapter_number_is_float(
+    suwayomi_settings, test_manga_title
+):
     manga_id = await _first_manga_id(test_manga_title)
     chapters = await suwayomi.fetch_chapters(manga_id)
     for ch in chapters:
         assert isinstance(ch["chapter_number"], float)
 
 
-async def test_fetch_chapters_published_at_is_datetime(suwayomi_settings, test_manga_title):
+async def test_fetch_chapters_published_at_is_datetime(
+    suwayomi_settings, test_manga_title
+):
     manga_id = await _first_manga_id(test_manga_title)
     chapters = await suwayomi.fetch_chapters(manga_id)
     for ch in chapters:
         assert isinstance(ch["chapter_published_at"], datetime)
 
 
-async def test_build_chapter_source_map_returns_dict(db_session, suwayomi_settings, test_manga_title):
+async def test_build_chapter_source_map_returns_dict(
+    db_session, suwayomi_settings, test_manga_title
+):
     source_id = await _first_searchable_source_id(test_manga_title)
-    source = await _make_source(
+    await _make_source(
         db_session, name="Live Source", priority=1, suwayomi_source_id=source_id
     )
-    comic = await _make_comic(db_session, title=await _first_manga_title(source_id, test_manga_title))
+    comic = await _make_comic(
+        db_session, title=await _first_manga_title(source_id, test_manga_title)
+    )
 
-    chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+    chapter_map, source_errors = await source_selector.build_chapter_source_map(
+        comic, db_session
+    )
 
     assert isinstance(chapter_map, dict)
     assert len(chapter_map) > 0
@@ -584,7 +641,9 @@ async def test_find_upgrade_candidates_no_upgrades_when_single_source(
     source = await _make_source(
         db_session, name="Live Source", priority=1, suwayomi_source_id=source_id
     )
-    comic = await _make_comic(db_session, title=await _first_manga_title(source_id, test_manga_title))
+    comic = await _make_comic(
+        db_session, title=await _first_manga_title(source_id, test_manga_title)
+    )
 
     chapter_map, _ = await source_selector.build_chapter_source_map(comic, db_session)
     if not chapter_map:
@@ -649,7 +708,9 @@ async def _webtoons_en_source_id() -> str:
 
 
 @pytest.mark.integration
-async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayomi_settings, test_manga_title):
+async def test_build_chapter_source_map_webtoons_title_match(
+    db_session, suwayomi_settings, test_manga_title
+):
     """Integration: build_chapter_source_map correctly matches a manga title on the
     Webtoons EN source and returns a non-empty chapter map.
 
@@ -667,7 +728,7 @@ async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayom
             f"TEST_MANGA_TITLE {comic_title!r} not found in Webtoons EN search results on this Suwayomi instance"
         )
 
-    source = await _make_source(
+    await _make_source(
         db_session,
         name="Webtoons EN",
         priority=1,
@@ -675,7 +736,9 @@ async def test_build_chapter_source_map_webtoons_title_match(db_session, suwayom
     )
     comic = await _make_comic(db_session, title=comic_title)
 
-    chapter_map, source_errors = await source_selector.build_chapter_source_map(comic, db_session)
+    chapter_map, source_errors = await source_selector.build_chapter_source_map(
+        comic, db_session
+    )
 
     assert isinstance(chapter_map, dict)
     assert len(chapter_map) > 0

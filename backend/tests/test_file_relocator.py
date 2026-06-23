@@ -2,17 +2,15 @@
 
 import os
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-
 from app.config import settings
 from app.models.chapter_assignment import RelocationStatus
 from app.services import file_relocator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,8 +49,7 @@ def _make_assignment(
         volume_number=volume_number,
         library_path=library_path,
         relocation_status=RelocationStatus.pending,
-        chapter_published_at=chapter_published_at
-        or datetime(2024, 6, 15, tzinfo=timezone.utc),
+        chapter_published_at=chapter_published_at or datetime(2024, 6, 15, tzinfo=UTC),
         source=SimpleNamespace(name=source_name),
     )
 
@@ -673,8 +670,6 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
     comic = _make_comic(library_title=manga_title)
     assignment = _make_assignment(chapter_number=1.0, source_name=source_display_name)
 
-    print(f"\nRelocating: {source_display_name}/{manga_title}/{chapter_name}.cbz")
-
     await file_relocator.relocate(
         assignment, comic, None, chapter_name, manga_title, source_display_name
     )
@@ -687,8 +682,6 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
 
     assert _zf.is_zipfile(dest)
     assert cbz.exists()  # copy strategy — staging preserved
-
-    print(f"Relocated to: {dest}")
 
 
 # ---------------------------------------------------------------------------

@@ -138,7 +138,7 @@ async def search(
 
     all_results: list[SearchResult] = []
     source_errors: list[SourceError] = []
-    for source, (items, error_reason) in zip(sources, gathered):
+    for source, (items, error_reason) in zip(sources, gathered, strict=False):
         all_results.extend(items)
         if error_reason is not None:
             source_errors.append(
@@ -197,7 +197,10 @@ async def search_stream(
             except Exception as e:
                 reason = suwayomi.classify_error(e)
                 logger.warning(
-                    "search/stream failed for source %s (%s): %r", source.name, reason, e
+                    "search/stream failed for source %s (%s): %r",
+                    source.name,
+                    reason,
+                    e,
                 )
                 await queue.put({"source_name": source.name, "error": reason})
 

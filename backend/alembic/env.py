@@ -1,9 +1,8 @@
 import logging
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
-
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
@@ -13,8 +12,8 @@ if config.config_file_name is not None and not logging.getLogger().hasHandlers()
 # Import Base so autogenerate can detect model changes.
 # Models must be imported before target_metadata is read.
 from app import models  # noqa: F401 — registers all models on Base.metadata
-from app.database import Base
 from app.config import settings
+from app.database import Base
 
 target_metadata = Base.metadata
 

@@ -4,8 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from app import database
 from app.models.chapter_assignment import (
     ChapterAssignment,
@@ -15,7 +13,7 @@ from app.models.chapter_assignment import (
 from app.models.comic import Comic, ComicStatus
 from app.models.source import Source
 from app.workers import chapter_event_handler
-
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -672,6 +670,7 @@ async def test_handle_concurrent_calls_do_not_raise(handler_db, mock_relocator):
     with a lock error even when they run concurrently via asyncio.gather.
     """
     import asyncio
+
     from sqlalchemy import select
 
     comic_id, source_id = await _seed_comic(handler_db)

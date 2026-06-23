@@ -1,14 +1,11 @@
 """Unit and integration tests for workers/download_listener.py."""
+
 import asyncio
 import contextlib
-import os
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app.workers import download_listener
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -152,7 +149,9 @@ async def test_retries_with_backoff():
             "app.workers.download_listener.chapter_event_handler.handle",
             new_callable=AsyncMock,
         ),
-        patch("app.workers.download_listener.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch(
+            "app.workers.download_listener.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep,
         patch("app.workers.download_listener.settings") as mock_settings,
     ):
         mock_settings.MAX_RECONNECT_ATTEMPTS = 5
@@ -346,7 +345,9 @@ async def test_dispatch_skips_duplicate_finished_event():
         download_listener._dispatch("FINISHED", "100", "Chapter 100", "Manga", "Source")
         download_listener._dispatch("FINISHED", "100", "Chapter 100", "Manga", "Source")
         await asyncio.sleep(0)
-        mock_handle.assert_awaited_once_with("FINISHED", "100", "Chapter 100", "Manga", "Source")
+        mock_handle.assert_awaited_once_with(
+            "FINISHED", "100", "Chapter 100", "Manga", "Source"
+        )
 
 
 @pytest.mark.asyncio
@@ -362,7 +363,9 @@ async def test_dispatch_skips_duplicate_error_event():
         download_listener._dispatch("ERROR", "200", "Chapter 200", "Manga", "Source")
         download_listener._dispatch("ERROR", "200", "Chapter 200", "Manga", "Source")
         await asyncio.sleep(0)
-        mock_handle.assert_awaited_once_with("ERROR", "200", "Chapter 200", "Manga", "Source")
+        mock_handle.assert_awaited_once_with(
+            "ERROR", "200", "Chapter 200", "Manga", "Source"
+        )
 
 
 @pytest.mark.asyncio
@@ -399,7 +402,9 @@ async def test_background_tasks_set_holds_then_releases_task():
         mock_settings.MAX_RECONNECT_ATTEMPTS = 5
         mock_settings.DOWNLOAD_POLL_FALLBACK_SECONDS = 60
 
-        assert len(download_listener._background_tasks) == 0, "leaked tasks from a previous test"
+        assert len(download_listener._background_tasks) == 0, (
+            "leaked tasks from a previous test"
+        )
 
         with pytest.raises(asyncio.CancelledError):
             await download_listener.run()
@@ -428,7 +433,9 @@ async def test_polling_path_tracks_background_tasks():
     The subsequent subscription attempt raises CancelledError to exit the loop.
     After run() raises, the task created by the polling dispatch must be in _background_tasks.
     """
-    assert len(download_listener._background_tasks) == 0, "leaked tasks from a previous test"
+    assert len(download_listener._background_tasks) == 0, (
+        "leaked tasks from a previous test"
+    )
 
     seed_item = {
         "state": "DOWNLOADING",
@@ -463,6 +470,7 @@ async def test_polling_path_tracks_background_tasks():
         sub_call_index += 1
         if sub_call_index <= max_attempts:
             return _always_fail_subscription()
+
         # Post-poll subscription attempt — exit the loop.
         async def _cancel():
             raise asyncio.CancelledError()
@@ -553,7 +561,9 @@ async def test_process_poll_dispatches_finished_on_disappearance():
     ) as mock_handle:
         download_listener._process_poll_result([])  # item disappeared
         await asyncio.sleep(0)
-        mock_handle.assert_awaited_once_with("FINISHED", "33", "Chapter 33", "My Manga", "Src")
+        mock_handle.assert_awaited_once_with(
+            "FINISHED", "33", "Chapter 33", "My Manga", "Src"
+        )
 
 
 @pytest.mark.asyncio
@@ -575,7 +585,9 @@ async def test_process_poll_dispatches_error_state_once():
     ) as mock_handle:
         download_listener._process_poll_result([item])
         await asyncio.sleep(0)
-        mock_handle.assert_awaited_once_with("ERROR", "44", "Chapter 44", "Manga", "Src")
+        mock_handle.assert_awaited_once_with(
+            "ERROR", "44", "Chapter 44", "Manga", "Src"
+        )
 
         # Second poll — same item still in ERROR state — no new dispatch
         mock_handle.reset_mock()
@@ -619,7 +631,9 @@ async def test_process_poll_no_finished_for_error_items():
 # ---------------------------------------------------------------------------
 
 
-def _make_assignment(chapter_id: str, status: str, chapter_name: str = "Ch 1", manga_title: str = "Manga") -> MagicMock:
+def _make_assignment(
+    chapter_id: str, status: str, chapter_name: str = "Ch 1", manga_title: str = "Manga"
+) -> MagicMock:
     a = MagicMock()
     a.suwayomi_chapter_id = chapter_id
     a.download_status = status
@@ -729,7 +743,9 @@ def _first_online_source(sources: list[dict]) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_enqueue_and_receive_via_subscription(suwayomi_settings, test_manga_title):
+async def test_enqueue_and_receive_via_subscription(
+    suwayomi_settings, test_manga_title
+):
     """Enqueue a chapter download then verify the subscription delivers its FINISHED event.
 
     Subscribes BEFORE enqueuing so no event is missed. The subscription task runs in the
@@ -754,7 +770,7 @@ async def test_enqueue_and_receive_via_subscription(suwayomi_settings, test_mang
     found = asyncio.Event()
 
     async def _listen():
-        async for (event_type, cid, *_) in real_suwayomi.subscribe_download_changed():
+        async for event_type, cid, *_ in real_suwayomi.subscribe_download_changed():
             if event_type != "FINISHED":
                 continue
             received_ids.append(cid)

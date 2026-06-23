@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import (
@@ -315,7 +315,7 @@ async def create_request(
         status=ComicStatus.tracking,
         poll_override_days=body.poll_override_days,  # None = use inferred cadence / default
         upgrade_override_days=body.upgrade_override_days,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(comic)
     await db.flush()
@@ -359,7 +359,7 @@ async def create_request(
         or comic.poll_override_days
         or settings.DEFAULT_POLL_DAYS
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     comic.next_poll_at = now + timedelta(days=effective_poll)
     comic.next_upgrade_check_at = now + timedelta(days=effective_upgrade)
 
@@ -545,7 +545,7 @@ async def patch_request(
     if comic is None:
         raise HTTPException(status_code=404, detail="Comic not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fields = body.model_fields_set
 
     if "library_title" in fields and body.library_title is not None:
@@ -725,7 +725,6 @@ async def reprocess_chapters(
             chapter_name = (
                 assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
             )
-            manga_title = assignment.source_manga_title or comic.title
             source_display_name = display_name_by_source_id.get(
                 assignment.source.suwayomi_source_id, assignment.source.name
             )
@@ -764,7 +763,7 @@ async def reprocess_chapters(
                         )
                     )
                     assignment.download_status = DownloadStatus.done
-                    assignment.downloaded_at = datetime.now(timezone.utc)
+                    assignment.downloaded_at = datetime.now(UTC)
                     if existing_active is None:
                         await file_relocator.relocate(
                             assignment,

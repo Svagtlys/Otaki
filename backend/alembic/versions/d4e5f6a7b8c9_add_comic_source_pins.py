@@ -22,11 +22,20 @@ def upgrade() -> None:
         "comic_source_pins",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("comic_id", sa.Integer(), sa.ForeignKey("comics.id"), nullable=False),
-        sa.Column("source_id", sa.Integer(), sa.ForeignKey("sources.id"), nullable=False),
+        sa.Column(
+            "source_id", sa.Integer(), sa.ForeignKey("sources.id"), nullable=False
+        ),
         sa.Column("suwayomi_manga_id", sa.String(), nullable=False),
-        sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "pinned_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("comic_id", "source_id", "suwayomi_manga_id", name="uq_comic_source_pins"),
+        sa.UniqueConstraint(
+            "comic_id", "source_id", "suwayomi_manga_id", name="uq_comic_source_pins"
+        ),
     )
     op.create_index("ix_comic_source_pins_comic_id", "comic_source_pins", ["comic_id"])
 

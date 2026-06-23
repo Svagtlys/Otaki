@@ -1,14 +1,13 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import settings
-
-import logging
 
 logger = logging.getLogger(f"otaki.{__name__}")
 
@@ -26,6 +25,7 @@ engine = create_async_engine(
 )
 
 if _is_sqlite:
+
     @event.listens_for(engine.sync_engine, "connect")
     def _set_wal_mode(dbapi_conn, connection_record):
         """Enable WAL journal mode for every new SQLite connection.
@@ -37,6 +37,7 @@ if _is_sqlite:
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -57,9 +58,8 @@ async def write_session():
     of AsyncSessionLocal() directly. To switch backends, change _write_lock here.
     """
     if _write_lock is not None:
-        async with _write_lock:
-            async with AsyncSessionLocal() as session:
-                yield session
+        async with _write_lock, AsyncSessionLocal() as session:
+            yield session
     else:
         async with AsyncSessionLocal() as session:
             yield session
@@ -72,8 +72,8 @@ def _run_migrations() -> None:
     blocked. Uses the sync SQLite driver; the app uses the async driver at
     runtime.
     """
-    from alembic.config import Config
     from alembic import command
+    from alembic.config import Config
 
     cfg = Config(Path(__file__).parent.parent / "alembic.ini")
     command.upgrade(cfg, "head")

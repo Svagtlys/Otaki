@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -5,8 +6,6 @@ from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
-
-import logging
 
 logger = logging.getLogger(f"otaki.{__name__}")
 

@@ -1,29 +1,30 @@
 """Tests for comic-local source priority overrides (issue #112)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
-
 from app.models.comic import Comic, ComicStatus
 from app.models.comic_source_override import ComicSourceOverride
 from app.models.source import Source
-
+from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
 
 
-async def _add_source(*, name="Src", suwayomi_source_id="src-ov-1", priority=1, enabled=True) -> Source:
+async def _add_source(
+    *, name="Src", suwayomi_source_id="src-ov-1", priority=1, enabled=True
+) -> Source:
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         s = Source(
             suwayomi_source_id=suwayomi_source_id,
             name=name,
             priority=priority,
             enabled=enabled,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(s)
         await db.commit()
@@ -33,13 +34,14 @@ async def _add_source(*, name="Src", suwayomi_source_id="src-ov-1", priority=1, 
 
 async def _add_comic(*, title="Test Comic") -> Comic:
     from app import database
+
     async with database.AsyncSessionLocal() as db:
         c = Comic(
             title=title,
             library_title=title,
             status=ComicStatus.tracking,
-            created_at=datetime.now(timezone.utc),
-            next_poll_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            next_poll_at=datetime.now(UTC),
         )
         db.add(c)
         await db.commit()
@@ -60,7 +62,9 @@ async def test_list_overrides_requires_auth(auth_client):
 
 @pytest.mark.asyncio
 async def test_put_overrides_requires_auth(auth_client):
-    r = await auth_client.put("/api/requests/1/source-overrides", json={"source_ids": []})
+    r = await auth_client.put(
+        "/api/requests/1/source-overrides", json={"source_ids": []}
+    )
     assert r.status_code == 401
 
 
@@ -108,7 +112,9 @@ async def test_list_overrides_reflects_overrides(logged_in_client):
     eff = {e["source_id"]: e["effective_priority"] for e in data}
     assert eff[src_b.id] == 1
     assert eff[src_a.id] == 2
-    assert all(e["is_overridden"] for e in data if e["source_id"] in (src_a.id, src_b.id))
+    assert all(
+        e["is_overridden"] for e in data if e["source_id"] in (src_a.id, src_b.id)
+    )
 
 
 @pytest.mark.asyncio
@@ -124,7 +130,9 @@ async def test_list_overrides_sorted_by_effective_priority(logged_in_client):
 
     r = await logged_in_client.get(f"/api/requests/{comic.id}/source-overrides")
     data = r.json()
-    priorities = [e["effective_priority"] for e in data if e["source_id"] in (src_a.id, src_b.id)]
+    priorities = [
+        e["effective_priority"] for e in data if e["source_id"] in (src_a.id, src_b.id)
+    ]
     assert priorities == sorted(priorities)
 
 
@@ -158,9 +166,17 @@ async def test_put_creates_overrides(logged_in_client):
     assert eff[src_a.id] == 2
 
     async with database.AsyncSessionLocal() as db:
-        rows = (await db.execute(
-            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic.id)
-        )).scalars().all()
+        rows = (
+            (
+                await db.execute(
+                    select(ComicSourceOverride).where(
+                        ComicSourceOverride.comic_id == comic.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(rows) == 2
 
 
@@ -243,9 +259,17 @@ async def test_delete_removes_overrides(logged_in_client):
     assert r.status_code == 204
 
     async with database.AsyncSessionLocal() as db:
-        rows = (await db.execute(
-            select(ComicSourceOverride).where(ComicSourceOverride.comic_id == comic.id)
-        )).scalars().all()
+        rows = (
+            (
+                await db.execute(
+                    select(ComicSourceOverride).where(
+                        ComicSourceOverride.comic_id == comic.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert rows == []
 
 
@@ -276,13 +300,13 @@ async def test_effective_priority_falls_back_to_global(db_session):
         name="Global Src",
         priority=3,
         enabled=True,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     comic = Comic(
         title="EP Global Comic",
         library_title="EP Global Comic",
         status=ComicStatus.tracking,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(src)
     db_session.add(comic)
@@ -301,13 +325,13 @@ async def test_effective_priority_uses_override(db_session):
         name="Override Src",
         priority=3,
         enabled=True,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     comic = Comic(
         title="EP Override Comic",
         library_title="EP Override Comic",
         status=ComicStatus.tracking,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(src)
     db_session.add(comic)

@@ -11,6 +11,7 @@ Optional — defaults to pytest tmp_path if omitted:
     SUWAYOMI_DOWNLOAD_PATH=/path/to/downloads
     LIBRARY_PATH=/path/to/library
 """
+
 import pytest
 
 
@@ -69,7 +70,9 @@ async def test_connect_bad_credentials(client, suwayomi_credentials):
     async with httpx.AsyncClient(verify=False) as probe:
         r = await probe.post(f"{url}/api/graphql", json={"query": "{ __typename }"})
     if r.status_code != 401:
-        pytest.skip("Suwayomi instance does not enforce Basic auth — skipping bad-credential test")
+        pytest.skip(
+            "Suwayomi instance does not enforce Basic auth — skipping bad-credential test"
+        )
 
     bad = {**suwayomi_credentials, "password": "definitely-wrong-password-xxxxx"}
     r = await client.post("/api/setup/connect", json=bad)

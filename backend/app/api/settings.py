@@ -1,11 +1,10 @@
-import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,16 +85,32 @@ async def patch_settings(
     # Validate Suwayomi connectivity if any connection field is being changed
     suwayomi_fields = {"suwayomi_url", "suwayomi_username", "suwayomi_password"}
     if provided & suwayomi_fields:
-        test_url = body.suwayomi_url if body.suwayomi_url is not None else settings.SUWAYOMI_URL
-        test_username = body.suwayomi_username if body.suwayomi_username is not None else settings.SUWAYOMI_USERNAME
-        test_password = body.suwayomi_password if body.suwayomi_password is not None else settings.SUWAYOMI_PASSWORD
+        test_url = (
+            body.suwayomi_url
+            if body.suwayomi_url is not None
+            else settings.SUWAYOMI_URL
+        )
+        test_username = (
+            body.suwayomi_username
+            if body.suwayomi_username is not None
+            else settings.SUWAYOMI_USERNAME
+        )
+        test_password = (
+            body.suwayomi_password
+            if body.suwayomi_password is not None
+            else settings.SUWAYOMI_PASSWORD
+        )
         if test_url:
             ok = await validate_suwayomi(test_url, test_username, test_password)
             if not ok:
-                raise HTTPException(status_code=400, detail="Could not connect to Suwayomi")
+                raise HTTPException(
+                    status_code=400, detail="Could not connect to Suwayomi"
+                )
 
     # Validate paths before writing
-    if body.suwayomi_download_path is not None and not validate_path(body.suwayomi_download_path):
+    if body.suwayomi_download_path is not None and not validate_path(
+        body.suwayomi_download_path
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid suwayomi_download_path: {body.suwayomi_download_path!r} is not a directory",
@@ -138,14 +153,16 @@ async def export_backup(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_auth),
 ) -> Response:
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
 
     if format == "otaki":
         data = await backup_svc.build_backup_zip(db, include_all_assignments)
         return Response(
             content=data,
             media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.zip"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.zip"'
+            },
         )
 
     if format == "json":
@@ -153,7 +170,9 @@ async def export_backup(
         return Response(
             content=json.dumps(data, indent=2, default=str),
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.json"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.json"'
+            },
         )
 
     # csv
@@ -161,7 +180,9 @@ async def export_backup(
     return Response(
         content=data,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.csv"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="otaki-backup-{date_str}.csv"'
+        },
     )
 
 
@@ -230,8 +251,12 @@ async def import_apply(
     raw = await _load_backup_bytes(file, path)
 
     try:
-        src_res = [SourceResolution(**r).model_dump() for r in json.loads(source_resolutions)]
-        com_res = [ComicResolution(**r).model_dump() for r in json.loads(comic_resolutions)]
+        src_res = [
+            SourceResolution(**r).model_dump() for r in json.loads(source_resolutions)
+        ]
+        com_res = [
+            ComicResolution(**r).model_dump() for r in json.loads(comic_resolutions)
+        ]
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid resolutions: {e}")
 
@@ -264,4 +289,6 @@ async def _load_backup_bytes(file: UploadFile | None, path: str | None) -> bytes
         if not p.exists():
             raise HTTPException(status_code=422, detail=f"File not found: {path}")
         return p.read_bytes()
-    raise HTTPException(status_code=422, detail="Provide a file upload or a server path")
+    raise HTTPException(
+        status_code=422, detail="Provide a file upload or a server path"
+    )

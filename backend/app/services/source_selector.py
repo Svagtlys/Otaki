@@ -56,7 +56,7 @@ async def build_chapter_source_map(
     Per-comic source priority overrides are deferred to 1.3.
     """
     result = await db.execute(
-        select(Source).where(Source.enabled == True).order_by(Source.priority)
+        select(Source).where(Source.enabled).order_by(Source.priority)
     )
     sources = result.scalars().all()
 
@@ -90,7 +90,10 @@ async def build_chapter_source_map(
                     failed_count += 1
                     logger.warning(
                         "source %s: fetch_chapters failed for pinned manga_id %s (%s): %r",
-                        source.name, manga_id, last_reason, e,
+                        source.name,
+                        manga_id,
+                        last_reason,
+                        e,
                     )
                     continue
                 all_chapters.extend(
@@ -149,7 +152,7 @@ async def build_chapter_source_map(
         float, tuple[int, Source, str, dict]
     ] = {}  # chapter_number → (eff_priority, source, manga_id, ch_data)
     source_errors: list[dict] = []
-    for source, (source_results, error_reason) in zip(sources, gathered):
+    for source, (source_results, error_reason) in zip(sources, gathered, strict=False):
         if error_reason is not None:
             source_errors.append({"source_name": source.name, "reason": error_reason})
         for src, manga_id, chapter in source_results:
@@ -176,7 +179,7 @@ async def find_upgrade_candidates(
         select(ChapterAssignment)
         .where(
             ChapterAssignment.comic_id == comic.id,
-            ChapterAssignment.is_active == True,
+            ChapterAssignment.is_active,
         )
         .options(selectinload(ChapterAssignment.source))
     )

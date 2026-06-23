@@ -1,12 +1,10 @@
 """Tests for POST/GET/DELETE /api/requests (issue #13)."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
-
 from app.models.chapter_assignment import (
     ChapterAssignment,
     DownloadStatus,
@@ -15,7 +13,7 @@ from app.models.chapter_assignment import (
 from app.models.comic import Comic, ComicStatus
 from app.models.comic_source_pin import ComicSourcePin
 from app.models.source import Source
-
+from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -33,7 +31,7 @@ async def _add_source(
             name=name,
             priority=priority,
             enabled=True,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(source)
         await db.commit()
@@ -50,8 +48,8 @@ async def _add_comic(*, title="Test Comic", library_title=None) -> Comic:
             library_title=library_title or title,
             status=ComicStatus.tracking,
             poll_override_days=7.0,
-            created_at=datetime.now(timezone.utc),
-            next_poll_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            next_poll_at=datetime.now(UTC),
         )
         db.add(comic)
         await db.commit()
@@ -84,7 +82,7 @@ async def _add_assignment(
             suwayomi_chapter_id=f"ch-{chapter_number}",
             download_status=download_status,
             is_active=is_active,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             library_path=library_path,
             relocation_status=relocation_status,
         )
@@ -160,7 +158,7 @@ async def test_post_creates_assignments(logged_in_client, monkeypatch):
     fake_source = MagicMock()
     fake_source.id = source.id
 
-    published = datetime(2024, 3, 1, tzinfo=timezone.utc)
+    published = datetime(2024, 3, 1, tzinfo=UTC)
 
     async def _fake_build_map(comic, db):
         return {
@@ -228,7 +226,7 @@ async def test_post_sets_next_poll_at(logged_in_client, monkeypatch):
     )
     monkeypatch.setattr(suwayomi, "enqueue_downloads", AsyncMock())
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     r = await logged_in_client.post(
         "/api/requests", json={"primary_title": "Poll Comic"}
     )
@@ -238,7 +236,7 @@ async def test_post_sets_next_poll_at(logged_in_client, monkeypatch):
     assert next_poll is not None
     next_poll_dt = datetime.fromisoformat(next_poll)
     if next_poll_dt.tzinfo is None:
-        next_poll_dt = next_poll_dt.replace(tzinfo=timezone.utc)
+        next_poll_dt = next_poll_dt.replace(tzinfo=UTC)
     assert next_poll_dt >= before + timedelta(days=6, hours=23)
     assert next_poll_dt <= before + timedelta(days=7, hours=1)
 
@@ -321,7 +319,7 @@ async def test_delete_calls_remove_jobs(logged_in_client, monkeypatch):
         scheduler, "remove_comic_jobs", lambda comic_id: removed_ids.append(comic_id)
     )
 
-    source = await _add_source()
+    await _add_source()
     comic = await _add_comic(title="Remove Jobs Comic")
 
     r = await logged_in_client.delete(f"/api/requests/{comic.id}")
@@ -358,7 +356,6 @@ async def test_requires_auth(auth_client):
 
 
 async def test_cover_post_url_saves_cover(logged_in_client, monkeypatch, tmp_path):
-    from pathlib import Path as _Path
     from app.services import cover_handler
 
     fake_cover = tmp_path / "1.jpg"
@@ -464,7 +461,7 @@ async def test_cover_delete_clears_cover_path(logged_in_client, tmp_path):
 async def test_create_request_stores_requested_cover_url(logged_in_client, monkeypatch):
     """cover_url submitted at request time is persisted as requested_cover_url."""
     from app import database
-    from app.services import source_selector, cover_handler
+    from app.services import cover_handler, source_selector
 
     monkeypatch.setattr(
         source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
@@ -493,7 +490,7 @@ async def test_create_request_clears_requested_cover_url_on_success(
 ):
     """requested_cover_url is nulled after a successful cover download at request time."""
     from app import database
-    from app.services import source_selector, cover_handler
+    from app.services import cover_handler, source_selector
 
     fake_cover = tmp_path / "1.jpg"
     fake_cover.write_bytes(b"img")
@@ -525,7 +522,7 @@ async def test_discover_retries_cover_when_missing(
 ):
     """discover_chapters downloads the cover if cover_path is None and requested_cover_url is set."""
     from app import database
-    from app.services import source_selector, cover_handler
+    from app.services import cover_handler, source_selector
 
     monkeypatch.setattr(
         source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
@@ -558,7 +555,7 @@ async def test_discover_does_not_overwrite_existing_cover(
 ):
     """discover_chapters skips the cover retry if cover_path is already set."""
     from app import database
-    from app.services import source_selector, cover_handler
+    from app.services import cover_handler, source_selector
 
     monkeypatch.setattr(
         source_selector, "build_chapter_source_map", AsyncMock(return_value=({}, []))
@@ -593,7 +590,7 @@ async def test_discover_does_not_overwrite_existing_cover(
 
 async def test_discover_creates_missing_assignments(logged_in_client, monkeypatch):
     """POST /{id}/discover creates assignments for chapters not yet tracked."""
-    from datetime import timezone
+
     from app import database
     from app.models.chapter_assignment import ChapterAssignment
     from app.services import source_selector, suwayomi
@@ -607,7 +604,7 @@ async def test_discover_creates_missing_assignments(logged_in_client, monkeypatc
         "chapter_number": 1.0,
         "volume_number": None,
         "suwayomi_chapter_id": "disc-ch-1",
-        "chapter_published_at": datetime.now(timezone.utc),
+        "chapter_published_at": datetime.now(UTC),
     }
     monkeypatch.setattr(
         source_selector,
@@ -634,7 +631,7 @@ async def test_discover_skips_existing_active_assignments(
     logged_in_client, monkeypatch
 ):
     """POST /{id}/discover does not duplicate chapters already tracked with is_active=True."""
-    from datetime import timezone
+
     from app import database
     from app.models.chapter_assignment import ChapterAssignment
     from app.services import source_selector, suwayomi
@@ -648,7 +645,7 @@ async def test_discover_skips_existing_active_assignments(
         "chapter_number": 1.0,
         "volume_number": None,
         "suwayomi_chapter_id": "disc-ch-new",
-        "chapter_published_at": datetime.now(timezone.utc),
+        "chapter_published_at": datetime.now(UTC),
     }
     monkeypatch.setattr(
         source_selector,
@@ -736,8 +733,6 @@ async def test_create_request_returns_aliases_in_response(
 
 async def test_get_detail_returns_aliases(logged_in_client, monkeypatch):
     """GET /{id} includes aliases in the response."""
-    from app import database
-    from app.models.comic_alias import ComicAlias
     from app.services import source_selector
 
     monkeypatch.setattr(
@@ -1104,8 +1099,8 @@ async def test_reprocess_returns_503_when_suwayomi_unreachable(
     logged_in_client, monkeypatch
 ):
     """If list_sources() fails (Suwayomi unreachable), reprocess emits an error SSE event."""
-    from app.services import suwayomi
     import httpx
+    from app.services import suwayomi
 
     comic = await _add_comic(title="Reprocess 503 Comic")
     monkeypatch.setattr(
@@ -1171,7 +1166,7 @@ async def test_reprocess_skips_queued_and_downloading(
                 suwayomi_chapter_id=f"ch-{ch_num}",
                 download_status=status,
                 is_active=True,
-                chapter_published_at=datetime.now(timezone.utc),
+                chapter_published_at=datetime.now(UTC),
                 relocation_status=RelocationStatus.pending,
             )
             db.add(a)
@@ -1206,7 +1201,7 @@ async def test_reprocess_reenqueues_failed(logged_in_client, monkeypatch, tmp_pa
             suwayomi_chapter_id="ch-fail",
             download_status=DownloadStatus.failed,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.pending,
         )
         db.add(a)
@@ -1248,7 +1243,7 @@ async def test_reprocess_relocates_done_with_staging(
             suwayomi_chapter_id="ch-stg",
             download_status=DownloadStatus.done,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.pending,
         )
         db.add(a)
@@ -1288,7 +1283,7 @@ async def test_reprocess_calls_update_library_file_for_done_chapters(
             suwayomi_chapter_id="ch-lib",
             download_status=DownloadStatus.done,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             library_path=str(lib_file),
             relocation_status=RelocationStatus.done,
         )
@@ -1306,7 +1301,6 @@ async def test_reprocess_queued_with_staging_file_relocates(
     logged_in_client, monkeypatch, tmp_path
 ):
     """A queued chapter with a staging file is recovered: treated as done and relocated."""
-    from pathlib import Path as _Path
     from app import database
     from app.services import file_relocator, suwayomi
 
@@ -1333,7 +1327,7 @@ async def test_reprocess_queued_with_staging_file_relocates(
             suwayomi_chapter_id="ch-qs1",
             download_status=DownloadStatus.queued,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.pending,
         )
         db.add(a)
@@ -1381,7 +1375,7 @@ async def test_reprocess_queued_absent_from_queue_reenqueues(
             suwayomi_chapter_id="ch-aq1",
             download_status=DownloadStatus.queued,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.pending,
         )
         db.add(a)
@@ -1424,7 +1418,7 @@ async def test_reprocess_queued_poll_fails_reenqueues(
             suwayomi_chapter_id="ch-pf1",
             download_status=DownloadStatus.queued,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.pending,
         )
         db.add(a)
@@ -1482,7 +1476,7 @@ async def test_force_upgrade_emits_chapter_events_and_done(
             suwayomi_chapter_id="ch-fu1",
             download_status=DownloadStatus.done,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.done,
         )
         db.add(a)
@@ -1495,7 +1489,7 @@ async def test_force_upgrade_emits_chapter_events_and_done(
         )
         assignment = result.scalar_one()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     mock_candidates = AsyncMock(
         return_value=[
             (
@@ -1634,7 +1628,7 @@ async def test_force_upgrade_chapter_queues_upgrade(logged_in_client, monkeypatc
             suwayomi_chapter_id="ch-fuc1",
             download_status=DownloadStatus.done,
             is_active=True,
-            chapter_published_at=datetime.now(timezone.utc),
+            chapter_published_at=datetime.now(UTC),
             relocation_status=RelocationStatus.done,
         )
         db.add(a)
@@ -1646,7 +1640,7 @@ async def test_force_upgrade_chapter_queues_upgrade(logged_in_client, monkeypatc
         )
         assignment = result.scalar_one()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     mock_candidates = AsyncMock(
         return_value=[
             (
@@ -1715,7 +1709,7 @@ async def test_force_upgrade_chapter_no_candidate_done_zero(
 @pytest.mark.asyncio
 async def test_list_requests_pagination(logged_in_client):
     """GET /api/requests returns correct page slice and total."""
-    source = await _add_source(name="Pg Source", suwayomi_source_id="src-pg-1")
+    await _add_source(name="Pg Source", suwayomi_source_id="src-pg-1")
     for i in range(5):
         await _add_comic(title=f"Pagination Comic {i:02d}")
 
@@ -1756,7 +1750,7 @@ async def test_list_requests_status_filter(logged_in_client):
     from app import database
     from app.models.comic import ComicStatus
 
-    c_tracking = await _add_comic(title="Status Filter Tracking")
+    await _add_comic(title="Status Filter Tracking")
     c_complete = await _add_comic(title="Status Filter Complete")
 
     async with database.AsyncSessionLocal() as db:

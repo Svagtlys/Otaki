@@ -8,22 +8,23 @@ Unit tests (in-memory SQLite, no Suwayomi required):
     - Ignores inactive chapters when computing cadence
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-import pytest_asyncio
-
-from app.models.chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from app.models.chapter_assignment import (
+    ChapterAssignment,
+    DownloadStatus,
+    RelocationStatus,
+)
 from app.models.comic import Comic, ComicStatus
 from app.models.source import Source
 from app.services import cadence_inferrer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_T0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+_T0 = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 async def _make_comic(db) -> Comic:
@@ -107,7 +108,9 @@ async def test_returns_correct_median_for_regular_chapters(db_session):
     source = await _make_source(db_session)
     for i in range(5):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + timedelta(days=7 * i),
         )
@@ -127,7 +130,9 @@ async def test_hiatus_gap_is_filtered(db_session):
     dates = [0, 7, 14, 104, 111, 118]  # hiatus between day 14 and 104 = 90 days
     for i, offset in enumerate(dates):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + timedelta(days=offset),
         )
@@ -144,7 +149,9 @@ async def test_all_sub_day_gaps_returns_none(db_session):
     source = await _make_source(db_session)
     for i in range(3):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + timedelta(hours=i),
         )
@@ -160,10 +167,14 @@ async def test_sub_day_median_after_hiatus_filter_returns_none(db_session):
     comic = await _make_comic(db_session)
     source = await _make_source(db_session)
     # Six chapters 6 hours apart, then one more 30 days later
-    offsets = [timedelta(hours=6 * i) for i in range(6)] + [timedelta(hours=30, days=30)]
+    offsets = [timedelta(hours=6 * i) for i in range(6)] + [
+        timedelta(hours=30, days=30)
+    ]
     for i, offset in enumerate(offsets):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + offset,
         )
@@ -178,7 +189,9 @@ async def test_exactly_one_day_cadence_is_accepted(db_session):
     source = await _make_source(db_session)
     for i in range(4):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + timedelta(days=i),
         )
@@ -195,7 +208,9 @@ async def test_sub_day_gaps_surviving_hiatus_filter_are_floored(db_session):
     source = await _make_source(db_session)
     for i in range(4):
         await _add_chapter(
-            db_session, comic, source,
+            db_session,
+            comic,
+            source,
             chapter_number=float(i + 1),
             published_at=_T0 + timedelta(minutes=30 * i),
         )
@@ -209,10 +224,26 @@ async def test_inactive_chapters_are_ignored(db_session):
     comic = await _make_comic(db_session)
     source = await _make_source(db_session)
     # Two active chapters 7 days apart
-    await _add_chapter(db_session, comic, source, chapter_number=1, published_at=_T0, is_active=True)
-    await _add_chapter(db_session, comic, source, chapter_number=2, published_at=_T0 + timedelta(days=7), is_active=True)
+    await _add_chapter(
+        db_session, comic, source, chapter_number=1, published_at=_T0, is_active=True
+    )
+    await _add_chapter(
+        db_session,
+        comic,
+        source,
+        chapter_number=2,
+        published_at=_T0 + timedelta(days=7),
+        is_active=True,
+    )
     # One inactive chapter with a different date — should be ignored
-    await _add_chapter(db_session, comic, source, chapter_number=1, published_at=_T0 + timedelta(days=100), is_active=False)
+    await _add_chapter(
+        db_session,
+        comic,
+        source,
+        chapter_number=1,
+        published_at=_T0 + timedelta(days=100),
+        is_active=False,
+    )
 
     result = await cadence_inferrer.infer_cadence(comic.id, db_session)
     assert result is not None

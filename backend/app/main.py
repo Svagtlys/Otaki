@@ -1,17 +1,17 @@
 import asyncio
 import contextlib
 import logging
-from logging.config import dictConfig
-import jwt
 from contextlib import asynccontextmanager
+from logging.config import dictConfig
 
+import jwt
 from fastapi import FastAPI
-
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import auth, health, requests, search, settings as settings_api, setup, sources
+from .api import auth, health, requests, search, setup, sources
+from .api import settings as settings_api
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
@@ -74,7 +74,14 @@ dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("otaki")
 
 
-_SETUP_EXEMPT = ("/api/setup", "/api/auth", "/api/health", "/docs", "/openapi.json", "/redoc")
+_SETUP_EXEMPT = (
+    "/api/setup",
+    "/api/auth",
+    "/api/health",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+)
 # <img> tags cannot send JWT — these paths must be publicly accessible
 _AUTH_EXEMPT = ("/api/search/thumbnail", "/api/health")
 

@@ -1,6 +1,6 @@
 import logging
 import statistics
-from datetime import timezone
+from datetime import UTC
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,12 +34,12 @@ async def infer_cadence(comic_id: int, db: AsyncSession) -> float | None:
         return None
 
     # Ensure all timestamps are timezone-aware for consistent subtraction
-    aware = [
-        ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
-        for ts in timestamps
-    ]
+    aware = [ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts for ts in timestamps]
 
-    gaps = [(aware[i + 1] - aware[i]).total_seconds() / 86400.0 for i in range(len(aware) - 1)]
+    gaps = [
+        (aware[i + 1] - aware[i]).total_seconds() / 86400.0
+        for i in range(len(aware) - 1)
+    ]
 
     # Filter zero or negative gaps (duplicate upload dates)
     gaps = [g for g in gaps if g > 0]

@@ -1,4 +1,5 @@
 """Write or update ComicInfo.xml inside a chapter folder before it is packed to CBZ."""
+
 import xml.etree.ElementTree as ET
 from pathlib import Path
 

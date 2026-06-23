@@ -63,7 +63,7 @@ The writing-plans skill will:
 
 ## Step 4: Direct to Implementation
 
-Once the plan is approved, inform the user that planning is complete. Provide a copy-able prompt for the user to pass to the code mode with the `/executing-plans` skill, which should include:
+Once the plan is approved, inform the user that planning is complete. Provide a copy-able prompt for the user to pass to the code mode with the `executing-plans` skill, which should start with `/executing-plans` and include:
 
 - The branch name
 - The draft PR URL

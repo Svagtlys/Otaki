@@ -689,7 +689,11 @@ async def reprocess_chapters(
     """
 
     async def generate():
-        comic_result = await db.execute(select(Comic).where(Comic.id == comic_id))
+        comic_result = await db.execute(
+            select(Comic)
+            .where(Comic.id == comic_id)
+            .options(selectinload(Comic.aliases))
+        )
         comic = comic_result.scalar_one_or_none()
         if comic is None:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Comic not found'})}\n\n"
@@ -746,10 +750,7 @@ async def reprocess_chapters(
                 DownloadStatus.downloading,
             ):
                 staging = file_relocator.find_staging_path(
-                    chapter_name,
-                    manga_title,
-                    source_display_name,
-                    assignment.chapter_number,
+                    assignment, comic, chapter_name, source_display_name
                 )
                 if staging is not None:
                     # File already downloaded — treat as done and relocate (same as Case 4)
@@ -770,7 +771,6 @@ async def reprocess_chapters(
                             comic,
                             db,
                             chapter_name=chapter_name,
-                            manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     else:
@@ -780,7 +780,6 @@ async def reprocess_chapters(
                             comic,
                             db,
                             chapter_name=chapter_name,
-                            manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     processed += 1
@@ -829,10 +828,7 @@ async def reprocess_chapters(
             # Case 4: download done — check staging then library
             if assignment.download_status == DownloadStatus.done:
                 staging = file_relocator.find_staging_path(
-                    chapter_name,
-                    manga_title,
-                    source_display_name,
-                    assignment.chapter_number,
+                    assignment, comic, chapter_name, source_display_name
                 )
                 if staging is not None:
                     # Staging file exists — run the normal relocation pipeline
@@ -851,7 +847,6 @@ async def reprocess_chapters(
                             comic,
                             db,
                             chapter_name=chapter_name,
-                            manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     else:
@@ -861,7 +856,6 @@ async def reprocess_chapters(
                             comic,
                             db,
                             chapter_name=chapter_name,
-                            manga_title=manga_title,
                             source_display_name=source_display_name,
                         )
                     processed += 1

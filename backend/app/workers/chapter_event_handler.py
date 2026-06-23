@@ -68,7 +68,12 @@ async def handle(
         assignment.download_status = DownloadStatus.done
         assignment.downloaded_at = datetime.now(UTC)
 
-        comic = await db.get(Comic, assignment.comic_id)
+        comic = await db.execute(
+            select(Comic)
+            .where(Comic.id == assignment.comic_id)
+            .options(selectinload(Comic.aliases))
+        )
+        comic = comic.scalar_one()
 
         # Check whether this is an upgrade download (an active assignment already
         # exists for the same comic + chapter from a prior, lower-priority source).
@@ -91,7 +96,6 @@ async def handle(
                     comic,
                     db,
                     chapter_name=chapter_name,
-                    manga_title=manga_title,
                     source_display_name=source_display_name,
                 )
                 assignment.is_active = True
@@ -126,7 +130,6 @@ async def handle(
                         comic,
                         db,
                         chapter_name=chapter_name,
-                        manga_title=manga_title,
                         source_display_name=source_display_name,
                     )
                     existing_active.is_active = False

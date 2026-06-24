@@ -87,28 +87,6 @@ Cross-reference each plan task with commits:
 | Task has no commits | Ask user — was this task skipped or forgotten? |
 | Uncommitted changes exist | Stage and commit with proper conventional commit message |
 | Commits not in plan | Verify they are related (refinements, fixes) — if unrelated, ask user |
-| WIP/fixup commits | Squash into parent commits using `git rebase -i` |
-
-### Clean Up WIP Commits
-
-If the branch has WIP, fixup, or empty commits, clean them up:
-
-```bash
-git rebase -i origin/develop
-```
-
-- Squash `fixup!` and `amend!` commits into their parents
-- Squash `WIP` commits into the nearest meaningful commit
-- Remove empty commits
-- Ensure each remaining commit has a proper conventional commit message
-
-**Important:** If the branch has already been pushed and others may have it checked out, merge `develop` instead of rebasing:
-
-```bash
-git fetch origin
-git merge origin/develop
-# resolve conflicts, commit
-```
 
 ### Ensure Proper Commit Messages
 
@@ -218,7 +196,6 @@ finish-work-item (code mode)  ← YOU ARE HERE
     ├── Step 3: Verify frontend build (if applicable)
     ├── Step 4: Load implementation plan
     ├── Step 5: Audit commits against plan
-    │   ├── Clean WIP/fixup commits
     │   └── Ensure conventional commit messages
     ├── Step 6: Stage remaining uncommitted work
     ├── Step 7: Push to origin

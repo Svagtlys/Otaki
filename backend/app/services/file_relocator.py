@@ -141,19 +141,58 @@ def _match_by_regex(
     return matches
 
 
+def _build_manga_titles(comic: Comic) -> list[str]:
+    """Build ordered list of folder names to search: primary title + aliases."""
+    titles = [comic.title]
+    for alias in comic.aliases:
+        titles.append(alias.title)
+    return titles
+
+
 def find_staging_path(
-    chapter_name: str, manga_title: str, source_display_name: str, chapter_number: float
+    assignment: ChapterAssignment,
+    comic: Comic,
+    source_display_name: str,
 ) -> Path | None:
-    if not manga_title or manga_title == "":
+    """Find a chapter's staging file by searching through title and alias folders.
+
+    Derives manga titles from the Comic (primary title + aliases), chapter number
+    and chapter name from the ChapterAssignment. Tries each title folder in order
+    and returns the first successful match.
+    """
+    manga_titles = _build_manga_titles(comic)
+    chapter_number = assignment.chapter_number
+    chapter_name = assignment.source_chapter_name or f"Chapter {chapter_number}"
+
+    if not manga_titles:
         return None
+
+    for manga_title in manga_titles:
+        if manga_title == "":
+            continue
+        result = _find_staging_path_for_title(
+            chapter_name, manga_title, source_display_name, chapter_number
+        )
+        if result is not None:
+            return result
+
+    return None
+
+
+def _find_staging_path_for_title(
+    chapter_name: str,
+    manga_title: str,
+    source_display_name: str,
+    chapter_number: float,
+) -> Path | None:
+    """Search for a chapter file under a single manga title directory.
+
+    This is the internal search logic that runs for each title in the alias list.
+    """
     source_dir = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name
     base = _find_manga_subdir(source_dir, manga_title)
 
     if base is None:
-        # Fuzzy fallback: scan SUWAYOMI_DOWNLOAD_PATH for a source directory whose
-        # normalised name starts with the normalised display name. This handles cases
-        # like displayName="Weeb Central" but on-disk dir="WeebCentral" or
-        # "Weeb Central (EN)". Also handles sanitized manga subdirectory names.
         download_root = Path(settings.SUWAYOMI_DOWNLOAD_PATH)
         norm_display = _normalize_source_name(source_display_name)
         candidates = [
@@ -165,23 +204,25 @@ def find_staging_path(
         ]
         if len(candidates) == 1:
             logger.warning(
-                "file_relocator: source dir %r not found; using fuzzy match %r for display name %r",
+                "file_relocator: source dir %r not found; using fuzzy match %r for display name %r (title %r)",
                 source_display_name,
                 candidates[0].name,
                 source_display_name,
+                manga_title,
             )
             base = _find_manga_subdir(candidates[0], manga_title)
         elif len(candidates) > 1:
             logger.warning(
                 "file_relocator: ambiguous source directory for display name %r — "
-                "multiple fuzzy matches: %s",
+                "multiple fuzzy matches: %s (title %r)",
                 source_display_name,
                 [d.name for d in candidates],
+                manga_title,
             )
             return None
 
     if base is None:
-        base = source_dir / manga_title  # non-existent path; triggers warning at end
+        base = source_dir / manga_title
 
     # --- 1. Exact CBZ match ---
     exact = base / f"{chapter_name}.cbz"
@@ -214,9 +255,10 @@ def find_staging_path(
         return subdirs[0]
 
     logger.warning(
-        "file_relocator: ambiguous or missing staging file for chapter %r in %s",
+        "file_relocator: ambiguous or missing staging file for chapter %r in %s (title %r)",
         chapter_name,
         base,
+        manga_title,
     )
     return None
 
@@ -349,8 +391,6 @@ async def relocate(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
     await asyncio.to_thread(
@@ -358,8 +398,6 @@ async def relocate(
         assignment,
         comic,
         db,
-        chapter_name,
-        manga_title,
         source_display_name,
     )
 
@@ -368,23 +406,22 @@ def _relocate_sync(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
+    chapter_name = (
+        assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+    )
     logger.info(
         "relocate: starting for comic=%r chapter=%r source=%r",
-        manga_title,
+        comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(
-        chapter_name, manga_title, source_display_name, assignment.chapter_number
-    )
+    staging = find_staging_path(assignment, comic, source_display_name)
     if staging is None:
         logger.warning(
             "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
-            manga_title,
+            comic.title,
             chapter_name,
             source_display_name,
         )
@@ -406,7 +443,7 @@ def _relocate_sync(
     assignment.library_path = str(dest)
     assignment.relocation_status = RelocationStatus.done
     logger.info(
-        "relocate: done for comic=%r chapter=%r -> %s", manga_title, chapter_name, dest
+        "relocate: done for comic=%r chapter=%r -> %s", comic.title, chapter_name, dest
     )
 
 
@@ -415,8 +452,6 @@ async def replace_in_library(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
     await asyncio.to_thread(
@@ -425,8 +460,6 @@ async def replace_in_library(
         new,
         comic,
         db,
-        chapter_name,
-        manga_title,
         source_display_name,
     )
 
@@ -436,23 +469,20 @@ def _replace_in_library_sync(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
+    chapter_name = new.source_chapter_name or f"Chapter {new.chapter_number}"
     logger.info(
         "replace_in_library: starting upgrade for comic=%r chapter=%r source=%r",
-        manga_title,
+        comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(
-        chapter_name, manga_title, source_display_name, new.chapter_number
-    )
+    staging = find_staging_path(new, comic, source_display_name)
     if staging is None:
         logger.warning(
             "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",
-            manga_title,
+            comic.title,
             chapter_name,
             source_display_name,
         )

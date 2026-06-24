@@ -116,7 +116,7 @@ GitHub automation will move the issue to **In Progress** when the draft PR is cr
 
 ## Step 6: Inform the User
 
-Once the branch is created and the draft PR is open, inform the user that the work item setup is complete. Provide a copy-able prompt for the user to pass to the architect mode with the `/plan-work-item` skill, which should include:
+Once the branch is created and the draft PR is open, inform the user that the work item setup is complete. Provide a copy-able prompt for the user to pass to the architect mode with the `plan-work-item` skill, which should start with `/plan-work-item` and include:
 
 - The branch name
 - The draft PR URL

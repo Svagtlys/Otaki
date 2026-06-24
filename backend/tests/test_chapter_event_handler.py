@@ -26,6 +26,9 @@ async def handler_db(monkeypatch):
 
     Yields the session factory so individual tests can open sessions to seed
     data and verify state after calling handle().
+
+    Both write_session and AsyncSessionLocal are patched so that Phase 2
+    (which bypasses the asyncio lock) still uses the in-memory test DB.
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -41,6 +44,11 @@ async def handler_db(monkeypatch):
             yield session
 
     monkeypatch.setattr(chapter_event_handler, "write_session", _write_session_stub)
+    # Phase 2 bypasses write_session() and uses AsyncSessionLocal() directly.
+    # Patch it to use the test session factory instead of the production DB.
+    monkeypatch.setattr(
+        chapter_event_handler, "AsyncSessionLocal", session_factory, raising=False
+    )
 
     yield session_factory
 
@@ -178,6 +186,48 @@ async def test_handle_regular_download(handler_db, mock_relocator):
         result = await db.get(ChapterAssignment, assignment_id)
         assert result.download_status == DownloadStatus.done
         assert result.downloaded_at is not None
+        assert result.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_handle_three_phase_intermediate_state(handler_db, monkeypatch):
+    """Phase 1 should commit download_status=done before file I/O runs."""
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    async with handler_db() as db:
+        assignment = _make_assignment(
+            comic_id, source_id, chapter_id="ch-three-phase", is_active=False
+        )
+        db.add(assignment)
+        await db.commit()
+        assignment_id = assignment.id
+
+    # Patch file_relocator.relocate to verify Phase 1 committed before file I/O
+    phase1_committed = False
+
+    async def tracking_relocate(*args, **kwargs):
+        nonlocal phase1_committed
+        # At this point, Phase 1 should have committed download_status=done
+        async with handler_db() as verify_db:
+            a = await verify_db.get(ChapterAssignment, assignment_id)
+            assert a.download_status == DownloadStatus.done
+            # is_active should NOT be set yet — file I/O hasn't completed
+            assert a.is_active is False
+            phase1_committed = True
+
+    monkeypatch.setattr(
+        chapter_event_handler.file_relocator, "relocate", tracking_relocate
+    )
+
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-three-phase", "Chapter 1", "Test Comic", "TestSrc"
+    )
+
+    assert phase1_committed is True
+
+    async with handler_db() as db:
+        result = await db.get(ChapterAssignment, assignment_id)
+        assert result.download_status == DownloadStatus.done
         assert result.is_active is True
 
 

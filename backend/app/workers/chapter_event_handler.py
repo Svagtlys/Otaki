@@ -95,7 +95,6 @@ async def handle(
                     assignment,
                     comic,
                     db,
-                    chapter_name=chapter_name,
                     source_display_name=source_display_name,
                 )
                 assignment.is_active = True
@@ -129,7 +128,6 @@ async def handle(
                         assignment,
                         comic,
                         db,
-                        chapter_name=chapter_name,
                         source_display_name=source_display_name,
                     )
                     existing_active.is_active = False

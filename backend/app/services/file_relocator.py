@@ -152,17 +152,17 @@ def _build_manga_titles(comic: Comic) -> list[str]:
 def find_staging_path(
     assignment: ChapterAssignment,
     comic: Comic,
-    chapter_name: str,
     source_display_name: str,
 ) -> Path | None:
     """Find a chapter's staging file by searching through title and alias folders.
 
-    Derives manga titles from the Comic (primary title + aliases) and chapter
-    number from the ChapterAssignment. Tries each title folder in order and
-    returns the first successful match.
+    Derives manga titles from the Comic (primary title + aliases), chapter number
+    and chapter name from the ChapterAssignment. Tries each title folder in order
+    and returns the first successful match.
     """
     manga_titles = _build_manga_titles(comic)
     chapter_number = assignment.chapter_number
+    chapter_name = assignment.source_chapter_name or f"Chapter {chapter_number}"
 
     if not manga_titles:
         return None
@@ -391,7 +391,6 @@ async def relocate(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
     source_display_name: str,
 ) -> None:
     await asyncio.to_thread(
@@ -399,7 +398,6 @@ async def relocate(
         assignment,
         comic,
         db,
-        chapter_name,
         source_display_name,
     )
 
@@ -408,16 +406,18 @@ def _relocate_sync(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
     source_display_name: str,
 ) -> None:
+    chapter_name = (
+        assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+    )
     logger.info(
         "relocate: starting for comic=%r chapter=%r source=%r",
         comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(assignment, comic, chapter_name, source_display_name)
+    staging = find_staging_path(assignment, comic, source_display_name)
     if staging is None:
         logger.warning(
             "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
@@ -452,7 +452,6 @@ async def replace_in_library(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
     source_display_name: str,
 ) -> None:
     await asyncio.to_thread(
@@ -461,7 +460,6 @@ async def replace_in_library(
         new,
         comic,
         db,
-        chapter_name,
         source_display_name,
     )
 
@@ -471,16 +469,16 @@ def _replace_in_library_sync(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
     source_display_name: str,
 ) -> None:
+    chapter_name = new.source_chapter_name or f"Chapter {new.chapter_number}"
     logger.info(
         "replace_in_library: starting upgrade for comic=%r chapter=%r source=%r",
         comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(new, comic, chapter_name, source_display_name)
+    staging = find_staging_path(new, comic, source_display_name)
     if staging is None:
         logger.warning(
             "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",

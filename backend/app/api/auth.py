@@ -51,8 +51,8 @@ async def require_auth(
     """Validate JWT and return the active User. Use as a route dependency."""
     try:
         payload = auth.decode_token(token)
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from e
     user = await db.get(User, int(payload["sub"]))
     if not user or not user.active:
         raise HTTPException(status_code=401, detail="Not authenticated")

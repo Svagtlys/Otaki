@@ -49,7 +49,7 @@ class Settings(BaseSettings):
                 replaced = pattern.replace("{chapter_number}", "1")
                 re.compile(replaced)
             except re.error as e:
-                raise ValueError(f"Invalid regex pattern '{pattern}': {e}")
+                raise ValueError(f"Invalid regex pattern '{pattern}': {e}") from e
         return value
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8"}

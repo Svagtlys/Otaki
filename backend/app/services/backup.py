@@ -245,7 +245,7 @@ def parse_backup_zip(data: bytes) -> tuple[dict, zipfile.ZipFile | None]:
         backup = json.loads(zf.read("backup.json"))
     except KeyError:
         zf.close()
-        raise ValueError("backup.json not found in zip")
+        raise ValueError("backup.json not found in zip") from None
     except json.JSONDecodeError as e:
         zf.close()
         raise ValueError(f"backup.json is not valid JSON: {e}") from e

@@ -89,7 +89,7 @@ async def test_ignores_non_finished_states():
         if call_count == 1:
             # Yield nothing — simulate subscription with no FINISHED events
             return
-            yield  # noqa: unreachable — makes this an async generator
+            yield  # noqa: F841  # makes this an async generator
         else:
             raise asyncio.CancelledError()
 

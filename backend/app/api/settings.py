@@ -208,7 +208,7 @@ async def import_preview(
         try:
             backup = backup_svc.parse_backup_json(raw)
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(status_code=422, detail=str(e)) from e
 
     return await backup_svc.build_preview(backup, db)
 
@@ -258,7 +258,7 @@ async def import_apply(
             ComicResolution(**r).model_dump() for r in json.loads(comic_resolutions)
         ]
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Invalid resolutions: {e}")
+        raise HTTPException(status_code=422, detail=f"Invalid resolutions: {e}") from e
 
     try:
         backup, zf = backup_svc.parse_backup_zip(raw)
@@ -270,7 +270,7 @@ async def import_apply(
             backup = backup_svc.parse_backup_json(raw)
             zip_data = None
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(status_code=422, detail=str(e)) from e
 
     result = await backup_svc.apply_backup(backup, zip_data, src_res, com_res, db)
     return ApplySummary(**result)

@@ -183,7 +183,7 @@ async def save_paths(
         except (PermissionError, OSError) as exc:
             raise HTTPException(
                 status_code=400, detail=f"Cannot create {field} {value!r}: {exc}"
-            )
+            ) from exc
 
     write_env("SUWAYOMI_DOWNLOAD_PATH", body.download_path)
     write_env("LIBRARY_PATH", body.library_path)

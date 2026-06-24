@@ -1046,10 +1046,12 @@ async def test_apply_restores_source_overrides(logged_in_client):
     assert r.status_code == 200
 
     async with database.AsyncSessionLocal() as db:
-        from app.models.comic import Comic as C
+        from app.models.comic import Comic as ComicModel
 
         c = (
-            await db.execute(select(C).where(C.title == "Override Import Comic"))
+            await db.execute(
+                select(ComicModel).where(ComicModel.title == "Override Import Comic")
+            )
         ).scalar_one()
         rows = (
             (

@@ -84,10 +84,12 @@ async def thumbnail_proxy(
     try:
         async with httpx.AsyncClient(verify=False) as client:
             resp = await client.get(url, headers=headers, timeout=15)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Thumbnail request timed out")
-    except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Thumbnail fetch failed")
+    except httpx.TimeoutException as e:
+        raise HTTPException(
+            status_code=504, detail="Thumbnail request timed out"
+        ) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="Thumbnail fetch failed") from e
 
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Thumbnail fetch failed")

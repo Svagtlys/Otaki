@@ -726,9 +726,6 @@ async def reprocess_chapters(
         queued = processed = skipped = 0
 
         for assignment in assignments:
-            chapter_name = (
-                assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
-            )
             source_display_name = display_name_by_source_id.get(
                 assignment.source.suwayomi_source_id, assignment.source.name
             )

@@ -11,9 +11,9 @@ if config.config_file_name is not None and not logging.getLogger().hasHandlers()
 
 # Import Base so autogenerate can detect model changes.
 # Models must be imported before target_metadata is read.
-from app import models  # noqa: F401 — registers all models on Base.metadata
-from app.config import settings
-from app.database import Base
+from app import models  # noqa: F401, E402  # registers all models on Base.metadata
+from app.config import settings  # noqa: E402
+from app.database import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

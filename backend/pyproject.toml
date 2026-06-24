@@ -20,7 +20,13 @@ select = [
   "SIM",    # flake8-simplify
   "T20",    # flake8-print (catch debug print statements)
 ]
-ignore = ["B008"]  # FastAPI Depends() in defaults is intentional
+ignore = [
+  "B008",  # FastAPI Depends() in defaults is intentional
+  "E501",  # Line too long — formatter cannot reflow docstrings/comments/strings
+  "SIM102",  # Nested ifs are clearer than combined conditions in our patterns
+  "SIM103",  # Explicit return False branches are clearer than negated conditions
+  "SIM108",  # Verbose if/else with comments is clearer than ternary
+]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*" = ["E501"]  # Long migration filenames aren't our concern

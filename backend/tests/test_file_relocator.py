@@ -47,6 +47,7 @@ def _make_assignment(
     source_name="TestSource",
     library_path=None,
     chapter_published_at=None,
+    source_chapter_name=None,
 ):
     return SimpleNamespace(
         id=1,
@@ -55,6 +56,7 @@ def _make_assignment(
         library_path=library_path,
         relocation_status=RelocationStatus.pending,
         chapter_published_at=chapter_published_at or datetime(2024, 6, 15, tzinfo=UTC),
+        source_chapter_name=source_chapter_name,
         source=SimpleNamespace(name=source_name),
     )
 
@@ -167,9 +169,7 @@ async def test_relocate_calls_to_thread(tmp_path, monkeypatch):
 
     with patch("asyncio.to_thread") as mock_to_thread:
         mock_to_thread.return_value = None
-        await file_relocator.relocate(
-            assignment, comic, None, chapter_name, source_display
-        )
+        await file_relocator.relocate(assignment, comic, None, source_display)
         assert mock_to_thread.called
         assert mock_to_thread.call_args[0][0] == file_relocator._relocate_sync
 
@@ -201,9 +201,7 @@ async def test_relocate_hardlink(tmp_path, monkeypatch):
     assignment = _make_assignment(chapter_number=1.0)
 
     with patch("app.services.file_relocator.os.link", wraps=os.link) as mock_link:
-        await file_relocator.relocate(
-            assignment, comic, None, chapter_name, source_display
-        )
+        await file_relocator.relocate(assignment, comic, None, source_display)
         assert mock_link.called  # hardlink path taken
 
     assert assignment.relocation_status == RelocationStatus.done
@@ -244,9 +242,7 @@ async def test_relocate_cross_filesystem(tmp_path, monkeypatch):
         "app.services.file_relocator.os.link",
         side_effect=OSError("cross-device link not permitted"),
     ):
-        await file_relocator.relocate(
-            assignment, comic, None, chapter_name, source_display
-        )
+        await file_relocator.relocate(assignment, comic, None, source_display)
 
     assert assignment.relocation_status == RelocationStatus.done
     dest = Path(assignment.library_path)
@@ -273,7 +269,7 @@ async def test_relocate_staging_not_found(tmp_path, monkeypatch):
     assignment = _make_assignment(chapter_number=3.0)
 
     # No staging file created
-    await file_relocator.relocate(assignment, comic, None, "Chapter 003", "SomeSource")
+    await file_relocator.relocate(assignment, comic, None, "SomeSource")
 
     assert assignment.relocation_status == RelocationStatus.failed
     assert assignment.library_path is None
@@ -307,7 +303,7 @@ async def test_relocate_creates_parent_dirs(tmp_path, monkeypatch):
     comic = _make_comic(title="DragonBall", library_title="DragonBall")
     assignment = _make_assignment(chapter_number=1.0)
 
-    await file_relocator.relocate(assignment, comic, None, chapter_name, source_display)
+    await file_relocator.relocate(assignment, comic, None, source_display)
 
     assert assignment.relocation_status == RelocationStatus.done
     dest = Path(assignment.library_path)
@@ -340,7 +336,7 @@ async def test_relocate_with_folder_staging(tmp_path, monkeypatch):
     comic = _make_comic(title="My Manga", library_title="My Manga")
     assignment = _make_assignment(chapter_number=1.0, volume_number=None)
 
-    await file_relocator.relocate(assignment, comic, None, chapter_name, source_display)
+    await file_relocator.relocate(assignment, comic, None, source_display)
 
     assert assignment.relocation_status == RelocationStatus.done
 
@@ -404,7 +400,6 @@ async def test_replace_in_library_calls_to_thread(tmp_path, monkeypatch):
             new_assignment,
             comic,
             None,
-            chapter_name,
             source_display,
         )
         assert mock_to_thread.called
@@ -448,7 +443,6 @@ async def test_replace_in_library_atomic(tmp_path, monkeypatch):
         new_assignment,
         comic,
         None,
-        chapter_name,
         source_display,
     )
 
@@ -489,7 +483,6 @@ async def test_relocate_strategy_copy_keeps_staging(tmp_path, monkeypatch):
         assignment,
         _make_comic(title="TestManga", library_title="TestManga"),
         None,
-        chapter_name,
         source_display,
     )
 
@@ -529,7 +522,6 @@ async def test_relocate_strategy_move_deletes_staging(tmp_path, monkeypatch):
         assignment,
         _make_comic(title="TestManga", library_title="TestManga"),
         None,
-        chapter_name,
         source_display,
     )
 
@@ -573,7 +565,6 @@ async def test_replace_in_library_copy_strategy_keeps_staging(tmp_path, monkeypa
         new_assignment,
         _make_comic(title="TestManga", library_title="TestManga"),
         None,
-        chapter_name,
         source_display,
     )
 
@@ -611,7 +602,6 @@ async def test_replace_in_library_staging_not_found(tmp_path, monkeypatch):
         new_assignment,
         comic,
         None,
-        "Chapter 001",
         "NoSource",
     )
 
@@ -663,9 +653,7 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
     comic = _make_comic(title=manga_title, library_title=manga_title)
     assignment = _make_assignment(chapter_number=1.0, source_name=source_display_name)
 
-    await file_relocator.relocate(
-        assignment, comic, None, chapter_name, source_display_name
-    )
+    await file_relocator.relocate(assignment, comic, None, source_display_name)
 
     assert assignment.relocation_status == RelocationStatus.done
     dest = Path(assignment.library_path)
@@ -698,9 +686,7 @@ def test_find_staging_path_returns_folder(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result == chapter_folder
     assert result.is_dir()
@@ -837,7 +823,6 @@ async def test_relocate_injects_cover(tmp_path, monkeypatch):
         assignment,
         comic,
         None,
-        chapter_name=chapter_name,
         source_display_name=source_display,
     )
 
@@ -998,9 +983,7 @@ def test_find_staging_path_source_dir_space_stripped(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "Weeb Central"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "Weeb Central")
     assert result == cbz
 
 
@@ -1019,9 +1002,7 @@ def test_find_staging_path_source_dir_with_suffix(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "Weeb Central"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "Weeb Central")
     assert result == cbz
 
 
@@ -1039,9 +1020,7 @@ def test_find_staging_path_source_dir_case_mismatch(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "weebcentral"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "weebcentral")
     assert result == cbz
 
 
@@ -1062,9 +1041,7 @@ def test_find_staging_path_source_dir_ambiguous_returns_none(tmp_path, monkeypat
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "Weeb Central"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "Weeb Central")
     assert result is None
 
 
@@ -1088,9 +1065,7 @@ def test_find_staging_path_exact_match_skips_fallback(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "ExactSource"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "ExactSource")
     assert result == cbz
 
 
@@ -1114,9 +1089,7 @@ def test_find_staging_path_sanitized_colon_in_title(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "SomeSource"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "SomeSource")
     assert result == cbz
 
 
@@ -1134,9 +1107,7 @@ def test_find_staging_path_sanitized_multiple_special_chars(tmp_path, monkeypatc
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "SomeSource"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "SomeSource")
     assert result == cbz
 
 
@@ -1155,9 +1126,7 @@ def test_find_staging_path_sanitized_ambiguous(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "SomeSource"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "SomeSource")
     assert result is None
 
 
@@ -1176,9 +1145,7 @@ def test_find_staging_path_sanitized_in_fuzzy_source_dir(tmp_path, monkeypatch):
 
     comic = _make_comic(title=manga_title)
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, "Weeb Central"
-    )
+    result = file_relocator.find_staging_path(assignment, comic, "Weeb Central")
     assert result == cbz
 
 
@@ -1197,9 +1164,7 @@ def test_find_staging_path_empty_manga_title_returns_none(tmp_path, monkeypatch)
 
     comic = _make_comic(title="")
     assignment = _make_assignment(chapter_number=1.0)
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result is None
 
@@ -1330,7 +1295,6 @@ class TestFindStagingPathRegex:
         result = file_relocator.find_staging_path(
             _make_assignment(chapter_number=5.0),
             _make_comic(title="My Manga"),
-            "Unknown Name",
             "TestSource",
         )
         assert result == manga_dir / "MangaSee_Ch. 5.cbz"
@@ -1356,7 +1320,6 @@ class TestFindStagingPathRegex:
         result = file_relocator.find_staging_path(
             _make_assignment(chapter_number=10.0),
             _make_comic(title="My Manga"),
-            "Unknown Name",
             "TestSource",
         )
         assert result == manga_dir / "Chapter 10"
@@ -1379,9 +1342,8 @@ class TestFindStagingPathRegex:
         )
 
         result = file_relocator.find_staging_path(
-            _make_assignment(chapter_number=5.0),
+            _make_assignment(chapter_number=5.0, source_chapter_name="Episode 5"),
             _make_comic(title="My Manga"),
-            "Episode 5",
             "TestSource",
         )
         assert result == exact_cbz
@@ -1405,7 +1367,6 @@ class TestFindStagingPathRegex:
         result = file_relocator.find_staging_path(
             _make_assignment(chapter_number=5.0),
             _make_comic(title="My Manga"),
-            "Unknown",
             "TestSource",
         )
         assert result == cbz
@@ -1430,7 +1391,6 @@ class TestFindStagingPathRegex:
         result = file_relocator.find_staging_path(
             _make_assignment(chapter_number=148.0),
             _make_comic(title="My Manga"),
-            "Episode 148",
             "TestSource",
         )
         assert result is None
@@ -1464,9 +1424,7 @@ def test_find_staging_path_found_in_alias_folder(tmp_path, monkeypatch):
     cbz = alias_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result == cbz
 
@@ -1495,9 +1453,7 @@ def test_find_staging_path_primary_title_takes_priority(tmp_path, monkeypatch):
     alias_cbz = alias_dir / f"{chapter_name}.cbz"
     _make_cbz(alias_cbz)
 
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result == primary_cbz
 
@@ -1520,9 +1476,7 @@ def test_find_staging_path_not_found_in_any_title(tmp_path, monkeypatch):
         d = downloads / source_display / title
         d.mkdir(parents=True)
 
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result is None
 
@@ -1542,9 +1496,7 @@ def test_find_staging_path_no_aliases_searches_only_primary(tmp_path, monkeypatc
     cbz = manga_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result == cbz
 
@@ -1573,9 +1525,7 @@ def test_find_staging_path_skips_to_second_alias(tmp_path, monkeypatch):
     cbz = alias2_dir / f"{chapter_name}.cbz"
     _make_cbz(cbz)
 
-    result = file_relocator.find_staging_path(
-        assignment, comic, chapter_name, source_display
-    )
+    result = file_relocator.find_staging_path(assignment, comic, source_display)
 
     assert result == cbz
 

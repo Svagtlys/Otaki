@@ -130,9 +130,10 @@ git push --force-with-lease origin <branch-name>
 
 ## Step 8: Update Draft PR Description
 
-Ensure the PR description references the plan and spec:
+Ensure the PR description references the plan and spec. Write the body to a temporary file, then use `gh pr edit`:
 
-```markdown
+```bash
+cat > /tmp/pr-body.md << 'EOF'
 Closes #<ISSUE_NUMBER>
 
 ## Description
@@ -150,15 +151,28 @@ Closes #<ISSUE_NUMBER>
 - [x] Tests passing
 - [x] Lint clean
 - [x] Frontend builds (if applicable)
+EOF
+
+gh pr edit <PR_NUMBER> --body-file /tmp/pr-body.md --repo Svagtlys/Otaki
 ```
 
-Update the PR body:
+Or use `--body` for inline updates:
 
 ```bash
-gh pr edit <PR_NUMBER> --body-file pr-body.md --repo Svagtlys/Otaki
+gh pr edit <PR_NUMBER> --body '## What
+
+[Description]
+
+## Testing
+- Tests passing
+- Lint clean' --repo Svagtlys/Otaki
 ```
 
+**Note:** `gh pr edit` may show a deprecation warning for GitHub Projects (classic) — this is harmless and can be ignored. The PR body will still be updated successfully.
+
 ## Step 9: Mark PR Ready for Review
+
+Use `gh pr edit` to mark the draft PR as ready for review:
 
 ```bash
 gh pr edit <PR_NUMBER> --ready --repo Svagtlys/Otaki

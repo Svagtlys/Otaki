@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..config import settings
-from ..database import write_session
+from ..database import AsyncSessionLocal, write_session
 from ..models.chapter_assignment import (
     ChapterAssignment,
     DownloadStatus,
@@ -44,7 +44,10 @@ async def handle(
         )
         return
 
-    # FINISHED path
+    # FINISHED path — three-phase execution to minimize lock hold time
+    # Phase 1: DB (locked) — mark done, compute swap decision, commit immediately
+    phase_data = None
+
     async with write_session() as db:
         assignment = await db.scalar(
             select(ChapterAssignment)
@@ -75,8 +78,7 @@ async def handle(
         )
         comic = comic.scalar_one()
 
-        # Check whether this is an upgrade download (an active assignment already
-        # exists for the same comic + chapter from a prior, lower-priority source).
+        # Check whether this is an upgrade download
         existing_active = await db.scalar(
             select(ChapterAssignment)
             .where(
@@ -88,79 +90,118 @@ async def handle(
             .options(selectinload(ChapterAssignment.source))
         )
 
+        # Compute swap decision without running file I/O
+        if existing_active is None:
+            action = "relocate"
+            should_swap = True
+            existing_active_id = None
+        else:
+            existing_failed = (
+                existing_active.download_status == DownloadStatus.failed
+                or existing_active.relocation_status == RelocationStatus.failed
+            )
+
+            if existing_failed:
+                should_swap = True
+            else:
+                from ..services import source_selector
+
+                incoming_priority = await source_selector.effective_priority(
+                    assignment.source, comic, db
+                )
+                existing_priority = await source_selector.effective_priority(
+                    existing_active.source, comic, db
+                )
+                should_swap = incoming_priority < existing_priority
+
+            if should_swap:
+                action = "swap"
+                existing_active_id = existing_active.id
+            else:
+                action = "no_swap"
+                existing_active_id = None
+                logger.info(
+                    "handle: incoming from lower-priority source (priority=%d vs %d) "
+                    "— marking done but keeping existing active",
+                    assignment.source.priority,
+                    existing_active.source.priority,
+                )
+
+        # Commit Phase 1: assignment is now download_status=done
+        await db.commit()
+
+        phase_data = {
+            "assignment_id": assignment.id,
+            "comic": comic,
+            "action": action,
+            "should_swap": should_swap,
+            "existing_active_id": existing_active_id,
+            "source_display_name": source_display_name,
+            "comic_title": comic.title,
+            "chapter_name": chapter_name,
+        }
+
+    # Phase 2: File I/O — bypasses write_session() asyncio lock so other
+    # handle() calls can perform Phase 1 DB work in parallel.
+    # Uses AsyncSessionLocal() directly since the asyncio lock is the
+    # bottleneck (not SQLite itself), and file I/O yields via asyncio.to_thread().
+    if phase_data is None:
+        return
+
+    relocation_failed = False
+    async with AsyncSessionLocal() as db:
+        assignment = await db.get(ChapterAssignment, phase_data["assignment_id"])
         try:
-            if existing_active is None:
-                # Regular first download — relocate and mark active.
+            if phase_data["action"] == "relocate":
                 await file_relocator.relocate(
                     assignment,
-                    comic,
+                    phase_data["comic"],
                     db,
-                    source_display_name=source_display_name,
+                    source_display_name=phase_data["source_display_name"],
                 )
                 assignment.is_active = True
-            else:
-                # Upgrade download — priority-aware swap decision.
-                # A working download from ANY source beats a failed one.
-                existing_failed = (
-                    existing_active.download_status == DownloadStatus.failed
-                    or existing_active.relocation_status == RelocationStatus.failed
+            elif phase_data["action"] == "swap":
+                existing_active = await db.get(
+                    ChapterAssignment, phase_data["existing_active_id"]
                 )
+                await file_relocator.replace_in_library(
+                    existing_active,
+                    assignment,
+                    phase_data["comic"],
+                    db,
+                    source_display_name=phase_data["source_display_name"],
+                )
+                existing_active.is_active = False
+                assignment.is_active = True
+            else:
+                # no_swap — mark done but keep inactive
+                assignment.is_active = False
 
-                if existing_failed:
-                    # Existing is broken — any working download wins.
-                    should_swap = True
-                else:
-                    # Compare effective priorities (lower number = higher priority).
-                    from ..services import source_selector
-
-                    incoming_priority = await source_selector.effective_priority(
-                        assignment.source, comic, db
-                    )
-                    existing_priority = await source_selector.effective_priority(
-                        existing_active.source, comic, db
-                    )
-                    # Swap only if incoming is strictly better (lower priority number).
-                    should_swap = incoming_priority < existing_priority
-
-                if should_swap:
-                    await file_relocator.replace_in_library(
-                        existing_active,
-                        assignment,
-                        comic,
-                        db,
-                        source_display_name=source_display_name,
-                    )
-                    existing_active.is_active = False
-                    assignment.is_active = True
-                else:
-                    # Lower-priority source completed — mark done but keep inactive.
-                    logger.info(
-                        "handle: incoming from lower-priority source (priority=%d vs %d) "
-                        "— marking done but keeping existing active",
-                        assignment.source.priority,
-                        existing_active.source.priority,
-                    )
-                    assignment.is_active = False
+            await db.commit()
         except Exception:
+            relocation_failed = True
+            await db.rollback()
             logger.exception(
                 "handle: relocation raised for chapter_id=%s comic=%r chapter=%s — "
                 "assignment left in download_status=done, relocation_status=%s",
                 suwayomi_chapter_id,
-                comic.title if comic else "unknown",
-                chapter_name,
+                phase_data["comic_title"],
+                phase_data["chapter_name"],
                 assignment.relocation_status,
             )
 
-        if assignment.relocation_status == RelocationStatus.failed:
-            logger.warning(
-                "handle: relocation failed for chapter_id=%s comic=%r chapter=%s "
-                "(staging file not found or path error)",
-                suwayomi_chapter_id,
-                comic.title if comic else "unknown",
-                chapter_name,
-            )
-
-        await db.commit()
+    # Phase 3: Log relocation failure warning (no DB write needed)
+    if not relocation_failed:
+        async with write_session() as db:
+            assignment = await db.get(ChapterAssignment, phase_data["assignment_id"])
+            if assignment and assignment.relocation_status == RelocationStatus.failed:
+                logger.warning(
+                    "handle: relocation failed for chapter_id=%s comic=%r chapter=%s "
+                    "(staging file not found or path error)",
+                    suwayomi_chapter_id,
+                    phase_data["comic_title"],
+                    phase_data["chapter_name"],
+                )
 
 
 async def _handle_error(

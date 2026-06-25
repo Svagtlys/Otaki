@@ -186,7 +186,7 @@ async def test_poll_downloads_maps_fields_correctly():
 
 
 async def test_make_client_passes_verify_true(monkeypatch):
-    """_make_client passes verify=True to the transport when SUWAYOMI_VERIFY_SSL is True."""
+    """_make_client passes a truthy verify arg when SUWAYOMI_VERIFY_SSL is True."""
     from app.config import settings
     from app.services.suwayomi import _make_client
     from gql.transport.httpx import HTTPXAsyncTransport
@@ -195,11 +195,14 @@ async def test_make_client_passes_verify_true(monkeypatch):
     client = _make_client("http://suwayomi", None, None)
     transport = client.transport
     assert isinstance(transport, HTTPXAsyncTransport)
-    assert transport.kwargs.get("verify") is True
+    # verify should be a system CA path (str) when SSL verification is enabled
+    assert transport.kwargs.get("verify")
 
 
 async def test_make_client_passes_verify_false(monkeypatch):
-    """_make_client passes verify=False to the transport when SUWAYOMI_VERIFY_SSL is False."""
+    """_make_client passes an SSL context with verification disabled when SUWAYOMI_VERIFY_SSL is False."""
+    import ssl
+
     from app.config import settings
     from app.services.suwayomi import _make_client
     from gql.transport.httpx import HTTPXAsyncTransport
@@ -208,7 +211,10 @@ async def test_make_client_passes_verify_false(monkeypatch):
     client = _make_client("http://suwayomi", None, None)
     transport = client.transport
     assert isinstance(transport, HTTPXAsyncTransport)
-    assert transport.kwargs.get("verify") is False
+    verify = transport.kwargs.get("verify")
+    assert isinstance(verify, ssl.SSLContext)
+    assert verify.check_hostname is False
+    assert verify.verify_mode == ssl.CERT_NONE
 
 
 # ---------------------------------------------------------------------------

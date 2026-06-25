@@ -2,6 +2,7 @@ import base64
 import ssl
 from collections.abc import AsyncGenerator
 from datetime import UTC
+from pathlib import Path
 
 import httpx
 from gql import Client, gql
@@ -52,10 +53,34 @@ def _auth_headers() -> dict[str, str]:
     return {}
 
 
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return an SSL context for httpx clients.
+
+    When SUWAYOMI_VERIFY_SSL is True, uses the system CA store instead of
+    certifi's bundle so that locally-trusted CAs (e.g., self-signed dev certs
+    added via update-ca-trust / apt) are recognized.
+
+    When SUWAYOMI_VERIFY_SSL is False, returns a context with verification
+    disabled.
+    """
+    ctx = ssl.create_default_context()
+    if not settings.SUWAYOMI_VERIFY_SSL:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile and Path(paths.cafile).exists():
+        ctx.load_verify_locations(cafile=paths.cafile)
+    elif paths.capath and Path(paths.capath).exists():
+        ctx.load_verify_locations(capath=paths.capath)
+    # Else rely on defaults (certifi via create_default_context)
+    return ctx
+
+
 def _make_client(url: str, username: str | None, password: str | None) -> Client:
     auth = (username, password) if username else None
     transport = HTTPXAsyncTransport(
-        url=f"{url}/api/graphql", auth=auth, verify=settings.SUWAYOMI_VERIFY_SSL
+        url=f"{url}/api/graphql", auth=auth, verify=_get_ssl_context()
     )
     return Client(transport=transport, fetch_schema_from_transport=False)
 
@@ -69,7 +94,7 @@ async def ping(url: str, username: str | None, password: str | None) -> bool:
     """
     try:
         auth = (username, password) if username else None
-        async with httpx.AsyncClient(verify=settings.SUWAYOMI_VERIFY_SSL) as client:
+        async with httpx.AsyncClient(verify=_get_ssl_context()) as client:
             r = await client.post(
                 f"{url}/api/graphql",
                 json={"query": "{ __typename }"},
@@ -231,13 +256,7 @@ async def subscribe_download_changed() -> AsyncGenerator[
         "http://", "ws://"
     )
     ws_url += "/api/graphql"
-    if settings.SUWAYOMI_VERIFY_SSL:
-        ssl_arg: ssl.SSLContext | bool = True
-    else:
-        _ssl_ctx = ssl.create_default_context()
-        _ssl_ctx.check_hostname = False
-        _ssl_ctx.verify_mode = ssl.CERT_NONE
-        ssl_arg = _ssl_ctx
+    ssl_arg = _get_ssl_context()
     transport = WebsocketsTransport(
         url=ws_url,
         headers=_auth_headers(),

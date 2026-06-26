@@ -57,11 +57,11 @@ Make the library usable in a comic reader without manual cleanup. Also lays the 
 
 Stronger cross-source coverage and library management at scale.
 
-- [ ] Comic-local source priority overrides (e.g. source B is better than source A for one specific series)
-- [ ] Pagination for Library and Comic detail views
-- [ ] Search and filter within tracked library (by source, status)
+- [x] Comic-local source priority overrides (e.g. source B is better than source A for one specific series)
+- [x] Pagination for Library and Comic detail views
+- [x] Search and filter within tracked library (by source, status)
 - [ ] Import existing library (scan pre-existing CBZs into Otaki without re-downloading)
-- [ ] Export / backup of Otaki DB, covers, and watermarks
+- [x] Export / backup of Otaki DB, covers, and watermarks
 
 ---
 

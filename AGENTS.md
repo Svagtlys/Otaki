@@ -22,15 +22,17 @@ All commands must be run from the `backend/` or `frontend/` directory respective
 | Action | Command | Dir |
 |--------|---------|-----|
 | Run server | `backend/.venv/bin/uvicorn app.main:app --reload` | backend/ |
-| Run all tests | `backend/.venv/bin/pytest` | backend/ |
-| Run single test | `backend/.venv/bin/pytest tests/test_file.py::test_name -v` | backend/ |
-| Run integration tests | `backend/.venv/bin/pytest -m integration` | backend/ |
+| Run all tests | `.venv/bin/pytest` | backend/ |
+| Run single test | `.venv/bin/pytest tests/test_file.py::test_name -v` | backend/ |
+| Run integration tests | `.venv/bin/pytest -m integration` | backend/ |
 | Lint Python | `backend/.venv/bin/ruff check .` | backend/ |
 | Fix lint | `backend/.venv/bin/ruff check . --fix` | backend/ |
 | DB migrations | `backend/.venv/bin/alembic upgrade head` | backend/ |
 | Frontend dev | `npm run dev` | frontend/ |
 | Frontend build | `npm run build` | frontend/ |
 | E2E tests | `npx playwright test` | frontend/ |
+
+> **Note:** `pytest.ini` is inside `backend/`. Always `cd backend` first, or use `-c backend/pytest.ini` from the project root. Running `pytest` without the config file will fail (async mode not detected).
 
 ## Critical Non-Obvious Rules (from CLAUDE.md)
 

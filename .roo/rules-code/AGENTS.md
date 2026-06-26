@@ -6,6 +6,8 @@ This file provides coding guidance specific to this repository.
 
 **ALL backend Python commands MUST use the virtual environment at `backend/.venv/`.** Prefix with `backend/.venv/bin/` (e.g., `backend/.venv/bin/pytest`, `backend/.venv/bin/uvicorn`, `backend/.venv/bin/ruff`). Do NOT use system Python or `python -m pytest`.
 
+**Running tests:** `pytest.ini` lives inside `backend/`, so either `cd backend && .venv/bin/pytest` or `./backend/.venv/bin/pytest backend/tests/ -c backend/pytest.ini` from the project root. Running `pytest` from the project root without `-c` will fail (async mode not detected).
+
 ## Critical Coding Rules (Non-Obvious)
 
 - **Always use `source_selector.effective_priority(source, comic, db)`** when comparing source priorities - never read `source.priority` directly in routing logic.

@@ -23,7 +23,7 @@ A comic/manga request manager built on top of [Suwayomi-Server](https://github.c
 |---|---|---|
 | **1.0** | MVP — download pipeline, source upgrades, basic auth | Released |
 | **1.1** | Metadata — `ComicInfo.xml`, covers, multi-alias, cadence inference, per-comic schedules | Released |
-| **1.2** | Scale — local source overrides, pagination, library import | Planned |
+| **1.2** | Scale — local source overrides, pagination, library import | Released |
 | **1.3** | Quality — watermark/banner detection, auto-fix, image order checking | Planned |
 | **1.4** | Auth — roles, SSO, user management | Planned |
 

@@ -19,7 +19,9 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     with op.batch_alter_table("comics") as batch_op:
-        batch_op.add_column(sa.Column("inferred_cadence_days", sa.Float(), nullable=True))
+        batch_op.add_column(
+            sa.Column("inferred_cadence_days", sa.Float(), nullable=True)
+        )
 
 
 def downgrade() -> None:

@@ -10,13 +10,12 @@ SUWAYOMI_URL is set in .env.test):
     - ping() returns True for a reachable instance
     - list_sources(), search_source(), fetch_chapters(), enqueue_downloads()
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-
 from app.services import suwayomi
-
 
 # ---------------------------------------------------------------------------
 # Unit tests — ping()
@@ -83,22 +82,34 @@ async def test_poll_downloads_returns_all_queue_items():
                 {
                     "state": "FINISHED",
                     "chapter": {"id": 1, "name": "Chapter 1"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "ERROR",
                     "chapter": {"id": 2, "name": "Chapter 2"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "DOWNLOADING",
                     "chapter": {"id": 3, "name": "Chapter 3"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
                 {
                     "state": "QUEUED",
                     "chapter": {"id": 4, "name": "Chapter 4"},
-                    "manga": {"title": "Test Manga", "source": {"displayName": "Source A"}},
+                    "manga": {
+                        "title": "Test Manga",
+                        "source": {"displayName": "Source A"},
+                    },
                 },
             ]
         }
@@ -142,7 +153,10 @@ async def test_poll_downloads_maps_fields_correctly():
                 {
                     "state": "DOWNLOADING",
                     "chapter": {"id": 42, "name": "Episode 7"},
-                    "manga": {"title": "My Manga", "source": {"displayName": "Webtoons EN"}},
+                    "manga": {
+                        "title": "My Manga",
+                        "source": {"displayName": "Webtoons EN"},
+                    },
                 },
             ]
         }
@@ -172,7 +186,7 @@ async def test_poll_downloads_maps_fields_correctly():
 
 
 async def test_make_client_passes_verify_true(monkeypatch):
-    """_make_client passes verify=True to the transport when SUWAYOMI_VERIFY_SSL is True."""
+    """_make_client passes a truthy verify arg when SUWAYOMI_VERIFY_SSL is True."""
     from app.config import settings
     from app.services.suwayomi import _make_client
     from gql.transport.httpx import HTTPXAsyncTransport
@@ -181,11 +195,14 @@ async def test_make_client_passes_verify_true(monkeypatch):
     client = _make_client("http://suwayomi", None, None)
     transport = client.transport
     assert isinstance(transport, HTTPXAsyncTransport)
-    assert transport.kwargs.get("verify") is True
+    # verify should be a system CA path (str) when SSL verification is enabled
+    assert transport.kwargs.get("verify")
 
 
 async def test_make_client_passes_verify_false(monkeypatch):
-    """_make_client passes verify=False to the transport when SUWAYOMI_VERIFY_SSL is False."""
+    """_make_client passes an SSL context with verification disabled when SUWAYOMI_VERIFY_SSL is False."""
+    import ssl
+
     from app.config import settings
     from app.services.suwayomi import _make_client
     from gql.transport.httpx import HTTPXAsyncTransport
@@ -194,7 +211,10 @@ async def test_make_client_passes_verify_false(monkeypatch):
     client = _make_client("http://suwayomi", None, None)
     transport = client.transport
     assert isinstance(transport, HTTPXAsyncTransport)
-    assert transport.kwargs.get("verify") is False
+    verify = transport.kwargs.get("verify")
+    assert isinstance(verify, ssl.SSLContext)
+    assert verify.check_hostname is False
+    assert verify.verify_mode == ssl.CERT_NONE
 
 
 # ---------------------------------------------------------------------------

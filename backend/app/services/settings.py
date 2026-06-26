@@ -20,6 +20,8 @@ def validate_path(path: str) -> bool:
     return Path(path).is_dir()
 
 
-async def validate_suwayomi(url: str, username: str | None, password: str | None) -> bool:
+async def validate_suwayomi(
+    url: str, username: str | None, password: str | None
+) -> bool:
     """Return True if Suwayomi is reachable with the given credentials."""
     return await suwayomi.ping(url, username or "", password or "")

@@ -40,12 +40,18 @@ async def test_list_sources_requires_auth(auth_client):
 async def test_patch_source_enabled(logged_in_client):
     await logged_in_client.post(
         "/api/setup/sources",
-        json={"sources": [{"id": "src-1", "name": "MangaDex", "lang": "en", "icon_url": ""}]},
+        json={
+            "sources": [
+                {"id": "src-1", "name": "MangaDex", "lang": "en", "icon_url": ""}
+            ]
+        },
     )
     sources = (await logged_in_client.get("/api/sources")).json()
     source_id = sources[0]["id"]
 
-    r = await logged_in_client.patch(f"/api/sources/{source_id}", json={"enabled": False})
+    r = await logged_in_client.patch(
+        f"/api/sources/{source_id}", json={"enabled": False}
+    )
     assert r.status_code == 200
     assert r.json()["enabled"] is False
 
@@ -54,7 +60,11 @@ async def test_patch_source_enabled(logged_in_client):
 async def test_patch_source_priority(logged_in_client):
     await logged_in_client.post(
         "/api/setup/sources",
-        json={"sources": [{"id": "src-1", "name": "MangaDex", "lang": "en", "icon_url": ""}]},
+        json={
+            "sources": [
+                {"id": "src-1", "name": "MangaDex", "lang": "en", "icon_url": ""}
+            ]
+        },
     )
     sources = (await logged_in_client.get("/api/sources")).json()
     source_id = sources[0]["id"]

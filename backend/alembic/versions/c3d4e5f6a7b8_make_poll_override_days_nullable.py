@@ -28,7 +28,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Restore non-null: fill any nulls with the historical default (7.0) first.
-    op.execute("UPDATE comics SET poll_override_days = 7.0 WHERE poll_override_days IS NULL")
+    op.execute(
+        "UPDATE comics SET poll_override_days = 7.0 WHERE poll_override_days IS NULL"
+    )
     with op.batch_alter_table("comics") as batch_op:
         batch_op.alter_column(
             "poll_override_days",

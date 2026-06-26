@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, Enum, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..config import settings
 from ..database import Base
 
 if TYPE_CHECKING:
@@ -13,7 +12,7 @@ if TYPE_CHECKING:
     from .comic_alias import ComicAlias
 
 
-class ComicStatus(str, enum.Enum):
+class ComicStatus(enum.StrEnum):
     tracking = "tracking"
     complete = "complete"
 

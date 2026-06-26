@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -20,75 +21,244 @@ def _normalize_source_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
-def find_staging_path(
-    chapter_name: str, manga_title: str, source_display_name: str
-) -> Path | None:
-    base = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name / manga_title
+def _title_regex(title: str) -> re.Pattern:
+    """Build a regex where each special char in *title* matches any one special char.
 
-    if not base.exists():
-        # Fuzzy fallback: scan SUWAYOMI_DOWNLOAD_PATH for a source directory whose
-        # normalised name starts with the normalised display name. This handles cases
-        # like displayName="Weeb Central" but on-disk dir="WeebCentral" or
-        # "Weeb Central (EN)".
+    Letters, digits, and whitespace match literally.  Any other character
+    (e.g. ':') becomes ``[^a-zA-Z0-9]`` so it matches whatever single
+    substitution Suwayomi applied on disk (e.g. '_' or ' ').
+    """
+    parts = []
+    for ch in title:
+        if re.match(r"[a-zA-Z0-9\s]", ch):
+            parts.append(re.escape(ch))
+        else:
+            parts.append(r"[^a-zA-Z0-9]")
+    return re.compile(r"^" + "".join(parts) + r"$")
+
+
+def _find_manga_subdir(source_dir: Path, manga_title: str) -> Path | None:
+    """Return the manga subdirectory inside *source_dir*, tolerating sanitized names.
+
+    Tries exact match first, then falls back to regex match (one special char
+    in title matches any one special char on disk).  Returns ``None`` if zero
+    or multiple directories match.
+    """
+    if manga_title == "":
+        return None
+    exact = source_dir / manga_title
+    if exact.is_dir():
+        return exact
+    if not source_dir.is_dir():
+        return None
+    pattern = _title_regex(manga_title)
+    matches = [d for d in source_dir.iterdir() if d.is_dir() and pattern.match(d.name)]
+    if len(matches) == 1:
+        logger.warning(
+            "file_relocator: manga dir %r not found; using sanitized match %r",
+            manga_title,
+            matches[0].name,
+        )
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "file_relocator: ambiguous manga directory for title %r — matches: %s",
+            manga_title,
+            [d.name for d in matches],
+        )
+    return None
+
+
+def _get_chapter_number_variants(chapter_number: float) -> list[str]:
+    """Generate string representations of a chapter number for regex substitution.
+
+    Always includes the full float representation. Includes integer form
+    only when all decimal digits are zero.
+
+    Examples:
+        5.0  -> ['5.0', '5']
+        61.5 -> ['61.5']
+        3.02 -> ['3.02']
+    """
+    int_val = int(chapter_number)
+    is_whole = chapter_number == int_val
+
+    if is_whole:
+        # For whole numbers: "5.0" then "5"
+        float_str = f"{int_val}.0"
+    else:
+        # For fractional numbers: use str() which preserves decimals
+        float_str = str(chapter_number)
+
+    variants = [float_str]
+    if is_whole:
+        variants.append(str(int_val))
+    return variants
+
+
+def _match_by_regex(
+    directory: Path,
+    chapter_number: float,
+    extensions: list[str],
+) -> list[Path]:
+    """Match files or folders in *directory* using configured regex patterns.
+
+    Replaces {chapter_number} in each pattern with numeric variants and
+    uses re.search() against file/folder stems.
+
+    Returns deduplicated matching paths in first-match order.
+    """
+    patterns = settings.CHAPTER_FILE_NAME_REGEX
+    if not patterns:
+        return []
+
+    variants = _get_chapter_number_variants(chapter_number)
+    seen = set()
+    matches = []
+
+    # Gather candidates based on extension filter
+    if extensions:
+        ext_patterns = " ".join(f"*{ext}" for ext in extensions)
+        candidates = list(directory.glob(ext_patterns)) if directory.is_dir() else []
+    else:
+        candidates = (
+            [p for p in directory.iterdir() if p.is_dir()] if directory.is_dir() else []
+        )
+
+    for pattern_str in patterns:
+        for variant in variants:
+            try:
+                compiled = re.compile(pattern_str.replace("{chapter_number}", variant))
+            except re.error:
+                continue
+            for candidate in candidates:
+                if candidate in seen:
+                    continue
+                if compiled.search(candidate.stem):
+                    matches.append(candidate)
+                    seen.add(candidate)
+
+    return matches
+
+
+def _build_manga_titles(comic: Comic) -> list[str]:
+    """Build ordered list of folder names to search: primary title + aliases."""
+    titles = [comic.title]
+    for alias in comic.aliases:
+        titles.append(alias.title)
+    return titles
+
+
+def find_staging_path(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    source_display_name: str,
+) -> Path | None:
+    """Find a chapter's staging file by searching through title and alias folders.
+
+    Derives manga titles from the Comic (primary title + aliases), chapter number
+    and chapter name from the ChapterAssignment. Tries each title folder in order
+    and returns the first successful match.
+    """
+    manga_titles = _build_manga_titles(comic)
+    chapter_number = assignment.chapter_number
+    chapter_name = assignment.source_chapter_name or f"Chapter {chapter_number}"
+
+    if not manga_titles:
+        return None
+
+    for manga_title in manga_titles:
+        if manga_title == "":
+            continue
+        result = _find_staging_path_for_title(
+            chapter_name, manga_title, source_display_name, chapter_number
+        )
+        if result is not None:
+            return result
+
+    return None
+
+
+def _find_staging_path_for_title(
+    chapter_name: str,
+    manga_title: str,
+    source_display_name: str,
+    chapter_number: float,
+) -> Path | None:
+    """Search for a chapter file under a single manga title directory.
+
+    This is the internal search logic that runs for each title in the alias list.
+    """
+    source_dir = Path(settings.SUWAYOMI_DOWNLOAD_PATH) / source_display_name
+    base = _find_manga_subdir(source_dir, manga_title)
+
+    if base is None:
         download_root = Path(settings.SUWAYOMI_DOWNLOAD_PATH)
         norm_display = _normalize_source_name(source_display_name)
         candidates = [
-            d for d in download_root.iterdir()
-            if d.is_dir() and _normalize_source_name(d.name).startswith(norm_display)
-            and (d / manga_title).exists()
+            d
+            for d in download_root.iterdir()
+            if d.is_dir()
+            and _normalize_source_name(d.name).startswith(norm_display)
+            and _find_manga_subdir(d, manga_title) is not None
         ]
         if len(candidates) == 1:
             logger.warning(
-                "file_relocator: source dir %r not found; using fuzzy match %r for display name %r",
+                "file_relocator: source dir %r not found; using fuzzy match %r for display name %r (title %r)",
                 source_display_name,
                 candidates[0].name,
                 source_display_name,
+                manga_title,
             )
-            base = candidates[0] / manga_title
+            base = _find_manga_subdir(candidates[0], manga_title)
         elif len(candidates) > 1:
             logger.warning(
                 "file_relocator: ambiguous source directory for display name %r — "
-                "multiple fuzzy matches: %s",
+                "multiple fuzzy matches: %s (title %r)",
                 source_display_name,
                 [d.name for d in candidates],
+                manga_title,
             )
             return None
 
-    # --- CBZ checks ---
+    if base is None:
+        base = source_dir / manga_title
+
+    # --- 1. Exact CBZ match ---
     exact = base / f"{chapter_name}.cbz"
     if exact.exists():
         return exact
-    # Fallback 1: only one CBZ in the directory
-    matches = list(base.glob("*.cbz"))
-    if len(matches) == 1:
-        return matches[0]
-    # Fallback 2: source prefixes the chapter name (e.g. "Official_Episode 148.cbz"
-    # when Suwayomi reports the chapter as "Episode 148"). The pattern anchors to
-    # end-of-stem so "Episode 148" does not match "Episode 148.1" or "Episode 1480".
-    name_lower = chapter_name.lower()
-    pattern = re.compile(re.escape(name_lower) + r"(?:\.\d+)?\s*$")
-    containing = [m for m in matches if pattern.search(m.stem.lower())]
-    if len(containing) == 1:
-        return containing[0]
 
-    # --- Folder checks ---
-    # Exact folder name match
+    # --- 2. Exact folder match ---
     exact_folder = base / chapter_name
     if exact_folder.is_dir():
         return exact_folder
-    # Fallback: exactly one subdirectory present
+
+    # --- 3. Regex CBZ match ---
+    cbz_matches = _match_by_regex(base, chapter_number, [".cbz"])
+    if len(cbz_matches) == 1:
+        return cbz_matches[0]
+
+    # --- 4. Regex folder match ---
+    folder_matches = _match_by_regex(base, chapter_number, [])
+    if len(folder_matches) == 1:
+        return folder_matches[0]
+
+    # --- 5. Single CBZ fallback ---
+    matches = list(base.glob("*.cbz"))
+    if len(matches) == 1:
+        return matches[0]
+
+    # --- 6. Single folder fallback ---
     subdirs = [p for p in base.iterdir() if p.is_dir()] if base.is_dir() else []
     if len(subdirs) == 1:
         return subdirs[0]
-    # Prefix match for folders
-    folder_containing = [d for d in subdirs if pattern.search(d.name.lower())]
-    if len(folder_containing) == 1:
-        return folder_containing[0]
 
     logger.warning(
-        "file_relocator: ambiguous or missing staging file for chapter %r in %s",
+        "file_relocator: ambiguous or missing staging file for chapter %r in %s (title %r)",
         chapter_name,
         base,
+        manga_title,
     )
     return None
 
@@ -221,21 +391,37 @@ async def relocate(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
+    await asyncio.to_thread(
+        _relocate_sync,
+        assignment,
+        comic,
+        db,
+        source_display_name,
+    )
+
+
+def _relocate_sync(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+    source_display_name: str,
+) -> None:
+    chapter_name = (
+        assignment.source_chapter_name or f"Chapter {assignment.chapter_number}"
+    )
     logger.info(
         "relocate: starting for comic=%r chapter=%r source=%r",
-        manga_title,
+        comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(assignment, comic, source_display_name)
     if staging is None:
         logger.warning(
             "relocate: no staging file found for comic=%r chapter=%r source=%r — marking failed",
-            manga_title,
+            comic.title,
             chapter_name,
             source_display_name,
         )
@@ -257,7 +443,7 @@ async def relocate(
     assignment.library_path = str(dest)
     assignment.relocation_status = RelocationStatus.done
     logger.info(
-        "relocate: done for comic=%r chapter=%r -> %s", manga_title, chapter_name, dest
+        "relocate: done for comic=%r chapter=%r -> %s", comic.title, chapter_name, dest
     )
 
 
@@ -266,21 +452,37 @@ async def replace_in_library(
     new: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,
-    chapter_name: str,
-    manga_title: str,
     source_display_name: str,
 ) -> None:
+    await asyncio.to_thread(
+        _replace_in_library_sync,
+        old,
+        new,
+        comic,
+        db,
+        source_display_name,
+    )
+
+
+def _replace_in_library_sync(
+    old: ChapterAssignment,
+    new: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+    source_display_name: str,
+) -> None:
+    chapter_name = new.source_chapter_name or f"Chapter {new.chapter_number}"
     logger.info(
         "replace_in_library: starting upgrade for comic=%r chapter=%r source=%r",
-        manga_title,
+        comic.title,
         chapter_name,
         source_display_name,
     )
-    staging = find_staging_path(chapter_name, manga_title, source_display_name)
+    staging = find_staging_path(new, comic, source_display_name)
     if staging is None:
         logger.warning(
             "replace_in_library: no staging file found for comic=%r chapter=%r source=%r — marking failed",
-            manga_title,
+            comic.title,
             chapter_name,
             source_display_name,
         )
@@ -310,6 +512,19 @@ async def replace_in_library(
 
 
 async def update_library_file(
+    assignment: ChapterAssignment,
+    comic: Comic,
+    db: AsyncSession,
+) -> None:
+    await asyncio.to_thread(
+        _update_library_file_sync,
+        assignment,
+        comic,
+        db,
+    )
+
+
+def _update_library_file_sync(
     assignment: ChapterAssignment,
     comic: Comic,
     db: AsyncSession,

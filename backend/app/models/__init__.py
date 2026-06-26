@@ -1,7 +1,9 @@
-from .source import Source
+from .chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
 from .comic import Comic, ComicStatus
 from .comic_alias import ComicAlias
-from .chapter_assignment import ChapterAssignment, DownloadStatus, RelocationStatus
+from .comic_source_override import ComicSourceOverride
+from .comic_source_pin import ComicSourcePin
+from .source import Source
 from .user import User
 
 __all__ = [
@@ -9,6 +11,8 @@ __all__ = [
     "Comic",
     "ComicStatus",
     "ComicAlias",
+    "ComicSourcePin",
+    "ComicSourceOverride",
     "ChapterAssignment",
     "DownloadStatus",
     "RelocationStatus",

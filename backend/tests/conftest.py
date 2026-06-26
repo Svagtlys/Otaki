@@ -3,14 +3,13 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from dotenv import dotenv_values
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from app import database
 from app.config import settings
 from app.main import app
 from app.workers import scheduler as scheduler_module
+from dotenv import dotenv_values
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 @pytest_asyncio.fixture
@@ -21,10 +20,12 @@ async def db_session():
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         from app import models  # noqa: F401
+
         await conn.run_sync(database.Base.metadata.create_all)
     async with session_factory() as session:
         yield session
     await engine.dispose()
+
 
 _env_test_path = Path(__file__).parent.parent.parent / ".env.test"
 _env_test = dotenv_values(_env_test_path) if _env_test_path.exists() else {}
@@ -53,6 +54,13 @@ def suwayomi_settings(suwayomi_credentials, monkeypatch):
     monkeypatch.setattr(settings, "SUWAYOMI_URL", suwayomi_credentials["url"])
     monkeypatch.setattr(settings, "SUWAYOMI_USERNAME", suwayomi_credentials["username"])
     monkeypatch.setattr(settings, "SUWAYOMI_PASSWORD", suwayomi_credentials["password"])
+    verify_ssl = _get("SUWAYOMI_VERIFY_SSL")
+    if verify_ssl is not None:
+        monkeypatch.setattr(
+            settings,
+            "SUWAYOMI_VERIFY_SSL",
+            verify_ssl.lower() not in ("false", "0", "no"),
+        )
 
 
 @pytest.fixture
@@ -94,6 +102,7 @@ async def auth_client(monkeypatch):
 
     async with test_engine.begin() as conn:
         from app import models  # noqa: F401
+
         await conn.run_sync(database.Base.metadata.create_all)
 
     monkeypatch.setattr(settings, "SETUP_COMPLETE", False)
@@ -125,6 +134,7 @@ async def logged_in_client_with_session(monkeypatch):
 
     async with test_engine.begin() as conn:
         from app import models  # noqa: F401
+
         await conn.run_sync(database.Base.metadata.create_all)
 
     monkeypatch.setattr(settings, "SETUP_COMPLETE", False)
@@ -141,8 +151,12 @@ async def logged_in_client_with_session(monkeypatch):
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:
-        await c.post("/api/setup/user", json={"username": "admin", "password": "testpassword!"})
-        r = await c.post("/api/auth/login", json={"username": "admin", "password": "testpassword!"})
+        await c.post(
+            "/api/setup/user", json={"username": "admin", "password": "testpassword!"}
+        )
+        r = await c.post(
+            "/api/auth/login", json={"username": "admin", "password": "testpassword!"}
+        )
         token = r.json()["access_token"]
         c.headers = {**c.headers, "Authorization": f"Bearer {token}"}
         async with test_session() as session:
@@ -176,6 +190,7 @@ async def client(monkeypatch):
 
     async with test_engine.begin() as conn:
         from app import models  # noqa: F401 — registers models on Base.metadata
+
         await conn.run_sync(database.Base.metadata.create_all)
 
     monkeypatch.setattr(settings, "SETUP_COMPLETE", False)

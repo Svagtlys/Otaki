@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -103,7 +103,7 @@ async def create_user(
             username=body.username,
             password_hash=auth.hash_password(body.password),
             active=True,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
     )
     await db.commit()
@@ -138,7 +138,7 @@ async def save_sources(
     _: None = Depends(require_setup_incomplete),
 ) -> None:
     await db.execute(delete(Source))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for priority, source in enumerate(body.sources, start=1):
         db.add(
             Source(
@@ -159,7 +159,10 @@ async def save_paths(
 ) -> None:
     from pathlib import Path as FsPath
 
-    fields = (("download_path", body.download_path), ("library_path", body.library_path))
+    fields = (
+        ("download_path", body.download_path),
+        ("library_path", body.library_path),
+    )
 
     # First pass: check which directories are missing.
     missing = [
@@ -180,7 +183,7 @@ async def save_paths(
         except (PermissionError, OSError) as exc:
             raise HTTPException(
                 status_code=400, detail=f"Cannot create {field} {value!r}: {exc}"
-            )
+            ) from exc
 
     write_env("SUWAYOMI_DOWNLOAD_PATH", body.download_path)
     write_env("LIBRARY_PATH", body.library_path)

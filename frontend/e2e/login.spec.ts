@@ -25,23 +25,23 @@ test.beforeAll(async () => {
 
 test('wrong credentials: shows inline error, stays on /login', async ({ page }) => {
   await page.goto('/login')
-  await expect(page.getByRole('heading', { name: 'Log in to Otaki' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
 
   await page.getByLabel('Username').fill('admin')
   await page.getByLabel('Password').fill('wrongpassword')
-  await page.getByRole('button', { name: 'Log in' }).click()
+  await page.getByRole('button', { name: 'Sign in' }).click()
 
-  await expect(page.locator('p[style*="color: red"]')).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('.card form p')).toBeVisible({ timeout: 5000 })
   await expect(page).toHaveURL(/\/login/)
 })
 
 test('correct credentials: redirects away from /login', async ({ page }) => {
   await page.goto('/login')
-  await expect(page.getByRole('heading', { name: 'Log in to Otaki' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
 
   await page.getByLabel('Username').fill(ADMIN_USERNAME)
   await page.getByLabel('Password').fill(ADMIN_PASSWORD)
-  await page.getByRole('button', { name: 'Log in' }).click()
+  await page.getByRole('button', { name: 'Sign in' }).click()
 
   await expect(page).not.toHaveURL(/\/login/, { timeout: 5000 })
 })

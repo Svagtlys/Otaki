@@ -21,14 +21,14 @@ if TYPE_CHECKING:
     from .source import Source
 
 
-class DownloadStatus(str, enum.Enum):
+class DownloadStatus(enum.StrEnum):
     queued = "queued"
     downloading = "downloading"
     done = "done"
     failed = "failed"
 
 
-class RelocationStatus(str, enum.Enum):
+class RelocationStatus(enum.StrEnum):
     pending = "pending"
     done = "done"
     failed = "failed"

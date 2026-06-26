@@ -11,6 +11,7 @@ Optional — defaults to pytest tmp_path if omitted:
     SUWAYOMI_DOWNLOAD_PATH=/path/to/downloads
     LIBRARY_PATH=/path/to/library
 """
+
 import pytest
 
 
@@ -36,8 +37,8 @@ async def test_setup_flow(client, suwayomi_credentials, path_config):
     r = await client.post("/api/setup/sources", json={"sources": sources[:3]})
     assert r.status_code == 200
 
-    # Save filesystem paths
-    r = await client.post("/api/setup/paths", json=path_config)
+    # Save filesystem paths (create=true to allow creating missing dirs)
+    r = await client.post("/api/setup/paths", json={**path_config, "create": True})
     assert r.status_code == 200
 
     # Setup complete — all setup endpoints now return 409
@@ -51,7 +52,7 @@ async def test_setup_flow(client, suwayomi_credentials, path_config):
     r = await client.post("/api/setup/sources", json={"sources": sources[:1]})
     assert r.status_code == 409
 
-    r = await client.post("/api/setup/paths", json=path_config)
+    r = await client.post("/api/setup/paths", json={**path_config, "create": True})
     assert r.status_code == 409
 
     # Non-setup routes now unblocked
@@ -69,7 +70,9 @@ async def test_connect_bad_credentials(client, suwayomi_credentials):
     async with httpx.AsyncClient(verify=False) as probe:
         r = await probe.post(f"{url}/api/graphql", json={"query": "{ __typename }"})
     if r.status_code != 401:
-        pytest.skip("Suwayomi instance does not enforce Basic auth — skipping bad-credential test")
+        pytest.skip(
+            "Suwayomi instance does not enforce Basic auth — skipping bad-credential test"
+        )
 
     bad = {**suwayomi_credentials, "password": "definitely-wrong-password-xxxxx"}
     r = await client.post("/api/setup/connect", json=bad)

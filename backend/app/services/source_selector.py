@@ -8,6 +8,8 @@ from sqlalchemy.orm import selectinload
 from ..models.chapter_assignment import ChapterAssignment
 from ..models.comic import Comic
 from ..models.comic_alias import ComicAlias
+from ..models.comic_source_override import ComicSourceOverride
+from ..models.comic_source_pin import ComicSourcePin
 from ..models.source import Source
 from . import suwayomi
 
@@ -26,10 +28,16 @@ def _find_matching_result(results: list[dict], titles: list[str]) -> dict | None
 async def effective_priority(source: Source, comic: Comic, db: AsyncSession) -> int:
     """Return the effective priority of a source for a given comic.
 
-    Currently returns source.priority directly. Stubbed as async so callers
-    need no changes when 1.3 adds ComicSourceOverride lookup.
+    If a ComicSourceOverride row exists for (comic_id, source_id), returns
+    priority_override. Otherwise falls back to source.priority.
     """
-    return source.priority
+    override = await db.scalar(
+        select(ComicSourceOverride).where(
+            ComicSourceOverride.comic_id == comic.id,
+            ComicSourceOverride.source_id == source.id,
+        )
+    )
+    return override.priority_override if override is not None else source.priority
 
 
 async def build_chapter_source_map(
@@ -48,7 +56,7 @@ async def build_chapter_source_map(
     Per-comic source priority overrides are deferred to 1.3.
     """
     result = await db.execute(
-        select(Source).where(Source.enabled == True).order_by(Source.priority)
+        select(Source).where(Source.enabled).order_by(Source.priority)
     )
     sources = result.scalars().all()
 
@@ -58,10 +66,45 @@ async def build_chapter_source_map(
     alias_titles = [a.title for a in alias_result.scalars().all()]
     all_titles = [comic.title] + alias_titles
 
+    pin_result = await db.execute(
+        select(ComicSourcePin).where(ComicSourcePin.comic_id == comic.id)
+    )
+    # A source can have MULTIPLE pinned manga IDs (series split across multiple manga IDs)
+    pins: dict[int, list[str]] = {}
+    for p in pin_result.scalars().all():
+        pins.setdefault(p.source_id, []).append(p.suwayomi_manga_id)
+
     async def _chapters_for_source(
         source: Source,
     ) -> tuple[list[tuple[Source, str, dict]], str | None]:
         """Return (chapters, error_reason). error_reason is None on success."""
+        if source.id in pins:
+            all_chapters: list[tuple[Source, str, dict]] = []
+            last_reason: str | None = None
+            failed_count = 0
+            for manga_id in pins[source.id]:
+                try:
+                    chapters = await suwayomi.fetch_chapters(manga_id)
+                except Exception as e:
+                    last_reason = suwayomi.classify_error(e)
+                    failed_count += 1
+                    logger.warning(
+                        "source %s: fetch_chapters failed for pinned manga_id %s (%s): %r",
+                        source.name,
+                        manga_id,
+                        last_reason,
+                        e,
+                    )
+                    continue
+                all_chapters.extend(
+                    (source, manga_id, {**ch, "source_manga_title": None})
+                    for ch in chapters
+                )
+            if failed_count == len(pins[source.id]):
+                # Every pinned manga_id failed — report source as errored
+                return [], last_reason
+            return all_chapters, None
+
         try:
             search_results = await suwayomi.search_source(
                 source.suwayomi_source_id, all_titles[0]
@@ -109,7 +152,7 @@ async def build_chapter_source_map(
         float, tuple[int, Source, str, dict]
     ] = {}  # chapter_number → (eff_priority, source, manga_id, ch_data)
     source_errors: list[dict] = []
-    for source, (source_results, error_reason) in zip(sources, gathered):
+    for source, (source_results, error_reason) in zip(sources, gathered, strict=False):
         if error_reason is not None:
             source_errors.append({"source_name": source.name, "reason": error_reason})
         for src, manga_id, chapter in source_results:
@@ -136,7 +179,7 @@ async def find_upgrade_candidates(
         select(ChapterAssignment)
         .where(
             ChapterAssignment.comic_id == comic.id,
-            ChapterAssignment.is_active == True,
+            ChapterAssignment.is_active,
         )
         .options(selectinload(ChapterAssignment.source))
     )

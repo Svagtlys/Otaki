@@ -100,8 +100,11 @@ The path of the env file is resolved at module load time from the `ENV_FILE` env
 
 #### `backend/app/database.py`
 SQLAlchemy `AsyncEngine` + `AsyncSession` setup. Exports:
-- `init()` — creates all tables
-- `get_db` — FastAPI dependency that yields a session per request
+- `init()` — runs Alembic migrations on startup
+- `get_db` — FastAPI dependency that yields a session per request (API handlers)
+- `write_session()` — async context manager for workers that open their own sessions. On SQLite: acquires a process-wide `asyncio.Lock` before opening the session, serialising concurrent writes and eliminating `database is locked` errors. On Postgres: no lock (the database handles concurrent writes natively). To switch backends, only this file needs changing.
+
+SQLite-specific setup (skipped for Postgres): WAL journal mode is enabled on every new connection via a SQLAlchemy `connect` event listener; `connect_args={"timeout": 30}` gives SQLite up to 30 s to acquire the write lock before raising. These cover all writers, including API handlers via `get_db`.
 
 ---
 
@@ -204,6 +207,18 @@ Two tables:
 | `source_id` | int FK → sources | |
 | `priority_override` | int | Lower = more preferred; replaces global priority for this comic |
 
+**`ComicSourcePin`** — per-comic, per-source manga ID pins that bypass title search.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `comic_id` | int FK → comics | |
+| `source_id` | int FK → sources | |
+| `suwayomi_manga_id` | str | Suwayomi's internal manga ID for this source |
+| `pinned_at` | datetime (tz-aware) | When the pin was created |
+
+`(comic_id, source_id, suwayomi_manga_id)` must be unique. A comic may have multiple pins for the same source (different manga IDs). When `source_selector.build_chapter_source_map` runs, pinned sources skip title search entirely and call `suwayomi.fetch_chapters` with the pinned manga ID(s) directly.
+
 **`WatermarkTemplate`** — metadata for a saved template image.
 
 | Column | Type | Notes |
@@ -269,12 +284,14 @@ Write/validate helpers are shared with `api/settings.py` — see `services/setti
 #### `backend/app/api/requests.py`
 CRUD for tracked comics.
 
-- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?}`. Duplicate-title check (409), creates `Comic`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
+- `POST /api/requests` — accepts `{primary_title, library_title?, cover_url?, poll_override_days?, upgrade_override_days?, source_pins?}`. Duplicate-title check (409), creates `Comic`, creates `ComicSourcePin` rows for each entry in `source_pins`, calls `source_selector.build_chapter_source_map()`, calls `suwayomi.fetch_chapters()` per source group, creates `ChapterAssignment` rows (`download_status=queued`, `is_active=True`), calls `suwayomi.enqueue_downloads()`, sets `next_poll_at` / `next_upgrade_check_at`, registers APScheduler jobs via `scheduler.register_comic_jobs()`. If `cover_url` is set, calls `cover_handler.save_from_url()` and stores the result in `comic.cover_path`. Returns `201 ComicResponse`.
 - `GET /api/requests` — list all tracked comics with per-comic chapter counts by download status (`total`, `done`, `downloading`, `queued`, `failed`). Uses a single `GROUP BY` query across all comics.
 - `GET /api/requests/{id}` — full detail: comic metadata plus list of `ChapterSummary` rows ordered by chapter number (includes source name, download status, relocation status, library path).
 - `PATCH /api/requests/{id}` — partial update; applies only fields present in the request body. `poll_override_days`/`upgrade_override_days` changes advance the corresponding `next_*_at` and call `scheduler.register_comic_jobs`. `status=complete` calls `scheduler.remove_comic_jobs`; `status=tracking` re-registers jobs.
 - `GET /api/requests/{id}/cover` — serves the comic's cover image as a file response. Returns 404 if no cover has been stored.
 - `DELETE /api/requests/{id}?delete_files=false` — untrack a comic: removes APScheduler jobs via `scheduler.remove_comic_jobs()`, bulk-deletes all `ChapterAssignment` rows, deletes the `Comic` row. If `delete_files=true`, also unlinks any existing `library_path` files. Returns 204.
+- `GET /api/requests/{id}/pins` — list source-manga ID pins for a comic. Returns 404 if comic not found.
+- `PUT /api/requests/{id}/pins` — bulk-replace all pins for a comic. Deletes existing pins and inserts the new set. Returns 404 if comic not found.
 
 #### `backend/app/api/sources.py`
 - `GET/POST/PATCH/DELETE /api/sources` — source priority list CRUD
@@ -316,7 +333,7 @@ Not yet implemented:
 Per-chapter source selection logic. Stateless — takes a DB session as argument.
 
 - `effective_priority(source, comic, db) → int` — async; returns `source.priority` for MVP. Stubbed as `async def` so callers need no changes when 1.3 adds `ComicSourceOverride` lookup.
-- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel. For each source: searches using `comic.title` first; if no matching result is found in the response, retries the search with each `ComicAlias` title in turn until a match is found. `_find_matching_result` performs case-insensitive title comparison against the full alias set (`comic.title` + all alias titles). Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
+- `build_chapter_source_map(comic, db)` → `dict[float, tuple[Source, str, dict]]` — fans out to all enabled sources in parallel. If `ComicSourcePin` rows exist for a source, that source bypasses title search and calls `suwayomi.fetch_chapters` directly for each pinned manga ID. Multiple pins per source are supported (chapters from all are merged). Only if no pin exists does the source fall back to title-matching search. For each source without a pin: searches using `comic.title` first; if no matching result is found in the response, retries the search with each `ComicAlias` title in turn until a match is found. `_find_matching_result` performs case-insensitive title comparison against the full alias set (`comic.title` + all alias titles). Returns `{chapter_number: (best_source, suwayomi_manga_id, chapter_data)}`. All three values are bundled so callers can create `ChapterAssignment` rows and call `enqueue_downloads` without any additional Suwayomi round-trips. Sources that error during fetch are skipped with a warning log. Uses `asyncio.gather` with `return_exceptions=False` per source coroutine.
 - `find_upgrade_candidates(comic, db)` → `list[tuple[ChapterAssignment, Source, str, dict]]` — loads active assignments (with source eager-loaded), calls `build_chapter_source_map`, returns `(assignment, candidate_source, manga_id, chapter_data)` tuples where a better-priority source now has the chapter. `chapter_data` contains everything needed to create a new `ChapterAssignment` and enqueue the download.
 
 #### `backend/app/services/cadence_inferrer.py`
@@ -377,7 +394,7 @@ Moves settled chapters from Suwayomi's staging folder to the final library. Rada
 Public API:
 
 - `resolve_path(assignment, comic) → Path` — renders `CHAPTER_NAMING_FORMAT` with tokens `{title}` (uses `comic.library_title`), `{chapter}` (zero-padded float), `{volume}` (optional), `{year}`, `{source}`. Returns absolute path under `LIBRARY_PATH`.
-- `find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Detection order: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
+- `find_staging_path(chapter_name, manga_title, source_display_name) → Path | None` — looks in `SUWAYOMI_DOWNLOAD_PATH/{source}/{manga}/` for the chapter staging area. Two-layer fuzzy matching: (1) source directory is matched by normalised name prefix (strips non-alphanumerics) to handle display name mismatches like `"Weeb Central"` → `"WeebCentral (EN)"`; (2) manga subdirectory is matched by regex where each special character in the title matches any single non-alphanumeric on disk, tolerating Suwayomi's sanitization (e.g. `":"` → `"_"`). Detection order within the resolved directory: exact CBZ match → single CBZ fallback → CBZ prefix match → exact folder match → single subdirectory fallback → folder prefix match. Returns the path (file or directory) or `None`.
 - `relocate(assignment, comic, db, ...)` — runs the pipeline; resolves destination, creates parent dirs, places the CBZ. Updates `assignment.library_path` and `assignment.relocation_status=done`.
 - `replace_in_library(old_assignment, new_assignment, comic, db, ...)` — used during upgrades when `old_assignment.library_path` is set. Runs the pipeline then `os.replace()` for atomic swap. No window where the file is missing.
 - `update_library_file(assignment, comic, db)` — re-processes a chapter already in the library. Extracts the existing CBZ, rewrites `ComicInfo.xml` (picks up any `library_title` change) and re-injects the cover, repacks, then moves to the canonical path from `resolve_path`. If the path is unchanged, replaces in-place atomically. Called by `POST /api/requests/{id}/reprocess` for settled chapters.
@@ -409,7 +426,8 @@ Each comic has two scheduled jobs (poll and upgrade). The interval for each is d
 Public API:
 
 - `start(db: AsyncSession) → None` — loads all comics with `status=tracking`, registers poll and upgrade jobs for each, then calls `scheduler.start()`. Called from `main.py` lifespan on startup.
-- `register_comic_jobs(comic: Comic) → None` — registers poll and upgrade jobs for a newly created comic. Called by `POST /api/requests` after committing the new `Comic` row.
+- `register_comic_jobs(comic: Comic) → None` — registers poll and upgrade jobs for a newly created comic. Jobs are created with a `misfire_grace_time` of 1 hour to ensure missed executions are caught. On application startup, any overdue poll or upgrade jobs are processed immediately via a catch‑up routine.
+
 - `remove_comic_jobs(comic_id: int) → None` — removes all APScheduler jobs for a comic (poll and upgrade). Called by `DELETE /api/requests/{id}`. `JobLookupError` is silently suppressed — safe to call even if jobs were never registered.
 
 Internal:
@@ -427,7 +445,7 @@ Maintains a persistent WebSocket connection to Suwayomi's `downloadStatusChanged
 State machine:
 - **Startup**: calls `_seed_poll()` once to snapshot the current Suwayomi download queue into `_polled_items`, then calls `reconcile_on_startup()` to dispatch FINISHED events for any chapters the DB shows as `queued`/`downloading` that are no longer in the Suwayomi queue (i.e. completed while the backend was down). The idempotency guard in `chapter_event_handler.handle()` silently no-ops for chapters already processed.
 - **SUBSCRIPTION mode** (default): connect via `subscribe_download_changed()`; on error, retry with exponential backoff (2s, 4s, 8s… capped at 30s). After `MAX_RECONNECT_ATTEMPTS` consecutive failures, switch to POLLING mode.
-- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. Compares the current queue snapshot against `_polled_items`: items that disappeared are dispatched as FINISHED; items with state ERROR are dispatched as ERROR (once, deduplicated). On first successful poll, switch back to SUBSCRIPTION mode.
+- **POLLING mode** (fallback): call `poll_downloads()` every `DOWNLOAD_POLL_FALLBACK_SECONDS`. Compares the current queue snapshot against `_polled_items`: items that disappeared are dispatched as FINISHED; items with state ERROR are dispatched as ERROR. Deduplication is handled by `_emitted_ids` at the `_dispatch()` level for both event types, with `_emitted_error_ids` providing additional polling-mode deduplication for ERROR chapters. On first successful poll, switch back to SUBSCRIPTION mode.
 
 Started by `main.py` lifespan as `asyncio.create_task(download_listener.run())` and cancelled on shutdown. Runs for the lifetime of the process regardless of whether Otaki has active downloads — unrecognised chapter IDs (downloads not initiated by Otaki) are silently ignored in `chapter_event_handler`.
 

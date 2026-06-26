@@ -1,17 +1,17 @@
 import asyncio
 import contextlib
 import logging
-from logging.config import dictConfig
-import jwt
 from contextlib import asynccontextmanager
+from logging.config import dictConfig
 
+import jwt
 from fastapi import FastAPI
-
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from . import database
-from .api import auth, requests, search, settings as settings_api, setup, sources
+from .api import auth, health, requests, search, setup, sources
+from .api import settings as settings_api
 from .config import settings
 from .database import AsyncSessionLocal
 from .services import auth as auth_service
@@ -74,9 +74,16 @@ dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("otaki")
 
 
-_SETUP_EXEMPT = ("/api/setup", "/api/auth", "/docs", "/openapi.json", "/redoc")
+_SETUP_EXEMPT = (
+    "/api/setup",
+    "/api/auth",
+    "/api/health",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+)
 # <img> tags cannot send JWT — these paths must be publicly accessible
-_AUTH_EXEMPT = ("/api/search/thumbnail",)
+_AUTH_EXEMPT = ("/api/search/thumbnail", "/api/health")
 
 
 def _auth_required(path: str) -> bool:
@@ -115,6 +122,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Otaki", lifespan=lifespan)
 app.include_router(setup.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(health.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(requests.router, prefix="/api")
 app.include_router(settings_api.router, prefix="/api")

@@ -240,6 +240,63 @@ Return the current user's profile.
 
 ---
 
+## Health
+
+### `GET /api/health`
+
+Returns overall system health plus detailed status for each component. **Unauthenticated** — safe for Docker health checks and external monitors.
+
+**Response `200`**
+
+```json
+{
+  "status": "healthy",
+  "database": "ok",
+  "suwayomi": {
+    "status": "ok",
+    "url": "https://suwayomi.example.com",
+    "sources": [
+      { "name": "MangaDex", "enabled": true, "reachable": true },
+      { "name": "BrokenSource", "enabled": true, "reachable": false }
+    ]
+  },
+  "workers": {
+    "download_listener": {
+      "running": true,
+      "uptime_seconds": 3600.0
+    },
+    "scheduler": {
+      "running": true,
+      "uptime_seconds": 3600.0,
+      "jobs": [
+        {
+          "comic_id": 1,
+          "title": "One Piece",
+          "next_poll_at": "2026-04-08T10:00:00+00:00",
+          "next_upgrade_at": "2026-04-08T10:00:00+00:00"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Overall `status` rules**
+
+| Condition | `status` |
+|---|---|
+| DB unreachable | `unhealthy` |
+| Suwayomi unreachable or a worker not running (DB ok) | `degraded` |
+| All components ok | `healthy` |
+
+**`suwayomi.status`** values: `"ok"` — reachable and responding; `"unreachable"` — ping failed or URL not configured; `"error"` — unexpected error during check.
+
+**`suwayomi.sources`** — cross-references enabled sources in the Otaki DB with the live Suwayomi source list. Only populated when Suwayomi is reachable.
+
+**Worker `uptime_seconds`** — seconds since the worker started; `null` if not yet started.
+
+---
+
 ## Search
 
 ### `GET /api/search`
@@ -264,7 +321,8 @@ Search for a manga title across all enabled sources. Results are **not deduplica
       "synopsis": "...",
       "source_id": 1,
       "source_name": "MangaDex",
-      "url": "https://source-url/manga/one-piece"
+      "url": "https://source-url/manga/one-piece",
+      "suwayomi_manga_id": "42"
     },
     {
       "title": "ワンピース",
@@ -273,7 +331,8 @@ Search for a manga title across all enabled sources. Results are **not deduplica
       "synopsis": "...",
       "source_id": 2,
       "source_name": "MangaPlus",
-      "url": "https://source2-url/manga/wan-piisu"
+      "url": "https://source2-url/manga/wan-piisu",
+      "suwayomi_manga_id": "43"
     }
   ],
   "source_errors": [
@@ -293,6 +352,7 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 | `source_id` | int | Otaki source ID |
 | `source_name` | string | Human-readable source label |
 | `url` | string | Source-specific manga URL, passed back when submitting a request |
+| `suwayomi_manga_id` | string | Suwayomi's internal manga ID for this source — pass back when creating or updating source pins |
 
 `source_errors` fields:
 
@@ -306,6 +366,38 @@ Search for a manga title across all enabled sources. Results are **not deduplica
 - No deduplication — the frontend shows all results and lets the user select which ones represent the same series.
 - `results` is empty and `source_errors` is populated when all sources fail.
 - Does not require a `Comic` row to exist; this is purely a live Suwayomi query.
+
+---
+
+### `GET /api/search/stream`
+
+Same as `GET /api/search` but streams results as SSE events — one event per source as it responds, rather than waiting for all sources to finish.
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource` (which cannot send custom headers).
+
+**Query Parameters**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `q` | string | yes | Title search query |
+
+**Response `200 text/event-stream`**
+
+Each SSE event has the shape `data: <JSON>\n\n`. There are three event types:
+
+```
+data: {"source_name": "MangaDex", "results": [...]}
+data: {"source_name": "BrokenSource", "error": "connection timed out"}
+data: [DONE]
+```
+
+- **result event** — `source_name` plus `results` array (same shape as `GET /api/search` results).
+- **error event** — `source_name` plus `error` string; emitted when a source fails. Other sources continue streaming.
+- **`[DONE]` sentinel** — literal string (not JSON); signals that all sources have responded.
+
+**Notes**
+- HTTP status is always `200` (headers are sent before any source responds). Errors are surfaced as error events, not HTTP error codes.
+- No deduplication — same semantics as `GET /api/search`.
 
 ---
 
@@ -324,7 +416,8 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
   "cover_url": "https://source1-url/cover.jpg",
   "poll_override_days": 7.0,
   "upgrade_override_days": null,
-  "aliases": ["ワンピース", "One Piece (Viz)"]
+  "aliases": ["ワンピース", "One Piece (Viz)"],
+  "source_pins": [{"source_id": 1, "suwayomi_manga_id": "42"}]
 }
 ```
 
@@ -336,6 +429,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 | `poll_override_days` | float \| null | no | Days between new-chapter polls; `null` (default) = use inferred cadence, falling back to `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | no | Days between upgrade checks; `null` = use `DEFAULT_POLL_DAYS` |
 | `aliases` | string[] | no | Alternative titles for this comic. Saved as `ComicAlias` rows and used during source searches to find the comic under its alternative names. |
+| `source_pins` | `SourcePinInput[]` | no | Pin specific manga IDs per source. Each entry skips title search for that source and fetches chapters directly. Optional; defaults to `[]`. |
 
 **Response `201`**
 
@@ -367,6 +461,7 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 **Side Effects**
 1. Creates a `Comic` row with `title = primary_title`.
 2. Creates `ComicAlias` rows for each entry in `aliases`.
+3a. Creates `ComicSourcePin` rows for each entry in `source_pins`. Pins cause `source_selector` to bypass title search for that source and fetch chapters directly using the pinned manga ID.
 3. Calls `source_selector.build_chapter_source_map()` — searches all enabled sources using `primary_title` and all alias titles, assigning each chapter to the highest-priority source that has it.
 4. Calls `suwayomi.fetch_chapters()` per source group.
 5. Calls `suwayomi.enqueue_downloads()` grouped by source.
@@ -381,36 +476,57 @@ Track a new comic. Triggers source selection and enqueues all available chapter 
 
 ### `GET /api/requests`
 
-List all tracked comics with a summary of download progress.
+List tracked comics with pagination, search, filter, and sort.
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `page` | int | 1 | Page number (≥ 1) |
+| `per_page` | int | 25 | Items per page (1–100) |
+| `search` | string | — | Case-insensitive substring match on `title` |
+| `status` | string | — | Filter by comic status (`tracking` or `complete`) |
+| `source_id` | int | — | Filter to comics that have at least one chapter assignment from this source |
+| `sort_by` | string | `id` | Sort column: `id`, `title`, `library_title`, `status`, `source` |
+| `sort_dir` | string | `asc` | Sort direction: `asc` or `desc` |
 
 **Response `200`**
 
 ```json
-[
-  {
-    "id": 1,
-    "title": "One Piece",
-    "library_title": "One Piece",
-    "status": "tracking",
-    "chapter_counts": {
-      "total": 120,
-      "done": 118,
-      "downloading": 1,
-      "queued": 1,
-      "failed": 0
-    },
-    "poll_override_days": null,
-    "upgrade_override_days": null,
-    "inferred_cadence_days": 6.5,
-    "next_poll_at": "2025-03-22T09:00:00Z",
-    "next_upgrade_check_at": "2025-03-22T09:00:00Z",
-    "last_upgrade_check_at": null
-  }
-]
+{
+  "items": [
+    {
+      "id": 1,
+      "title": "One Piece",
+      "library_title": "One Piece",
+      "status": "tracking",
+      "chapter_counts": {
+        "total": 120,
+        "done": 118,
+        "downloading": 1,
+        "queued": 1,
+        "failed": 0
+      },
+      "poll_override_days": null,
+      "upgrade_override_days": null,
+      "inferred_cadence_days": 6.5,
+      "next_poll_at": "2025-03-22T09:00:00Z",
+      "next_upgrade_check_at": "2025-03-22T09:00:00Z",
+      "last_upgrade_check_at": null
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "per_page": 25
+}
 ```
 
 | Field | Type | Notes |
 |---|---|---|
+| `items` | array | Comics for this page |
+| `total` | int | Total matching comics (before pagination) |
+| `page` | int | Current page number |
+| `per_page` | int | Items per page |
 | `chapter_counts` | object | Counts by `download_status`: `total`, `done`, `downloading`, `queued`, `failed` |
 | `poll_override_days` | float \| null | User override for poll interval; `null` = use inferred cadence / `DEFAULT_POLL_DAYS` |
 | `upgrade_override_days` | float \| null | User override for upgrade interval; `null` = use poll interval |
@@ -449,27 +565,12 @@ Full detail for one comic: all chapter assignments with download and relocation 
   "created_at": "2025-03-15T09:00:00Z",
   "aliases": [
     { "id": 1, "title": "ワンピース" }
-  ],
-  "chapters": [
-    {
-      "assignment_id": 55,
-      "chapter_number": 12.5,
-      "volume_number": 2,
-      "source_id": 2,
-      "source_name": "MangaDex",
-      "download_status": "done",
-      "is_active": true,
-      "downloaded_at": "2025-03-15T09:30:00Z",
-      "library_path": "/library/One Piece/One Piece - Ch.0012.5.cbz",
-      "relocation_status": "done"
-    }
   ]
 }
 ```
 
 **Notes**
-- `chapters` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
-- `library_path` is `null` until relocation completes.
+- Chapters are no longer embedded in this response. Use `GET /api/requests/{id}/chapters` for paginated chapter data.
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.
@@ -551,7 +652,9 @@ For each active `ChapterAssignment`:
 | Condition | Action |
 |---|---|
 | `relocation_status=done`, library file exists | Re-pack CBZ, update `ComicInfo.xml` (`library_title`) and cover, move to correct path if `library_title` changed |
-| `download_status=queued` or `downloading` | Skip — already in progress |
+| `download_status=queued\|downloading`, staging file found | Treat as done — run relocate / replace-in-library pipeline (recovers missed FINISHED events) |
+| `download_status=queued\|downloading`, no staging, chapter in live Suwayomi queue | Skip — genuinely still in progress |
+| `download_status=queued\|downloading`, no staging, absent from live queue | Re-enqueue download |
 | `download_status=failed` | Re-enqueue download |
 | `download_status=done`, staging file found | Run relocate / replace-in-library pipeline |
 | `download_status=done`, no staging, library file exists | Re-pack and update as above |
@@ -563,11 +666,25 @@ For each active `ChapterAssignment`:
 |---|---|---|
 | `id` | int | Comic ID |
 
-**Response `200`**
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource`.
 
-```json
-{ "queued": 2, "processed": 5, "skipped": 1 }
+**Response `200 text/event-stream`**
+
+Streams SSE events as each chapter is processed. Three event types:
+
 ```
+data: {"type": "chapter", "chapter_number": 3, "action": "processed"}
+data: {"type": "chapter", "chapter_number": 4, "action": "queued"}
+data: {"type": "chapter", "chapter_number": 5, "action": "skipped"}
+data: {"type": "done", "queued": 2, "processed": 5, "skipped": 1}
+data: [DONE]
+```
+
+- **`chapter` event** — emitted for each active chapter as it is handled.
+  - `action` values: `"processed"` (ran pipeline), `"queued"` (re-enqueued download), `"skipped"` (in-progress).
+- **`done` event** — final summary with aggregate counts.
+- **`[DONE]` sentinel** — literal string (not JSON); signals stream end.
+- **`error` event** — `{"type": "error", "detail": "..."}` emitted instead of `done` if the comic is not found or Suwayomi is unreachable.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -575,8 +692,56 @@ For each active `ChapterAssignment`:
 | `processed` | int | Chapters that ran through the relocate / update pipeline |
 | `skipped` | int | Chapters already in progress (`queued`/`downloading`) |
 
-**Error Cases**
-- `404 Not Found` — no comic with this ID.
+**Notes**
+- HTTP status is always `200`. Errors (comic not found, Suwayomi unreachable) are surfaced as `{"type": "error"}` events.
+
+---
+
+### `POST /api/requests/{id}/force-upgrade`
+
+Immediately run an upgrade check for all active chapters of a comic, queuing a new `ChapterAssignment` (with `is_active=False`) for every chapter where a higher-priority source is now available. The actual swap happens when the upgrade download completes (handled by `chapter_event_handler`).
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + `ReadableStream`, not `EventSource`.
+
+**Response `200 text/event-stream`**
+
+```
+data: {"type": "chapter", "chapter_number": 3, "old_source": "Source A", "new_source": "Source B"}
+data: {"type": "done", "queued": 1}
+data: [DONE]
+```
+
+- **`chapter` event** — emitted for each chapter where an upgrade was queued.
+- **`done` event** — final summary; `queued` is 0 if no better sources were found.
+- **`error` event** — `{"type": "error", "detail": "..."}` if the comic is not found or Suwayomi is unreachable.
+
+---
+
+### `POST /api/requests/{id}/chapters/{assignment_id}/force-upgrade`
+
+Same as the bulk force-upgrade above, but scoped to a single active `ChapterAssignment`. Returns `queued: 0` if no better source exists for that chapter.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+| `assignment_id` | int | Active `ChapterAssignment` ID |
+
+**Auth:** Bearer token via `Authorization` header.
+
+**Response `200 text/event-stream`**
+
+Same event shape as the bulk endpoint. At most one `chapter` event is emitted.
+
+**Error Cases (in-stream)**
+- `{"type": "error"}` — comic not found, assignment not found or not active, or Suwayomi unreachable.
 
 ---
 
@@ -597,6 +762,63 @@ Stop tracking a comic. Removes APScheduler jobs, all `ChapterAssignment` rows, a
 | `delete_files` | bool | `false` | If `true`, deletes any files referenced by `library_path` on assignments |
 
 **Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `GET /api/requests/{id}/chapters`
+
+Paginated list of chapter assignments for one comic, with optional status filter.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `page` | int | 1 | Page number (≥ 1) |
+| `per_page` | int | 50 | Items per page (1–200) |
+| `status` | string | — | High-level status filter: `available`, `queued`, `downloading`, `relocating`, `failed` |
+
+Status mapping:
+- `available` — `relocation_status == done`
+- `queued` — `download_status == queued`
+- `downloading` — `download_status == downloading`
+- `relocating` — `download_status == done` AND `relocation_status != done`
+- `failed` — `download_status == failed` OR `relocation_status == failed`
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "assignment_id": 55,
+      "chapter_number": 12.5,
+      "volume_number": 2,
+      "source_id": 2,
+      "source_name": "MangaDex",
+      "download_status": "done",
+      "is_active": true,
+      "downloaded_at": "2025-03-15T09:30:00Z",
+      "library_path": "/library/One Piece/One Piece - Ch.0012.5.cbz",
+      "relocation_status": "done"
+    }
+  ],
+  "total": 203,
+  "page": 1,
+  "per_page": 50
+}
+```
+
+**Notes**
+- `items` is ordered by `chapter_number` ascending. All assignments are returned regardless of `is_active`.
 
 **Error Cases**
 - `404 Not Found` — no comic with this ID.
@@ -701,6 +923,162 @@ Remove an alias from a comic.
 
 ---
 
+### `GET /api/requests/{id}/pins`
+
+List all source-manga ID pins for a comic.
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+[
+  {
+    "id": 1,
+    "source_id": 2,
+    "source_name": "MangaDex",
+    "suwayomi_manga_id": "42",
+    "pinned_at": "2025-03-15T09:00:00Z"
+  }
+]
+```
+
+Returns an empty array if no pins have been set.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `PUT /api/requests/{id}/pins`
+
+Bulk-replace all source-manga ID pins for a comic. Deletes all existing pins and inserts the new set. Send an empty array to clear all pins.
+
+When pins are set, `source_selector` bypasses title search for those sources and fetches chapters directly using the pinned manga IDs. Call `POST /api/requests/{id}/discover` after updating pins to pick up any newly discoverable chapters.
+
+A comic may have multiple pins for the same source (e.g. a series split across several manga IDs on the same source).
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body**
+
+```json
+{
+  "pins": [
+    { "source_id": 2, "suwayomi_manga_id": "42" },
+    { "source_id": 2, "suwayomi_manga_id": "43" }
+  ]
+}
+```
+
+**Response `200`** — same shape as `GET /api/requests/{id}/pins`.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `GET /api/requests/{id}/source-overrides`
+
+List all enabled sources with their global priority and, if overridden for this comic, their effective (comic-local) priority.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `200`**
+
+```json
+[
+  {
+    "source_id": 1,
+    "source_name": "MangaDex",
+    "global_priority": 1,
+    "effective_priority": 2,
+    "is_overridden": true
+  },
+  {
+    "source_id": 2,
+    "source_name": "Webtoons",
+    "global_priority": 2,
+    "effective_priority": 1,
+    "is_overridden": true
+  }
+]
+```
+
+Entries are sorted by `effective_priority` ascending. If no overrides exist for this comic, `effective_priority == global_priority` and `is_overridden == false` for all entries.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
+### `PUT /api/requests/{id}/source-overrides`
+
+Replace the comic-local source priority order. The caller provides the full ordered list of all enabled source IDs; the backend assigns positions 1, 2, 3… in that order.
+
+Passing sources in a different order than the global ranking creates per-comic overrides. All existing overrides for this comic are deleted and replaced atomically.
+
+The list must contain every enabled source exactly once — passing a partial list or an unknown source ID returns `422`.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Request Body**
+
+```json
+{ "source_ids": [2, 1, 3] }
+```
+
+`source_ids` must contain every enabled source ID exactly once, in the desired priority order (index 0 = highest priority).
+
+**Response `200`** — same shape as `GET /api/requests/{id}/source-overrides`, reflecting the new priorities.
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+- `422 Unprocessable Entity` — list is incomplete, contains duplicates, or references an unknown source ID.
+
+---
+
+### `DELETE /api/requests/{id}/source-overrides`
+
+Remove all comic-local source priority overrides for this comic, reverting it to the global source priority order.
+
+Idempotent — returns `204` even if no overrides exist.
+
+**Required role:** Requestor or Admin
+
+**Path Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | int | Comic ID |
+
+**Response `204 No Content`**
+
+**Error Cases**
+- `404 Not Found` — no comic with this ID.
+
+---
+
 ## Settings
 
 ### `GET /api/settings`
@@ -779,6 +1157,149 @@ Update one or more settings. All fields are optional; omitted fields are left un
 - `400 Bad Request` — Suwayomi ping failed (when connection fields are provided), or a path field is not a valid directory.
 - `401 Unauthorized` — missing or invalid token.
 - `422 Unprocessable Entity` — invalid `relocation_strategy` value.
+
+---
+
+### `GET /api/settings/export`
+
+Download a backup of the current Otaki state.
+
+**Query Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `format` | `"otaki"` \| `"json"` \| `"csv"` | `"otaki"` | Export format |
+| `include_all_assignments` | bool | `false` | Include inactive assignments (upgrade candidates). Ignored for `csv`. |
+
+**Formats**
+
+- **`otaki`** — zip archive (`otaki-backup-<date>.zip`) containing `backup.json` (full DB snapshot) and `covers/` (cover image files). Fully re-importable.
+- **`json`** — `backup.json` only (no covers), returned inline as `application/json`. Useful for DB inspection or scripting.
+- **`csv`** — one row per active `ChapterAssignment`. Not re-importable. Columns: `comic_title`, `library_title`, `chapter_number`, `volume_number`, `source_name`, `download_status`, `relocation_status`, `library_path`, `chapter_published_at`.
+
+**`backup.json` structure**
+
+```json
+{
+  "version": 1,
+  "exported_at": "2026-04-08T12:00:00+00:00",
+  "include_all_assignments": false,
+  "sources": [{"_id": 1, "suwayomi_source_id": "en.mangadex", "name": "MangaDex", "priority": 1, "enabled": true}],
+  "comics": [{"_id": 1, "title": "One Piece", "library_title": "One Piece", "status": "tracking",
+              "poll_override_days": null, "upgrade_override_days": null, "inferred_cadence_days": 7.0,
+              "created_at": "...", "cover_file": "covers/1.jpg"}],
+  "comic_aliases": [{"comic_id": 1, "title": "ワンピース"}],
+  "comic_source_pins": [{"comic_id": 1, "source_id": 1, "suwayomi_manga_id": "abc123"}],
+  "chapter_assignments": [{"comic_id": 1, "source_id": 1, "chapter_number": 1.0, "volume_number": null,
+                            "suwayomi_manga_id": "abc123", "suwayomi_chapter_id": "ch-1",
+                            "download_status": "done", "is_active": true, "chapter_published_at": "...",
+                            "downloaded_at": "...", "library_path": "/library/...", "relocation_status": "done",
+                            "source_chapter_name": null, "source_manga_title": null, "retry_count": 0}]
+}
+```
+
+`_id` values are backup-internal sequential integers used to link child records. They are **not** DB surrogate keys and are discarded on import.
+
+**Auth:** Bearer token via `Authorization` header. Use `fetch` + blob download in the browser (native `<a href>` cannot send `Authorization` headers).
+
+**Response** — `200` with appropriate content type and `Content-Disposition: attachment` header.
+
+**Error Cases**
+- `401 Unauthorized`
+
+---
+
+### `POST /api/settings/import/preview`
+
+Parse a backup file and return a diff against the current DB without writing anything.
+
+**Request** — `multipart/form-data`:
+
+| Field | Type | Description |
+|---|---|---|
+| `file` | file | Backup zip (or JSON) to upload |
+| `path` | string | Alternative: path on the server to load from |
+
+Exactly one of `file` or `path` must be provided.
+
+**Response `200`**
+
+```json
+{
+  "source_conflicts": [
+    {"backup_id": 1, "suwayomi_source_id": "en.mangadex", "name": "MangaDex",
+     "import_priority": 2, "import_enabled": true,
+     "existing_priority": 1, "existing_enabled": true}
+  ],
+  "comic_conflicts": [
+    {"backup_id": 1, "title": "Bleach", "existing_id": 7,
+     "import_chapters": 366, "import_aliases": 1, "import_pins": 2,
+     "existing_has_cover": true, "import_has_cover": true}
+  ],
+  "new_sources": [{"backup_id": 2, "suwayomi_source_id": "en.webtoons", "name": "Webtoons"}],
+  "new_comics": [{"backup_id": 3, "title": "Vinland Saga", "import_chapters": 200,
+                  "import_aliases": 0, "import_pins": 1, "import_has_cover": false}],
+  "totals": {"sources": 3, "comics": 12, "chapters": 1840, "covers": 8}
+}
+```
+
+- **`source_conflicts`** — sources where `suwayomi_source_id` already exists but `priority` or `enabled` differ.
+- **`comic_conflicts`** — comics whose `title` already exists in the DB. One entry per `(backup comic, existing comic)` pair (multiple matches possible if titles collide).
+- **`new_sources`** / **`new_comics`** — records that will be created without conflict.
+
+**Error Cases**
+- `401 Unauthorized`
+- `422 Unprocessable Entity` — not a valid zip or JSON file, or neither `file` nor `path` provided.
+
+---
+
+### `POST /api/settings/import/apply`
+
+Apply a backup with user-supplied conflict resolutions. All changes are committed in a single transaction.
+
+**Request** — `multipart/form-data`:
+
+| Field | Type | Description |
+|---|---|---|
+| `file` | file | Backup zip (re-upload from preview) |
+| `path` | string | Alternative: server-side path |
+| `source_resolutions` | JSON string | List of source resolution objects |
+| `comic_resolutions` | JSON string | List of comic resolution objects |
+
+**`source_resolutions`** — one entry per source in `source_conflicts`; new sources are always created:
+```json
+[{"backup_id": 1, "action": "overwrite"}]
+```
+`action`: `"overwrite"` (update priority/enabled from backup) or `"skip"` (keep existing).
+
+**`comic_resolutions`** — one entry per comic in both `comic_conflicts` and `new_comics`:
+```json
+[
+  {"backup_id": 1, "action": "merge", "target_id": 7, "replace_cover": false},
+  {"backup_id": 3, "action": "create", "title_override": null},
+  {"backup_id": 5, "action": "create", "title_override": "Bleach (Remaster)"},
+  {"backup_id": 9, "action": "skip"}
+]
+```
+
+| Field | Required for | Description |
+|---|---|---|
+| `action` | all | `"merge"` / `"create"` / `"skip"` |
+| `target_id` | `merge` | DB `id` of the existing comic to merge into |
+| `title_override` | `create` (optional) | Rename the imported comic on creation |
+| `replace_cover` | `merge` (optional) | If `true`, overwrite existing cover with imported cover. Default `false`. |
+
+**Merge behaviour**: adds any aliases, pins, and chapter assignments (by `suwayomi_chapter_id`) not already present on the target comic. Never duplicates. Cover: written only if target has none (unless `replace_cover=true`).
+
+**Response `200`**
+
+```json
+{"comics": 3, "chapters": 1840, "covers": 2, "skipped": 12}
+```
+
+**Error Cases**
+- `401 Unauthorized`
+- `422 Unprocessable Entity` — malformed zip/JSON or invalid resolution objects.
 
 ---
 

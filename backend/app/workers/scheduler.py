@@ -1,12 +1,13 @@
+import contextlib
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import AsyncSessionLocal
+from ..database import write_session
 from ..models.chapter_assignment import ChapterAssignment, DownloadStatus
 from ..models.comic import Comic, ComicStatus
 from ..services import cadence_inferrer, source_selector, suwayomi
@@ -15,17 +16,65 @@ logger = logging.getLogger(f"otaki.{__name__}")
 
 
 scheduler = AsyncIOScheduler()  # module-level singleton
+_started_at: datetime | None = None
 
 
 async def start(db: AsyncSession) -> None:
     """Load all tracking comics and register poll and upgrade jobs, then start the scheduler."""
+    global _started_at
     result = await db.execute(select(Comic).where(Comic.status == ComicStatus.tracking))
     comics = result.scalars().all()
     for comic in comics:
         _register_poll_job(comic)
         _register_upgrade_job(comic)
+    # Process any missed poll or upgrade jobs that were scheduled while the service was down.
+    await _process_missed_jobs(db)
     if not scheduler.running:
         scheduler.start()
+    _started_at = datetime.now(UTC)
+
+
+async def get_status(db: AsyncSession) -> dict:
+    """Return scheduler running state, uptime, and per-comic job schedule."""
+    running = scheduler.running
+    uptime = (datetime.now(UTC) - _started_at).total_seconds() if _started_at else None
+
+    # Collect next_run_time per comic from job IDs (format: poll_{id}, upgrade_{id})
+    poll_times: dict[int, datetime | None] = {}
+    upgrade_times: dict[int, datetime | None] = {}
+    for job in scheduler.get_jobs():
+        parts = job.id.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            comic_id = int(parts[1])
+            if parts[0] == "poll":
+                poll_times[comic_id] = job.next_run_time
+            elif parts[0] == "upgrade":
+                upgrade_times[comic_id] = job.next_run_time
+
+    comic_ids = set(poll_times) | set(upgrade_times)
+    titles: dict[int, str] = {}
+    if comic_ids:
+        result = await db.execute(
+            select(Comic.id, Comic.title).where(Comic.id.in_(comic_ids))
+        )
+        for row in result:
+            titles[row.id] = row.title
+
+    jobs = [
+        {
+            "comic_id": cid,
+            "title": titles.get(cid, f"Comic {cid}"),
+            "next_poll_at": poll_times.get(cid).isoformat()
+            if poll_times.get(cid)
+            else None,
+            "next_upgrade_at": upgrade_times.get(cid).isoformat()
+            if upgrade_times.get(cid)
+            else None,
+        }
+        for cid in sorted(comic_ids)
+    ]
+
+    return {"running": running, "uptime_seconds": uptime, "jobs": jobs}
 
 
 def register_comic_jobs(comic: Comic) -> None:
@@ -37,10 +86,8 @@ def register_comic_jobs(comic: Comic) -> None:
 def remove_comic_jobs(comic_id: int) -> None:
     """Remove all scheduled jobs for a comic. Called when a comic is deleted."""
     for job_id in (f"poll_{comic_id}", f"upgrade_{comic_id}"):
-        try:
+        with contextlib.suppress(JobLookupError):
             scheduler.remove_job(job_id)
-        except JobLookupError:
-            pass
 
 
 def _effective_poll_days(comic: Comic) -> float:
@@ -52,7 +99,11 @@ def _effective_poll_days(comic: Comic) -> float:
     """
     from ..config import settings
 
-    return comic.poll_override_days or comic.inferred_cadence_days or settings.DEFAULT_POLL_DAYS
+    return (
+        comic.poll_override_days
+        or comic.inferred_cadence_days
+        or settings.DEFAULT_POLL_DAYS
+    )
 
 
 def _effective_upgrade_days(comic: Comic) -> float:
@@ -74,15 +125,21 @@ def _register_poll_job(comic: Comic) -> None:
     scheduler.add_job(
         func=_poll_comic,
         trigger="date",
-        run_date=comic.next_poll_at or datetime.now(timezone.utc),
+        run_date=(
+            comic.next_poll_at.replace(tzinfo=UTC)
+            if comic.next_poll_at
+            and comic.next_poll_at.replace(tzinfo=UTC) > datetime.now(UTC)
+            else datetime.now(UTC)
+        ),
         id=f"poll_{comic.id}",
         args=[comic.id],
         replace_existing=True,
+        misfire_grace_time=3600,
     )
 
 
 async def _poll_comic(comic_id: int) -> None:
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         comic = await db.get(Comic, comic_id)
         if comic is None:
             logger.warning("_poll_comic: comic_id=%d not found — skipping", comic_id)
@@ -91,7 +148,9 @@ async def _poll_comic(comic_id: int) -> None:
             logger.info("_poll_comic: comic_id=%d status=complete — skipping", comic_id)
             return
 
-        chapter_map = await source_selector.build_chapter_source_map(comic, db)
+        chapter_map, source_errors = await source_selector.build_chapter_source_map(
+            comic, db
+        )
 
         existing_result = await db.execute(
             select(ChapterAssignment.chapter_number).where(
@@ -138,9 +197,11 @@ async def _poll_comic(comic_id: int) -> None:
 
         if new_entries:
             await db.commit()
-            comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(comic.id, db)
+            comic.inferred_cadence_days = await cadence_inferrer.infer_cadence(
+                comic.id, db
+            )
 
-        comic.next_poll_at = datetime.now(timezone.utc) + timedelta(
+        comic.next_poll_at = datetime.now(UTC) + timedelta(
             days=_effective_poll_days(comic)
         )
         _register_poll_job(comic)
@@ -152,15 +213,42 @@ def _register_upgrade_job(comic: Comic) -> None:
     scheduler.add_job(
         func=_upgrade_comic,
         trigger="date",
-        run_date=comic.next_upgrade_check_at or datetime.now(timezone.utc),
+        run_date=(
+            comic.next_upgrade_check_at.replace(tzinfo=UTC)
+            if comic.next_upgrade_check_at
+            and comic.next_upgrade_check_at.replace(tzinfo=UTC) > datetime.now(UTC)
+            else datetime.now(UTC)
+        ),
         id=f"upgrade_{comic.id}",
         args=[comic.id],
         replace_existing=True,
+        misfire_grace_time=3600,
     )
 
 
+# Process missed jobs on startup
+async def _process_missed_jobs(db: AsyncSession) -> None:
+    """Run any poll or upgrade jobs that are overdue.
+
+    This ensures that when Otaki starts after being down, it does not silently drop
+    missed executions. It simply invokes the corresponding coroutine for each
+    overdue job.
+    """
+    now = datetime.now(UTC)
+    result = await db.execute(select(Comic).where(Comic.status == ComicStatus.tracking))
+    comics = result.scalars().all()
+    for comic in comics:
+        if comic.next_poll_at and comic.next_poll_at.replace(tzinfo=UTC) < now:
+            await _poll_comic(comic.id)
+        if (
+            comic.next_upgrade_check_at
+            and comic.next_upgrade_check_at.replace(tzinfo=UTC) < now
+        ):
+            await _upgrade_comic(comic.id)
+
+
 async def _upgrade_comic(comic_id: int) -> None:
-    async with AsyncSessionLocal() as db:
+    async with write_session() as db:
         comic = await db.get(Comic, comic_id)
         if comic is None:
             logger.warning("_upgrade_comic: comic_id=%d not found — skipping", comic_id)
@@ -201,9 +289,11 @@ async def _upgrade_comic(comic_id: int) -> None:
                     exc,
                 )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         comic.last_upgrade_check_at = now
-        comic.next_upgrade_check_at = now + timedelta(days=_effective_upgrade_days(comic))
+        comic.next_upgrade_check_at = now + timedelta(
+            days=_effective_upgrade_days(comic)
+        )
         _register_upgrade_job(comic)
 
         await db.commit()

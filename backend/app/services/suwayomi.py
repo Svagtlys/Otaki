@@ -1,6 +1,8 @@
 import base64
 import ssl
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC
+from pathlib import Path
 
 import httpx
 from gql import Client, gql
@@ -51,10 +53,34 @@ def _auth_headers() -> dict[str, str]:
     return {}
 
 
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return an SSL context for httpx clients.
+
+    When SUWAYOMI_VERIFY_SSL is True, uses the system CA store instead of
+    certifi's bundle so that locally-trusted CAs (e.g., self-signed dev certs
+    added via update-ca-trust / apt) are recognized.
+
+    When SUWAYOMI_VERIFY_SSL is False, returns a context with verification
+    disabled.
+    """
+    ctx = ssl.create_default_context()
+    if not settings.SUWAYOMI_VERIFY_SSL:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile and Path(paths.cafile).exists():
+        ctx.load_verify_locations(cafile=paths.cafile)
+    elif paths.capath and Path(paths.capath).exists():
+        ctx.load_verify_locations(capath=paths.capath)
+    # Else rely on defaults (certifi via create_default_context)
+    return ctx
+
+
 def _make_client(url: str, username: str | None, password: str | None) -> Client:
     auth = (username, password) if username else None
     transport = HTTPXAsyncTransport(
-        url=f"{url}/api/graphql", auth=auth, verify=settings.SUWAYOMI_VERIFY_SSL
+        url=f"{url}/api/graphql", auth=auth, verify=_get_ssl_context()
     )
     return Client(transport=transport, fetch_schema_from_transport=False)
 
@@ -68,7 +94,7 @@ async def ping(url: str, username: str | None, password: str | None) -> bool:
     """
     try:
         auth = (username, password) if username else None
-        async with httpx.AsyncClient(verify=settings.SUWAYOMI_VERIFY_SSL) as client:
+        async with httpx.AsyncClient(verify=_get_ssl_context()) as client:
             r = await client.post(
                 f"{url}/api/graphql",
                 json={"query": "{ __typename }"},
@@ -78,8 +104,7 @@ async def ping(url: str, username: str | None, password: str | None) -> bool:
             return False
         r.raise_for_status()
         return True
-    except Exception as e:
-        print(f"[ping] failed: {e!r}")
+    except Exception:
         return False
 
 
@@ -104,7 +129,12 @@ async def search_source(source_id: str, query: str) -> list[dict]:
                 }
             """),
             variable_values={
-                "input": {"source": source_id, "query": query, "type": "SEARCH", "page": 1}
+                "input": {
+                    "source": source_id,
+                    "query": query,
+                    "type": "SEARCH",
+                    "page": 1,
+                }
             },
         )
     return [
@@ -120,7 +150,7 @@ async def search_source(source_id: str, query: str) -> list[dict]:
 
 
 async def fetch_chapters(manga_id: str) -> list[dict]:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     async with _make_client(
         settings.SUWAYOMI_URL,
@@ -144,9 +174,7 @@ async def fetch_chapters(manga_id: str) -> list[dict]:
         )
     chapters = []
     for node in result["fetchChapters"]["chapters"]:
-        published_at = datetime.fromtimestamp(
-            int(node["uploadDate"]) / 1000, tz=timezone.utc
-        )
+        published_at = datetime.fromtimestamp(int(node["uploadDate"]) / 1000, tz=UTC)
         chapters.append(
             {
                 "chapter_number": float(node["chapterNumber"]),
@@ -218,19 +246,17 @@ DOWNLOAD_STATUS_SUBSCRIPTION = gql("""
 """)
 
 
-async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, str, str], None]:
+async def subscribe_download_changed() -> AsyncGenerator[
+    tuple[str, str, str, str, str]
+]:
     """Async generator yielding (event_type, chapter_id, chapter_name, manga_title,
     source_display_name) tuples for FINISHED and ERROR download events from Suwayomi's
     WebSocket subscription."""
-    ws_url = settings.SUWAYOMI_URL.replace("https://", "wss://").replace("http://", "ws://")
+    ws_url = settings.SUWAYOMI_URL.replace("https://", "wss://").replace(
+        "http://", "ws://"
+    )
     ws_url += "/api/graphql"
-    if settings.SUWAYOMI_VERIFY_SSL:
-        ssl_arg: ssl.SSLContext | bool = True
-    else:
-        _ssl_ctx = ssl.create_default_context()
-        _ssl_ctx.check_hostname = False
-        _ssl_ctx.verify_mode = ssl.CERT_NONE
-        ssl_arg = _ssl_ctx
+    ssl_arg = _get_ssl_context()
     transport = WebsocketsTransport(
         url=ws_url,
         headers=_auth_headers(),
@@ -247,19 +273,31 @@ async def subscribe_download_changed() -> AsyncGenerator[tuple[str, str, str, st
             # in the queue when we connected, filtered to FINISHED/ERROR state)
             if first:
                 first = False
-                for item in (data.get("initial") or []):
+                for item in data.get("initial") or []:
                     if item["state"] in ("FINISHED", "ERROR"):
                         chapter = item["chapter"]
                         manga = item["manga"]
                         source_name = (manga.get("source") or {}).get("displayName", "")
-                        yield (item["state"], str(chapter["id"]), chapter["name"], manga["title"], source_name)
+                        yield (
+                            item["state"],
+                            str(chapter["id"]),
+                            chapter["name"],
+                            manga["title"],
+                            source_name,
+                        )
             # updates is a list of DownloadUpdate: { type: DownloadUpdateType, download: DownloadType }
             for update in data["updates"]:
                 if update["type"] in ("FINISHED", "ERROR"):
                     chapter = update["download"]["chapter"]
                     manga = update["download"]["manga"]
                     source_name = (manga.get("source") or {}).get("displayName", "")
-                    yield (update["type"], str(chapter["id"]), chapter["name"], manga["title"], source_name)
+                    yield (
+                        update["type"],
+                        str(chapter["id"]),
+                        chapter["name"],
+                        manga["title"],
+                        source_name,
+                    )
 
 
 async def poll_downloads() -> list[dict]:
@@ -293,11 +331,13 @@ async def poll_downloads() -> list[dict]:
         chapter = item.get("chapter") or {}
         manga = item.get("manga") or {}
         source_name = (manga.get("source") or {}).get("displayName", "")
-        queue.append({
-            "state": item.get("state", ""),
-            "chapter_id": str(chapter.get("id", "")),
-            "chapter_name": chapter.get("name", ""),
-            "manga_title": manga.get("title", ""),
-            "source_name": source_name,
-        })
+        queue.append(
+            {
+                "state": item.get("state", ""),
+                "chapter_id": str(chapter.get("id", "")),
+                "chapter_name": chapter.get("name", ""),
+                "manga_title": manga.get("title", ""),
+                "source_name": source_name,
+            }
+        )
     return queue

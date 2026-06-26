@@ -1,0 +1,36 @@
+[project]
+name = "otaki-backend"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",      # pycodestyle errors
+  "W",      # pycodestyle warnings
+  "F",      # Pyflakes
+  "I",      # isort (import sorting)
+  "N",      # pep8-naming
+  "UP",     # pyupgrade (modern Python syntax)
+  "B",      # flake8-bugbear (common bugs)
+  "SIM",    # flake8-simplify
+  "T20",    # flake8-print (catch debug print statements)
+]
+ignore = [
+  "B008",  # FastAPI Depends() in defaults is intentional
+  "E501",  # Line too long — formatter cannot reflow docstrings/comments/strings
+  "SIM102",  # Nested ifs are clearer than combined conditions in our patterns
+  "SIM103",  # Explicit return False branches are clearer than negated conditions
+  "SIM108",  # Verbose if/else with comments is clearer than ternary
+]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*" = ["E501"]  # Long migration filenames aren't our concern
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -639,7 +639,6 @@ async def test_relocate_real_staging_file(path_config, monkeypatch):
     # Derive path components from Suwayomi's folder structure:
     # {download_path}/{source_display_name}/{manga_title}/{chapter_name}.cbz
     cbz = cbz_files[0]
-    chapter_name = cbz.stem
     manga_title = cbz.parent.name
     source_display_name = cbz.parent.parent.name
 
@@ -1469,7 +1468,6 @@ def test_find_staging_path_not_found_in_any_title(tmp_path, monkeypatch):
         aliases=[SimpleNamespace(title="My Comic Alt")],
     )
     assignment = _make_assignment(chapter_number=1.0)
-    chapter_name = "Chapter 1"
     source_display = "TestSource"
 
     for title in ["My Comic", "My Comic Alt"]:

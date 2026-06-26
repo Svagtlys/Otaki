@@ -1,6 +1,5 @@
 """Unit and integration tests for GET/PATCH /api/settings (issue #16)."""
 
-import pytest
 from app.config import settings
 
 # ---------------------------------------------------------------------------

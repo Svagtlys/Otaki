@@ -37,8 +37,8 @@ async def test_setup_flow(client, suwayomi_credentials, path_config):
     r = await client.post("/api/setup/sources", json={"sources": sources[:3]})
     assert r.status_code == 200
 
-    # Save filesystem paths
-    r = await client.post("/api/setup/paths", json=path_config)
+    # Save filesystem paths (create=true to allow creating missing dirs)
+    r = await client.post("/api/setup/paths", json={**path_config, "create": True})
     assert r.status_code == 200
 
     # Setup complete — all setup endpoints now return 409
@@ -52,7 +52,7 @@ async def test_setup_flow(client, suwayomi_credentials, path_config):
     r = await client.post("/api/setup/sources", json={"sources": sources[:1]})
     assert r.status_code == 409
 
-    r = await client.post("/api/setup/paths", json=path_config)
+    r = await client.post("/api/setup/paths", json={**path_config, "create": True})
     assert r.status_code == 409
 
     # Non-setup routes now unblocked

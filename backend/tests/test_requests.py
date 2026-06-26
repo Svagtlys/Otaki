@@ -942,6 +942,7 @@ async def test_patch_not_found(logged_in_client):
 
 
 @pytest.mark.integration
+@pytest.mark.asyncio
 async def test_post_integration(
     logged_in_client, suwayomi_settings, test_manga_title, monkeypatch
 ):

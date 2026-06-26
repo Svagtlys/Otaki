@@ -708,6 +708,7 @@ async def _webtoons_en_source_id() -> str:
 
 
 @pytest.mark.integration
+@pytest.mark.asyncio
 async def test_build_chapter_source_map_webtoons_title_match(
     db_session, suwayomi_settings, test_manga_title
 ):

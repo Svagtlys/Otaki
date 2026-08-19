@@ -150,7 +150,12 @@ async def handle(
 
     relocation_failed = False
     async with AsyncSessionLocal() as db:
-        assignment = await db.get(ChapterAssignment, phase_data["assignment_id"])
+        assignment = await db.execute(
+            select(ChapterAssignment)
+            .where(ChapterAssignment.id == phase_data["assignment_id"])
+            .options(selectinload(ChapterAssignment.source))
+        )
+        assignment = assignment.scalar_one_or_none()
         try:
             if phase_data["action"] == "relocate":
                 await file_relocator.relocate(
@@ -161,9 +166,12 @@ async def handle(
                 )
                 assignment.is_active = True
             elif phase_data["action"] == "swap":
-                existing_active = await db.get(
-                    ChapterAssignment, phase_data["existing_active_id"]
+                existing_active_result = await db.execute(
+                    select(ChapterAssignment)
+                    .where(ChapterAssignment.id == phase_data["existing_active_id"])
+                    .options(selectinload(ChapterAssignment.source))
                 )
+                existing_active = existing_active_result.scalar_one_or_none()
                 await file_relocator.replace_in_library(
                     existing_active,
                     assignment,

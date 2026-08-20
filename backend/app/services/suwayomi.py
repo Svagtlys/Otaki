@@ -229,17 +229,19 @@ async def list_sources() -> list[dict]:
 DOWNLOAD_STATUS_SUBSCRIPTION = gql("""
     subscription OnDownloadStatusChanged($input: DownloadChangedInput!) {
         downloadStatusChanged(input: $input) {
+            omittedUpdates
+            state
+            initial {
+                state
+                chapter { id name }
+                manga { title source { displayName } }
+            }
             updates {
                 type
                 download {
                     chapter { id name }
                     manga { title source { displayName } }
                 }
-            }
-            initial {
-                state
-                chapter { id name }
-                manga { title source { displayName } }
             }
         }
     }
@@ -261,12 +263,12 @@ async def subscribe_download_changed() -> AsyncGenerator[
         url=ws_url,
         headers=_auth_headers(),
         ssl=ssl_arg,
-        subprotocols=["graphql-transport-ws"],
+        subprotocols=["graphql-ws"],
     )
     async with Client(transport=transport) as session:
         first = True
         async for result in session.subscribe(
-            DOWNLOAD_STATUS_SUBSCRIPTION, variable_values={"input": {}}
+            DOWNLOAD_STATUS_SUBSCRIPTION, variable_values={"input": {"maxUpdates": 50}}
         ):
             data = result["downloadStatusChanged"]
             # On first event, also process initial (DownloadType list — chapters already

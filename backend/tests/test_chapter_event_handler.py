@@ -768,3 +768,44 @@ async def test_handle_concurrent_calls_do_not_raise(handler_db, mock_relocator):
     assert r1.is_active is True
     assert r2.download_status == DownloadStatus.done
     assert r2.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_handle_phase2_source_eagerly_loaded(handler_db, monkeypatch):
+    """Regression test: assignment.source must be eagerly loaded in Phase 2.
+
+    Without selectinload(ChapterAssignment.source), accessing assignment.source.name
+    inside asyncio.to_thread() raises MissingGreenlet because the session tries to
+    lazy-load in a thread without an async event loop.
+
+    This test verifies the fix by capturing the assignment passed to relocate()
+    and accessing assignment.source.name — which would fail if source is not
+    eagerly loaded.
+    """
+    comic_id, source_id = await _seed_comic(handler_db)
+
+    captured_assignment = {}
+
+    async def _capture_relocate(assignment, comic, db, **kwargs):
+        captured_assignment["obj"] = assignment
+
+    mock = MagicMock()
+    mock.relocate = _capture_relocate
+    mock.replace_in_library = AsyncMock()
+    monkeypatch.setattr(chapter_event_handler, "file_relocator", mock)
+
+    async with handler_db() as db:
+        assignment = _make_assignment(
+            comic_id, source_id, chapter_id="ch-eager-src", is_active=False
+        )
+        db.add(assignment)
+        await db.commit()
+
+    await chapter_event_handler.handle(
+        "FINISHED", "ch-eager-src", "Chapter 1", "Test Comic", "TestSrc"
+    )
+
+    # Accessing assignment.source.name should not raise MissingGreenlet
+    # because source was eagerly loaded via selectinload in Phase 2
+    assert captured_assignment["obj"] is not None
+    assert captured_assignment["obj"].source.name == "Test Source"
